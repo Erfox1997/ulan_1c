@@ -1,0 +1,232 @@
+@php
+    use App\Support\InvoiceNakladnayaFormatter;
+    $orgName = $organization?->name ?? ($branch->name ?? '—');
+    $documentTitle = InvoiceNakladnayaFormatter::legalEntitySaleDocumentTitle($legalEntitySale->document_date, $legalEntitySale->id);
+    $amountWords = InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalSum);
+    $linesCount = $lines->count();
+@endphp
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ $documentTitle }} — {{ config('app.name') }}</title>
+    <style>
+        @page { margin: 14mm 16mm; }
+        * { box-sizing: border-box; }
+        body {
+            font-family: DejaVu Sans, sans-serif;
+            font-size: 10pt;
+            color: #000;
+            line-height: 1.4;
+            margin: 0;
+            padding: {{ ($forPdf ?? false) ? '0' : '16px' }};
+        }
+        .doc-title {
+            font-size: 12pt;
+            font-weight: bold;
+            text-align: center;
+            color: #1a1a1a;
+            margin: 0 0 12px 0;
+            padding: 10px 8px 10px;
+            border-top: 3px solid #ffcc00;
+            border-bottom: 1px solid #000;
+        }
+        .meta-block {
+            margin: 18px 0 22px 0;
+            font-size: 10pt;
+        }
+        .meta-row {
+            margin-bottom: 6px;
+        }
+        .meta-row .lbl {
+            display: inline-block;
+            min-width: 8.5em;
+            font-weight: normal;
+        }
+        .meta-row .val {
+            font-weight: normal;
+        }
+        table.grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 9pt;
+            margin: 0 0 12px 0;
+        }
+        table.grid th,
+        table.grid td {
+            border: 1px solid #000;
+            padding: 5px 6px;
+            vertical-align: middle;
+        }
+        table.grid th {
+            font-weight: bold;
+            text-align: left;
+            background: #fff;
+        }
+        table.grid th.c,
+        table.grid td.c { text-align: center; }
+        table.grid th.num,
+        table.grid td.num { text-align: right; }
+        .totals-wrap {
+            display: table;
+            width: 100%;
+            margin-top: 4px;
+        }
+        .totals-left { display: table-cell; width: 55%; }
+        .totals-right {
+            display: table-cell;
+            width: 45%;
+            vertical-align: top;
+            text-align: right;
+            font-size: 10pt;
+        }
+        .totals-right .row { margin-bottom: 4px; }
+        .totals-right .lbl { margin-right: 6px; }
+        .footer-line {
+            margin-top: 20px;
+            font-size: 10pt;
+        }
+        .amount-words {
+            margin-top: 10px;
+            font-weight: bold;
+            font-size: 10pt;
+        }
+        .signatures {
+            margin-top: 36px;
+            width: 100%;
+            display: table;
+            font-size: 10pt;
+        }
+        .sign-left, .sign-right {
+            display: table-cell;
+            width: 50%;
+            vertical-align: top;
+        }
+        .sign-right { text-align: right; }
+        .no-print {
+            margin: 16px 0;
+            padding: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .no-print button {
+            font-family: inherit;
+            font-size: 11pt;
+            padding: 8px 16px;
+            margin-right: 8px;
+            cursor: pointer;
+            border-radius: 6px;
+            border: 1px solid #64748b;
+            background: #fff;
+        }
+        .no-print button.primary {
+            background: #059669;
+            border-color: #059669;
+            color: #fff;
+        }
+        @media print {
+            .no-print { display: none !important; }
+            body { padding: 0; }
+        }
+    </style>
+</head>
+<body>
+    @if (! ($forPdf ?? false))
+        <div class="no-print">
+            <button type="button" class="primary" onclick="window.print()">Печать</button>
+            <button type="button" onclick="window.close()">Закрыть</button>
+            <span style="margin-left:8px;font-size:10pt;color:#64748b;">PDF: воспользуйтесь кнопкой «Скачать PDF» в журнале или сохраните из диалога печати.</span>
+        </div>
+        @if (isset($printOrganizations) && $printOrganizations->count() > 1)
+            @php
+                $printUrl = route('admin.legal-entity-sales.print', $legalEntitySale);
+                $pdfUrl = route('admin.legal-entity-sales.pdf', $legalEntitySale);
+                $pdfOrgSuffix = $organization ? '?organization_id='.$organization->id : '';
+            @endphp
+            <div class="no-print" style="margin:10px 0 12px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;font-size:10pt;">
+                <span style="color:#334155;margin-right:8px;">Организация в шапке:</span>
+                <select
+                    onchange="var v=this.value||'';var q=v?'?organization_id='+v:'';location.href='{{ $printUrl }}'+q"
+                    style="max-width:min(28rem,100%);padding:4px 8px;font-size:10pt;border:1px solid #94a3b8;border-radius:4px;"
+                >
+                    @foreach ($printOrganizations as $o)
+                        <option value="{{ $o->id }}" @selected($organization && (int) $organization->id === (int) $o->id)>{{ $o->name }}</option>
+                    @endforeach
+                </select>
+                <a
+                    href="{{ $pdfUrl }}{{ $pdfOrgSuffix }}"
+                    style="margin-left:12px;font-size:10pt;color:#059669;text-decoration:underline;"
+                >Скачать PDF</a>
+            </div>
+        @endif
+    @endif
+
+    <h1 class="doc-title">{{ $documentTitle }}</h1>
+
+    <div class="meta-block">
+        <div class="meta-row">
+            <span class="lbl">Организация:</span>
+            <span class="val">{{ $orgName }}</span>
+        </div>
+        <div class="meta-row">
+            <span class="lbl">Склад:</span>
+            <span class="val">{{ $legalEntitySale->warehouse->name }}</span>
+        </div>
+        <div class="meta-row">
+            <span class="lbl">Покупатель:</span>
+            <span class="val">{{ $legalEntitySale->buyer_name !== '' ? $legalEntitySale->buyer_name : '—' }}</span>
+        </div>
+        <div class="meta-row">
+            <span class="lbl">ЭСФ:</span>
+            <span class="val">{{ $legalEntitySale->issue_esf ? 'требуется оформить' : 'не отмечено' }}</span>
+        </div>
+    </div>
+
+    <table class="grid">
+        <thead>
+            <tr>
+                <th style="width:2.2rem;" class="c">№</th>
+                <th>Товар</th>
+                <th style="width:8rem;">Количество</th>
+                <th style="width:5rem;" class="num">Цена продажи</th>
+                <th style="width:5.5rem;" class="num">Сумма</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach ($lines as $i => $line)
+                <tr>
+                    <td class="c">{{ $i + 1 }}</td>
+                    <td>{{ $line->name }}</td>
+                    <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
+                    <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
+                    <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+                </tr>
+            @endforeach
+        </tbody>
+    </table>
+
+    <div class="totals-wrap">
+        <div class="totals-left"></div>
+        <div class="totals-right">
+            <div class="row">
+                <span class="lbl">Итого:</span>
+                <strong>{{ InvoiceNakladnayaFormatter::formatMoney((float) $totalSum) }}</strong>
+            </div>
+            <div class="row">в том числе НДС: ________________</div>
+            <div class="row">в том числе НСП: ________________</div>
+        </div>
+    </div>
+
+    <div class="footer-line">
+        Всего наименований {{ $linesCount }}, на сумму {{ InvoiceNakladnayaFormatter::formatMoney((float) $totalSum) }}
+    </div>
+    <div class="amount-words">{{ $amountWords }}</div>
+
+    <div class="signatures">
+        <div class="sign-left">Отпустил _______________________</div>
+        <div class="sign-right">Получил _______________________</div>
+    </div>
+</body>
+</html>

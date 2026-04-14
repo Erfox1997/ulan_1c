@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<receipts>
+    <receipt>
+        <amountToBePaid xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <assessedContributionsAmount xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <bankAccount xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <closingBalances xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <contractorBankAccount xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <contractorName>ОсОО "Техпульс"</contractorName>
+        <contractorPin>02106202410233</contractorPin>
+        <correctedReceiptCode xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <correctedReceiptCreationDate xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <correctionReasonCode xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <correctionReasonName xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <createdDate>2026-04-08</createdDate>
+        <currencyCode>417</currencyCode>
+        <currencyName>Сом</currencyName>
+        <deliveryContractDate>2026-04-08T00:00:00+06:00</deliveryContractDate>
+        <deliveryContractNumber></deliveryContractNumber>
+        <deliveryDate>2026-04-08</deliveryDate>
+        <documentStatusName>Новый</documentStatusName>
+        <exchangeCode>f69c4e26-260f-4e22-b638-7cd8a1f97795</exchangeCode>
+        <exchangeRate>1.0000</exchangeRate>
+        <finesAmount xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <foreignName>ОсОО "Техпульс"</foreignName>
+        <goods>
+            <good>
+                <baseCount>1.00000</baseCount>
+                <goodsName>автомат</goodsName>
+                <price>20000.00000</price>
+                <stAmount>0.00</stAmount>
+                <stCode>50</stCode>
+                <vatAmount>0.00</vatAmount>
+            </good>
+            <good>
+                <baseCount>1.00000</baseCount>
+                <goodsName>компьютер</goodsName>
+                <price>50000.00000</price>
+                <stAmount>0.00</stAmount>
+                <stCode>50</stCode>
+                <vatAmount>0.00</vatAmount>
+            </good>
+        </goods>
+        <invoiceDate xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <invoiceDeliveryTypeCode>399</invoiceDeliveryTypeCode>
+        <invoiceNumber xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <isIndustry>false</isIndustry>
+        <isPriceWithoutTaxes>false</isPriceWithoutTaxes>
+        <isResident>true</isResident>
+        <markGoods xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <note>Реализация товаров для теста</note>
+        <openingBalances xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <ownedCrmReceiptCode>TECHPULS-TEST-001</ownedCrmReceiptCode>
+        <paidAmount xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <paymentTypeCode>10</paymentTypeCode>
+        <personalAccountNumber xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <receiptTypeCode>10</receiptTypeCode>
+        <sellerBranchPin xsi:nil="true" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"/>
+        <totalCost>70000.00</totalCost>
+        <type>10</type>
+        <vatCode>100</vatCode>
+        <vatDeliveryTypeCode>102</vatDeliveryTypeCode>
+    </receipt>
+</receipts>
