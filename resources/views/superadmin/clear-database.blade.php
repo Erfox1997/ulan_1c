@@ -4,9 +4,9 @@
             <div class="border-b border-rose-100 bg-rose-50/90 px-4 py-3 sm:px-5">
                 <h1 class="text-sm font-bold tracking-tight text-rose-950">{{ $pageTitle }}</h1>
                 <p class="mt-1 text-[12px] leading-snug text-rose-900/85">
-                    Будут очищены <strong>все</strong> таблицы базы, кроме <code class="rounded bg-rose-100/80 px-1 py-0.5 text-[11px]">users</code>
-                    (логины и пароли) и <code class="rounded bg-rose-100/80 px-1 py-0.5 text-[11px]">migrations</code> (версия схемы Laravel).
-                    У всех пользователей будет сброшена привязка к филиалу.
+                    Будут удалены операционные данные (товары, документы, остатки, контрагенты и т.д.).
+                    <strong>Не затрагиваются:</strong> филиалы, склады, организации и их счета, учётные записи пользователей,
+                    роли и индивидуальные права филиалов, таблица <code class="rounded bg-rose-100/80 px-1 py-0.5 text-[11px]">migrations</code>.
                 </p>
             </div>
 

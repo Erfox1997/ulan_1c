@@ -16,6 +16,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class OpeningBalanceController extends Controller
 {
+    private const PER_PAGE = 100;
+
     public function __construct(
         private readonly OpeningBalanceService $openingBalanceService
     ) {}
@@ -37,16 +39,21 @@ class OpeningBalanceController extends Controller
             $selectedWarehouseId = (int) ($defaultId ?? 0);
         }
 
-        $balances = collect();
+        $openingBalancesPaginator = null;
         $linesForForm = [$this->emptyOpeningBalanceLine()];
 
         if ($selectedWarehouseId !== 0) {
-            $balances = OpeningStockBalance::query()
+            $page = max(1, (int) old('page', request()->integer('page') ?: 1));
+
+            $openingBalancesPaginator = OpeningStockBalance::query()
                 ->where('branch_id', $branchId)
                 ->where('warehouse_id', $selectedWarehouseId)
                 ->with('good')
                 ->orderBy('id')
-                ->get();
+                ->paginate(self::PER_PAGE, ['*'], 'page', $page)
+                ->withQueryString();
+
+            $openingBalancesPaginator->onEachSide = 1;
 
             $oldLines = old('lines');
             if (is_array($oldLines) && $oldLines !== []) {
@@ -55,14 +62,21 @@ class OpeningBalanceController extends Controller
                     if (! is_array($line)) {
                         continue;
                     }
+                    $gid = $line['good_id'] ?? null;
                     $lines[] = [
+                        'good_id' => $gid !== null && $gid !== '' ? (int) $gid : null,
                         'article_code' => (string) ($line['article_code'] ?? ''),
                         'name' => (string) ($line['name'] ?? ''),
                         'barcode' => (string) ($line['barcode'] ?? ''),
                         'category' => (string) ($line['category'] ?? ''),
                         'quantity' => (string) ($line['quantity'] ?? ''),
                         'unit_cost' => isset($line['unit_cost']) ? (string) $line['unit_cost'] : '',
+                        'wholesale_price' => isset($line['wholesale_price']) ? (string) $line['wholesale_price'] : '',
                         'sale_price' => isset($line['sale_price']) ? (string) $line['sale_price'] : '',
+                        'min_sale_price' => isset($line['min_sale_price']) ? (string) $line['min_sale_price'] : '',
+                        'oem' => (string) ($line['oem'] ?? ''),
+                        'factory_number' => (string) ($line['factory_number'] ?? ''),
+                        'min_stock' => isset($line['min_stock']) ? (string) $line['min_stock'] : '',
                         'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                     ];
                 }
@@ -71,14 +85,21 @@ class OpeningBalanceController extends Controller
                 }
                 $linesForForm = $lines;
             } else {
+                $balances = $openingBalancesPaginator->getCollection();
                 $lines = $balances->map(fn (OpeningStockBalance $b) => [
+                    'good_id' => (int) $b->good_id,
                     'article_code' => $b->good->article_code,
                     'name' => $b->good->name,
                     'barcode' => (string) ($b->good->barcode ?? ''),
                     'category' => (string) ($b->good->category ?? ''),
                     'quantity' => (string) $b->quantity,
                     'unit_cost' => $b->unit_cost !== null ? (string) $b->unit_cost : '',
+                    'wholesale_price' => $b->good->wholesale_price !== null ? (string) $b->good->wholesale_price : '',
                     'sale_price' => $b->good->sale_price !== null ? (string) $b->good->sale_price : '',
+                    'min_sale_price' => $b->good->min_sale_price !== null ? (string) $b->good->min_sale_price : '',
+                    'oem' => (string) ($b->good->oem ?? ''),
+                    'factory_number' => (string) ($b->good->factory_number ?? ''),
+                    'min_stock' => $b->good->min_stock !== null ? (string) $b->good->min_stock : '',
                     'unit' => $b->good->unit ?? 'шт.',
                 ])->values()->all();
 
@@ -92,7 +113,7 @@ class OpeningBalanceController extends Controller
         return view('admin.opening-balances.index', [
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $selectedWarehouseId,
-            'balances' => $balances,
+            'openingBalancesPaginator' => $openingBalancesPaginator,
             'linesForForm' => $linesForForm,
         ]);
     }
@@ -104,12 +125,21 @@ class OpeningBalanceController extends Controller
         $lines = $request->input('lines', []);
 
         $normalized = [];
+        $clearedGoodIds = [];
         foreach ($lines as $line) {
             if (! is_array($line)) {
                 continue;
             }
             $code = trim((string) ($line['article_code'] ?? ''));
             if ($code === '') {
+                $gidRaw = $line['good_id'] ?? null;
+                if ($gidRaw !== null && $gidRaw !== '') {
+                    $gid = (int) $gidRaw;
+                    if ($gid > 0) {
+                        $clearedGoodIds[] = $gid;
+                    }
+                }
+
                 continue;
             }
             $normalized[] = [
@@ -119,14 +149,36 @@ class OpeningBalanceController extends Controller
                 'category' => trim((string) ($line['category'] ?? '')),
                 'quantity' => $line['quantity'] ?? '',
                 'unit_cost' => $line['unit_cost'] ?? null,
+                'wholesale_price' => $line['wholesale_price'] ?? null,
                 'sale_price' => $line['sale_price'] ?? null,
+                'min_sale_price' => $line['min_sale_price'] ?? null,
+                'oem' => $line['oem'] ?? null,
+                'factory_number' => $line['factory_number'] ?? null,
+                'min_stock' => $line['min_stock'] ?? null,
                 'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
             ];
         }
 
-        $this->openingBalanceService->syncManualLines($branchId, $warehouseId, $normalized, deleteMissing: true);
+        $deletedGoodIds = array_values(array_unique(array_merge(
+            array_map('intval', $request->validated('deleted_good_ids') ?? []),
+            $clearedGoodIds
+        )));
+        if ($deletedGoodIds !== []) {
+            OpeningStockBalance::query()
+                ->where('warehouse_id', $warehouseId)
+                ->where('branch_id', $branchId)
+                ->whereIn('good_id', $deletedGoodIds)
+                ->delete();
+        }
 
-        return redirect()->route('admin.opening-balances.index', ['warehouse_id' => $warehouseId])
+        $this->openingBalanceService->syncManualLines($branchId, $warehouseId, $normalized, deleteMissing: false);
+
+        $page = max(1, (int) $request->input('page', 1));
+
+        return redirect()->route('admin.opening-balances.index', [
+            'warehouse_id' => $warehouseId,
+            'page' => $page,
+        ])
             ->with('status', 'Начальные остатки сохранены.');
     }
 
@@ -150,7 +202,10 @@ class OpeningBalanceController extends Controller
             session()->flash('import_errors', array_slice($result['errors'], 0, 40));
         }
 
-        return redirect()->route('admin.opening-balances.index', ['warehouse_id' => $warehouseId])
+        return redirect()->route('admin.opening-balances.index', [
+            'warehouse_id' => $warehouseId,
+            'page' => 1,
+        ])
             ->with('status', $message);
     }
 
@@ -159,12 +214,12 @@ class OpeningBalanceController extends Controller
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->fromArray([
-            ['Наименование', 'Штрихкод', 'Категория', 'Артикул', 'Количество', 'Ед. изм.', 'Закупочная цена', 'Продажная цена'],
-            ['Фильтр масляный', '', 'Расходники', 'ART-001', '24', 'шт.', '350', '520'],
-            ['Свеча зажигания', '', 'Запчасти', 'ART-002', '100', 'шт.', '', '180'],
+            ['Наименование', 'Штрихкод', 'Категория', 'Артикул', 'Количество', 'Ед. изм.', 'Закупочная цена', 'Оптовая цена', 'Продажная цена', 'Мин. цена продажи', 'ОЭМ', 'Заводской номер', 'Мин. остаток'],
+            ['Фильтр масляный', '', 'Расходники', 'ART-001', '24', 'шт.', '350', '480', '520', '500', 'OEM-001', 'SN-123', '2'],
+            ['Свеча зажигания', '', 'Запчасти', 'ART-002', '100', 'шт.', '', '', '180', '', '', '', '5'],
         ], null, 'A1', true);
 
-        foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as $col) {
+        foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'] as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 
@@ -184,13 +239,19 @@ class OpeningBalanceController extends Controller
     private function emptyOpeningBalanceLine(): array
     {
         return [
+            'good_id' => null,
             'article_code' => '',
             'name' => '',
             'barcode' => '',
             'category' => '',
             'quantity' => '',
             'unit_cost' => '',
+            'wholesale_price' => '',
             'sale_price' => '',
+            'min_sale_price' => '',
+            'oem' => '',
+            'factory_number' => '',
+            'min_stock' => '',
             'unit' => 'шт.',
         ];
     }

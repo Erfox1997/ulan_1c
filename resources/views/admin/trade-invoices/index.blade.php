@@ -196,20 +196,38 @@
                                 <button
                                     type="button"
                                     class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                    title="Одна реализация — обычный счёт; несколько — объединённый (один покупатель)"
+                                    title="Суммарно: запчасти и услуги отдельными строками"
                                     :disabled="selectedIds.length === 0"
-                                    @click="openPrint()"
+                                    @click="openPrint('summary')"
                                 >
-                                    Печать счёта
+                                    Печать (суммарно)
                                 </button>
                                 <button
                                     type="button"
                                     class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                    title="Одна реализация — один PDF; несколько — объединённый счёт (один покупатель)"
+                                    title="Все позиции реализации по строкам"
                                     :disabled="selectedIds.length === 0"
-                                    @click="openPdf()"
+                                    @click="openPrint('detail')"
                                 >
-                                    Скачать PDF
+                                    Печать (подробно)
+                                </button>
+                                <button
+                                    type="button"
+                                    class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="PDF: суммарно по категориям"
+                                    :disabled="selectedIds.length === 0"
+                                    @click="openPdf('summary')"
+                                >
+                                    PDF (суммарно)
+                                </button>
+                                <button
+                                    type="button"
+                                    class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="PDF: все строки накладной"
+                                    :disabled="selectedIds.length === 0"
+                                    @click="openPdf('detail')"
+                                >
+                                    PDF (подробно)
                                 </button>
                                 </div>
                             </div>

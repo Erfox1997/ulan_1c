@@ -6,6 +6,27 @@
             </div>
         @endif
 
+        @if ($errors->any())
+            <div
+                id="retail-pos-errors"
+                class="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-950 shadow-sm ring-1 ring-amber-900/10 sm:px-5"
+                role="alert"
+            >
+                <p class="font-bold text-amber-950">Не удалось перейти к оплате — чек не изменился</p>
+                <p class="mt-1 text-amber-900/95">Исправьте условия ниже или скорректируйте количество. Состав корзины восстановлен.</p>
+                <ul class="mt-3 list-inside list-disc space-y-1.5 font-medium text-amber-950">
+                    @foreach ($errors->all() as $err)
+                        <li>{{ $err }}</li>
+                    @endforeach
+                </ul>
+            </div>
+            <script>
+                requestAnimationFrame(function () {
+                    document.getElementById('retail-pos-errors')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            </script>
+        @endif
+
         <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div class="flex items-start gap-3">
                 <span class="mt-1 h-10 w-1 shrink-0 rounded-full bg-gradient-to-b from-emerald-500 to-teal-600 shadow-sm" aria-hidden="true"></span>
@@ -48,8 +69,11 @@
                 window.__retailPosInit = {
                     goodsSearchUrl: @json($goodsSearchUrl),
                     warehouseId: {{ (int) $selectedWarehouseId }},
+                    defaultWarehouseId: {{ $warehouses->isNotEmpty() ? (int) $warehouses->first()->id : 0 }},
                     editMode: false,
-                    initialCart: [],
+                    initialCart: @json($initialCart ?? []),
+                    defaultDocumentDate: @json($defaultDocumentDate),
+                    checkoutDraftUrl: @json($checkoutDraftUrl ?? ''),
                 };
             </script>
             <div class="grid gap-5 lg:grid-cols-12 lg:items-start" x-data="retailPosForm()">
@@ -59,7 +83,6 @@
                     <div class="rounded-2xl border border-emerald-900/10 bg-white shadow-lg shadow-emerald-900/10 ring-1 ring-emerald-900/[0.06]">
                         <div class="rounded-t-2xl border-b border-white/10 px-4 py-3 text-white shadow-md" style="background: linear-gradient(120deg, #059669 0%, #0d9488 50%, #0f766e 100%);">
                             <label for="pos_search" class="text-sm font-bold tracking-tight">Товар или услуга</label>
-                            <p class="mt-0.5 text-xs font-medium text-emerald-50/90">Поиск по названию, артикулу или штрихкоду (от 2 символов). Сканер: введите штрихкод целиком — товар добавится в чек. Услуги со склада не списываются.</p>
                         </div>
                         <div class="relative p-4">
                             <input
@@ -88,14 +111,22 @@
                                 <template x-for="row in results" :key="row.id">
                                     <button
                                         type="button"
-                                        class="flex w-full flex-col items-start gap-0.5 border-b border-slate-50 px-4 py-2.5 text-left transition hover:bg-emerald-50/80"
+                                        class="flex w-full flex-col items-start gap-0.5 border-b px-4 py-2.5 text-left transition"
+                                        :class="goodsRowOutOfStock(row) ? 'border-red-100 bg-red-50 hover:bg-red-100/90' : 'border-slate-50 hover:bg-emerald-50/80'"
                                         @click="addProduct(row)"
                                     >
-                                        <span class="font-medium text-slate-900" x-text="row.name"></span>
+                                        <span class="font-medium" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>
                                         <span class="text-xs font-medium text-teal-700" x-show="row.is_service === true || row.is_service === 1">Услуга</span>
-                                        <span class="text-xs text-slate-600" x-show="row.stock_quantity != null && row.stock_quantity !== ''">
-                                            Остаток: <span class="font-mono" x-text="row.stock_quantity"></span>
-                                            <span x-show="row.sale_price != null && row.sale_price !== ''" class="text-emerald-700">
+                                        <span
+                                            class="text-xs"
+                                            x-show="warehouseId > 0 && !(row.is_service === true || row.is_service === 1)"
+                                            :class="goodsRowOutOfStock(row) ? 'font-medium text-red-700' : 'text-slate-600'"
+                                        >
+                                            Остаток: <span class="font-mono tabular-nums" x-text="goodsRowStockDisplay(row)"></span>
+                                            <span
+                                                x-show="!goodsRowOutOfStock(row) && row.sale_price != null && row.sale_price !== ''"
+                                                class="text-emerald-700"
+                                            >
                                                 · <span x-text="row.sale_price"></span> сом
                                             </span>
                                         </span>
@@ -116,42 +147,16 @@
                 <div class="lg:col-span-7">
                     <form
                         method="POST"
-                        action="{{ route('admin.retail-sales.store') }}"
+                        action="{{ route('admin.retail-sales.checkout-draft') }}"
                         class="overflow-hidden rounded-2xl border border-emerald-900/10 bg-white shadow-xl shadow-emerald-900/15 ring-1 ring-emerald-900/[0.05]"
-                        @submit="handleSubmit($event)"
+                        @submit="handleCheckoutDraft($event)"
                     >
                         @csrf
-                        <input type="hidden" name="warehouse_id" value="{{ (int) $selectedWarehouseId }}" />
+                        <input type="hidden" name="warehouse_id" :value="warehouseId" />
+                        <input type="hidden" name="document_date" :value="defaultDocumentDate" />
 
-                        <div class="border-b border-emerald-900/20 px-4 py-5 text-white sm:px-6" style="background: linear-gradient(135deg, #047857 0%, #0d9488 45%, #0f766e 100%);">
-                            <div class="grid gap-4 sm:grid-cols-2 sm:items-end sm:gap-6">
-                                <div>
-                                    <label for="pos_account" class="block text-[10px] font-bold uppercase tracking-[0.12em] text-teal-100/95">Счёт / касса *</label>
-                                    <select
-                                        id="pos_account"
-                                        name="organization_bank_account_id"
-                                        class="mt-2 w-full rounded-xl border-0 bg-white py-2.5 pl-3 pr-8 text-sm font-semibold text-slate-900 shadow-md shadow-teal-950/10 focus:outline-none focus:ring-2 focus:ring-white/90"
-                                        required
-                                    >
-                                        @foreach ($paymentAccountsPayload as $acc)
-                                            <option value="{{ $acc['id'] }}" @selected((int) ($defaultAccountId ?? 0) === (int) $acc['id'])>
-                                                {{ $acc['label'] }}
-                                            </option>
-                                        @endforeach
-                                    </select>
-                                </div>
-                                <div>
-                                    <label for="pos_date" class="block text-[10px] font-bold uppercase tracking-[0.12em] text-teal-100/95">Дата *</label>
-                                    <input
-                                        id="pos_date"
-                                        type="date"
-                                        name="document_date"
-                                        value="{{ old('document_date', $defaultDocumentDate) }}"
-                                        required
-                                        class="mt-2 w-full rounded-xl border-0 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 shadow-md shadow-teal-950/10 focus:outline-none focus:ring-2 focus:ring-white/90"
-                                    />
-                                </div>
-                            </div>
+                        <div class="border-b border-emerald-900/20 px-4 py-4 text-white sm:px-6" style="background: linear-gradient(135deg, #047857 0%, #0d9488 45%, #0f766e 100%);">
+                            <p class="text-sm font-bold tracking-tight">Чек</p>
                         </div>
 
                         <div class="min-h-[11rem] divide-y divide-slate-100/90">
@@ -161,9 +166,16 @@
                                 </div>
                             </template>
                             <template x-for="(line, idx) in cart" :key="line.good_id">
-                                <div class="flex flex-col gap-3 px-4 py-3.5 transition-colors hover:bg-slate-50/90 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+                                <div
+                                    class="flex flex-col gap-3 px-4 py-3.5 transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-5"
+                                    :class="cartLineStockDanger(line) ? 'bg-red-50/70 hover:bg-red-50/85' : 'hover:bg-slate-50/90'"
+                                >
                                     <div class="min-w-0 flex-1">
-                                        <p class="text-[15px] font-semibold leading-snug text-slate-900" x-text="line.name"></p>
+                                        <p
+                                            class="text-[15px] font-semibold leading-snug"
+                                            :class="cartLineStockDanger(line) ? 'text-red-950' : 'text-slate-900'"
+                                            x-text="line.name"
+                                        ></p>
                                         <input type="hidden" :name="`lines[${idx}][article_code]`" :value="line.article_code" />
                                     </div>
                                     <div class="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -208,60 +220,47 @@
                                     <span class="text-xl font-extrabold tabular-nums tracking-tight text-emerald-950" x-text="cartTotalFormatted"></span>
                                     <span class="text-sm font-semibold tabular-nums text-emerald-800">сом</span>
                                 </span>
-                                <span
-                                    class="inline-flex flex-wrap items-baseline rounded-lg bg-white/90 px-2 py-1 shadow-sm ring-1 ring-rose-200/80"
-                                    style="gap: 8px;"
-                                    x-show="!editMode && Number.isFinite(clientPaidParsed) && changeAmount !== null && changeAmount &lt; -0.004"
-                                >
-                                    <span class="text-[10px] font-bold uppercase tracking-wider text-rose-700">Не хватает</span>
-                                    <span class="text-base font-extrabold tabular-nums text-rose-800" x-text="formatSum(-changeAmount)"></span>
-                                    <span class="text-sm font-bold text-rose-700">сом</span>
-                                </span>
-                                <span
-                                    class="inline-flex flex-wrap items-baseline rounded-lg bg-amber-100/95 px-2.5 py-1 shadow-sm ring-1 ring-amber-300/60"
-                                    style="gap: 8px;"
-                                    x-show="!editMode && Number.isFinite(clientPaidParsed) && changeAmount !== null && changeAmount >= -0.004 && clientPaid.trim() !== ''"
-                                >
-                                    <span class="text-[10px] font-bold uppercase tracking-wider text-amber-900/90">Сдача</span>
-                                    <span class="text-base font-extrabold tabular-nums text-amber-950" x-text="formatSum(Math.max(0, changeAmount))"></span>
-                                    <span class="text-sm font-bold text-amber-900">сом</span>
-                                </span>
                             </div>
                             <p class="shrink-0 rounded-md bg-white/80 px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm ring-1 ring-emerald-900/10">
                                 Позиций:&nbsp;<span class="font-extrabold tabular-nums text-emerald-900" x-text="cart.length"></span>
                             </p>
                         </div>
 
-                        <div class="flex flex-col gap-4 border-t border-emerald-200/60 bg-gradient-to-b from-white to-emerald-50/30 px-4 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                            <div
-                                class="flex min-w-0 flex-1 flex-wrap items-center"
-                                style="gap: 12px 16px;"
-                                x-show="cart.length > 0 && !editMode"
+                        <div
+                            class="border-t border-dashed border-slate-200 bg-slate-50/80 px-4 py-4 sm:px-6"
+                            x-cloak
+                            x-show="clientQueue.length > 0"
+                        >
+                            <p class="text-xs font-bold uppercase tracking-wide text-slate-600">Ожидают</p>
+                            <ul class="mt-2 space-y-2">
+                                <template x-for="(slot, qIdx) in clientQueue" :key="slot.id">
+                                    <li class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-sm shadow-sm ring-1 ring-slate-200/80">
+                                        <span class="font-medium text-slate-800" x-text="slot.label"></span>
+                                        <span class="text-xs text-slate-500"><span x-text="slot.lines"></span> поз.</span>
+                                        <button type="button" class="font-semibold text-emerald-700 hover:underline" @click="resumeQueue(qIdx)">Продолжить</button>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+
+                        <div class="flex flex-col gap-3 border-t border-emerald-200/60 bg-gradient-to-b from-white to-emerald-50/30 px-4 py-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-6">
+                            <button
+                                type="button"
+                                class="inline-flex w-full items-center justify-center rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-950 shadow-sm transition hover:bg-amber-100 sm:w-auto"
+                                :class="{ 'opacity-50': cart.length === 0 }"
+                                :disabled="cart.length === 0"
+                                @click="holdCurrentClient()"
                             >
-                                <label for="pos_client_paid" class="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-900/70">
-                                    Сумма от клиента
-                                </label>
-                                <input
-                                    id="pos_client_paid"
-                                    type="text"
-                                    x-model="clientPaid"
-                                    inputmode="decimal"
-                                    autocomplete="off"
-                                    @focus="$event.target.select()"
-                                    @mouseup="$event.preventDefault()"
-                                    class="w-[9rem] shrink-0 rounded-xl border-2 border-emerald-200 bg-white px-3.5 py-2.5 text-sm font-bold tabular-nums text-slate-900 shadow-md focus:border-emerald-500 focus:outline-none focus:ring-4 focus:ring-emerald-400/25 sm:w-40"
-                                />
-                            </div>
-                            <div class="flex flex-col items-stretch sm:shrink-0 sm:flex-row sm:items-center sm:justify-end">
-                                <button
-                                    type="submit"
-                                    class="retail-pos-submit inline-flex w-full items-center justify-center rounded-xl px-8 py-3.5 text-[15px] font-bold tracking-wide shadow-lg transition focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:w-auto sm:min-w-[15rem] disabled:opacity-50"
-                                    :class="{ 'opacity-50': cart.length === 0 }"
-                                    :disabled="cart.length === 0"
-                                >
-                                    Оформить продажу
-                                </button>
-                            </div>
+                                В очередь (первый ждёт)
+                            </button>
+                            <button
+                                type="submit"
+                                class="retail-pos-submit inline-flex w-full items-center justify-center rounded-xl px-8 py-3.5 text-[15px] font-bold tracking-wide shadow-lg transition focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:ml-auto sm:w-auto sm:min-w-[15rem] disabled:opacity-50"
+                                :class="{ 'opacity-50': cart.length === 0 }"
+                                :disabled="cart.length === 0"
+                            >
+                                К оплате
+                            </button>
                         </div>
                     </form>
                 </div>

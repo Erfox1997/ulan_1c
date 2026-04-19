@@ -5,8 +5,8 @@ namespace App\Services;
 use App\Models\Good;
 use App\Models\OpeningStockBalance;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use RuntimeException;
 
 class OpeningBalanceService
 {
@@ -57,6 +57,13 @@ class OpeningBalanceService
         $category = trim((string) ($line['category'] ?? ''));
         $category = $category === '' ? null : $category;
         $salePrice = $this->parseOptionalMoney($line['sale_price'] ?? null);
+        $wholesalePrice = $this->parseOptionalMoney($line['wholesale_price'] ?? null);
+        $minSalePrice = $this->parseOptionalMoney($line['min_sale_price'] ?? null);
+        $oemRaw = trim((string) ($line['oem'] ?? ''));
+        $oem = $oemRaw === '' ? null : $oemRaw;
+        $factoryRaw = trim((string) ($line['factory_number'] ?? ''));
+        $factoryNumber = $factoryRaw === '' ? null : $factoryRaw;
+        $minStock = $this->parseOptionalNonNegativeDecimal($line['min_stock'] ?? null);
 
         $good = Good::query()->updateOrCreate(
             ['branch_id' => $branchId, 'article_code' => $code],
@@ -66,6 +73,11 @@ class OpeningBalanceService
                 'barcode' => $barcode,
                 'category' => $category,
                 'sale_price' => $salePrice,
+                'wholesale_price' => $wholesalePrice,
+                'min_sale_price' => $minSalePrice,
+                'oem' => $oem,
+                'factory_number' => $factoryNumber,
+                'min_stock' => $minStock,
             ]
         );
 
@@ -180,7 +192,7 @@ class OpeningBalanceService
     /**
      * Отмена эффекта ранее проведённой строки поступления на остаток (обратная к addIncomingLine для той же пары q и закуп. цены).
      *
-     * @throws \RuntimeException
+     * @throws RuntimeException
      */
     public function reverseIncomingLine(int $warehouseId, int $goodId, mixed $quantity, mixed $unitPrice): void
     {
@@ -198,14 +210,14 @@ class OpeningBalanceService
             ->first();
 
         if ($balance === null) {
-            throw new \RuntimeException('Не найден складской остаток по строке — редактирование документа невозможно.');
+            throw new RuntimeException('Не найден складской остаток по строке — редактирование документа невозможно.');
         }
 
         $Q = (float) $balance->quantity;
         $C = $balance->unit_cost !== null ? (float) $balance->unit_cost : null;
 
         if ($Q + 1e-9 < $q) {
-            throw new \RuntimeException('Недостаточно остатка для отмены строки документа (товар мог быть отгружен).');
+            throw new RuntimeException('Недостаточно остатка для отмены строки документа (товар мог быть отгружен).');
         }
 
         $Qnew = $Q - $q;
@@ -236,7 +248,7 @@ class OpeningBalanceService
     /**
      * Списание товара со склада при продаже. Средняя закупочная (unit_cost) на остатке не пересчитывается.
      *
-     * @throws \RuntimeException
+     * @throws RuntimeException
      */
     public function applyOutboundSaleLine(int $warehouseId, int $goodId, mixed $quantity): void
     {
@@ -258,12 +270,12 @@ class OpeningBalanceService
             ->first();
 
         if ($balance === null) {
-            throw new \RuntimeException('Нет остатка товара на выбранном складе.');
+            throw new RuntimeException('Нет остатка товара на выбранном складе.');
         }
 
         $Q = (float) $balance->quantity;
         if ($Q + 1e-9 < $q) {
-            throw new \RuntimeException('Недостаточно товара на складе для списания.');
+            throw new RuntimeException('Недостаточно товара на складе для списания.');
         }
 
         $Qnew = $Q - $q;
@@ -281,7 +293,7 @@ class OpeningBalanceService
     /**
      * Возврат количества на склад при отмене/правке строки реализации (средняя закупочная сохраняется, если строка уже была).
      *
-     * @throws \RuntimeException
+     * @throws RuntimeException
      */
     /**
      * Перемещение между складами: списание со склада-отправителя по средней и приход на склад-получатель с той же закупочной ценой за единицу.
@@ -485,7 +497,12 @@ class OpeningBalanceService
             $category = $this->importCell($row, $columnMap['category'] ?? null);
             $unit = $this->importCell($row, $columnMap['unit'] ?? null) ?: 'шт.';
             $purchaseRaw = $this->importCellRaw($row, $columnMap['purchase'] ?? null);
+            $wholesaleRaw = $this->importCellRaw($row, $columnMap['wholesale'] ?? null);
             $saleRaw = $this->importCellRaw($row, $columnMap['sale'] ?? null);
+            $minSaleRaw = $this->importCellRaw($row, $columnMap['min_sale'] ?? null);
+            $oemCell = $this->importCell($row, $columnMap['oem'] ?? null);
+            $factoryCell = $this->importCell($row, $columnMap['factory_number'] ?? null);
+            $minStockRaw = $this->importCellRaw($row, $columnMap['min_stock'] ?? null);
 
             if ($article === '' && $name === '' && ($qtyRaw === null || $qtyRaw === '')) {
                 $skipped++;
@@ -519,8 +536,13 @@ class OpeningBalanceService
                 'category' => $category,
                 'quantity' => $quantity,
                 'unit_cost' => $this->parseOptionalMoney($purchaseRaw),
+                'wholesale_price' => $this->parseOptionalMoney($wholesaleRaw),
                 'sale_price' => $this->parseOptionalMoney($saleRaw),
                 'unit' => $unit !== '' ? $unit : 'шт.',
+                'min_sale_price' => $this->parseOptionalMoney($minSaleRaw),
+                'oem' => $oemCell,
+                'factory_number' => $factoryCell,
+                'min_stock' => $this->parseOptionalNonNegativeDecimal($minStockRaw),
             ];
         }
 
@@ -625,6 +647,18 @@ class OpeningBalanceService
         if (str_contains($h, 'штрих') || str_contains($h, 'ean') || str_contains($h, 'gtin')) {
             return 'barcode';
         }
+        if (str_contains($h, 'оэм') || $h === 'oem') {
+            return 'oem';
+        }
+        if (str_contains($h, 'завод') || str_contains($h, 'серийн')) {
+            return 'factory_number';
+        }
+        if ((str_contains($h, 'мин') || str_contains($h, 'миним')) && str_contains($h, 'остат')) {
+            return 'min_stock';
+        }
+        if ((str_contains($h, 'мин') || str_contains($h, 'миним')) && (str_contains($h, 'продаж') || str_contains($h, 'розниц'))) {
+            return 'min_sale';
+        }
         if (str_contains($h, 'категор')) {
             return 'category';
         }
@@ -648,6 +682,9 @@ class OpeningBalanceService
         }
         if (str_contains($h, 'закуп') || str_contains($h, 'себестоим')) {
             return 'purchase';
+        }
+        if (str_contains($h, 'опт')) {
+            return 'wholesale';
         }
         if (str_contains($h, 'продаж') || str_contains($h, 'розниц')) {
             return 'sale';
@@ -708,6 +745,27 @@ class OpeningBalanceService
     }
 
     public function parseOptionalMoney(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $s = $this->parseDecimal($value);
+        if ($s === null) {
+            return null;
+        }
+
+        if ((float) $s < 0) {
+            return null;
+        }
+
+        return $s;
+    }
+
+    /**
+     * Для минимального остатка: пусто или число ≥ 0.
+     */
+    public function parseOptionalNonNegativeDecimal(mixed $value): ?string
     {
         if ($value === null || $value === '') {
             return null;

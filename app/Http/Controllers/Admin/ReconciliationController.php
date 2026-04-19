@@ -12,11 +12,19 @@ use App\Models\LegalEntitySaleLine;
 use App\Models\PurchaseReceipt;
 use App\Models\PurchaseReceiptLine;
 use App\Models\PurchaseReturn;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
+use PhpOffice\PhpSpreadsheet\Style\Border;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReconciliationController extends Controller
 {
@@ -27,6 +35,52 @@ class ReconciliationController extends Controller
     public const MODE_SELLERS = 'sellers';
 
     public function index(Request $request): View|RedirectResponse
+    {
+        $resolved = $this->prepareReconciliationPage($request);
+        if ($resolved instanceof RedirectResponse) {
+            return $resolved;
+        }
+
+        return view('admin.reconciliation.index', $resolved);
+    }
+
+    public function exportPdf(Request $request): RedirectResponse|\Illuminate\Http\Response
+    {
+        $resolved = $this->prepareReconciliationPage($request);
+        if ($resolved instanceof RedirectResponse) {
+            return $resolved;
+        }
+
+        $resolved['branchName'] = auth()->user()->branch?->name ?? '—';
+        $resolved['forPdf'] = true;
+        $filename = $this->reconciliationExportFilename($resolved, 'pdf');
+
+        return Pdf::loadView('admin.reconciliation.export-pdf', $resolved)
+            ->setPaper('a4', 'landscape')
+            ->download($filename);
+    }
+
+    public function exportExcel(Request $request): RedirectResponse|StreamedResponse
+    {
+        $resolved = $this->prepareReconciliationPage($request);
+        if ($resolved instanceof RedirectResponse) {
+            return $resolved;
+        }
+
+        $spreadsheet = $this->buildReconciliationSpreadsheet($resolved);
+        $filename = $this->reconciliationExportFilename($resolved, 'xlsx');
+
+        return response()->streamDownload(function () use ($spreadsheet) {
+            (new Xlsx($spreadsheet))->save('php://output');
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>|RedirectResponse
+     */
+    private function prepareReconciliationPage(Request $request): array|RedirectResponse
     {
         $branchId = (int) auth()->user()->branch_id;
 
@@ -126,7 +180,7 @@ class ReconciliationController extends Controller
             }
         }
 
-        return view('admin.reconciliation.index', [
+        $payload = [
             'counterparties' => $counterparties,
             'branchHasAnyCounterparty' => $branchHasAnyCounterparty,
             'counterpartyId' => $counterpartyId,
@@ -148,7 +202,315 @@ class ReconciliationController extends Controller
             'buyerPeriodPurchasesNet' => $buyerPeriodPurchasesNet,
             'supplierPurchasesPeriod' => $supplierPurchasesPeriod,
             'supplierReturnsPeriod' => $supplierReturnsPeriod ?? '0',
+        ];
+
+        return $this->enrichReconciliationDisplay($payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function enrichReconciliationDisplay(array $payload): array
+    {
+        $counterparty = $payload['counterparty'];
+        $from = $payload['from'];
+        /** @var Collection $buyerRows */
+        $buyerRows = $payload['buyerRows'];
+        /** @var Collection $supplierRows */
+        $supplierRows = $payload['supplierRows'];
+        /** @var Collection $summaryRows */
+        $summaryRows = $payload['summaryRows'];
+
+        $buyerDocs = collect();
+        $buyerPaymentsList = collect();
+        $supplierDocs = collect();
+        $supplierPaymentsList = collect();
+        $totalPeriodPurchases = '0';
+        $totalPaid = '0';
+        $totalDebt = '0';
+        $totalOpeningCard = '0';
+
+        if ($counterparty !== null) {
+            $buyerDocs = $buyerRows->whereIn('kind', ['sale', 'return'])->values();
+            $openingBuyerCard = number_format((float) ($counterparty->opening_debt_as_buyer ?? 0), 2, '.', '');
+            $buyerDocs = collect([
+                [
+                    'sort' => $from->format('Y-m-d').'-0-0',
+                    'date' => $from,
+                    'kind' => 'opening_card',
+                    'title' => 'Начальные долги',
+                    'detail' => '',
+                    'debit' => $openingBuyerCard,
+                    'credit' => null,
+                ],
+            ])->merge($buyerDocs);
+
+            $buyerPaymentsList = $buyerRows->where('kind', 'payment');
+            $supplierDocs = $supplierRows->whereIn('kind', ['purchase', 'purchase_return'])->values();
+            $openingSupplierCard = number_format((float) ($counterparty->opening_debt_as_supplier ?? 0), 2, '.', '');
+            $supplierDocs = collect([
+                [
+                    'sort' => $from->format('Y-m-d').'-0-0',
+                    'date' => $from,
+                    'kind' => 'opening_card',
+                    'title' => 'Начальные долги',
+                    'detail' => '',
+                    'debit' => null,
+                    'credit' => $openingSupplierCard,
+                ],
+            ])->merge($supplierDocs);
+
+            $supplierPaymentsList = $supplierRows->where('kind', 'payment');
+        } elseif ($summaryRows->isNotEmpty()) {
+            foreach ($summaryRows as $sr) {
+                $totalPeriodPurchases = bcadd($totalPeriodPurchases, (string) $sr['period_purchases'], 2);
+                $totalPaid = bcadd($totalPaid, (string) $sr['paid'], 2);
+                $totalDebt = bcadd($totalDebt, (string) $sr['debt'], 2);
+                $totalOpeningCard = bcadd($totalOpeningCard, (string) ($sr['opening_debt_card'] ?? '0'), 2);
+            }
+        }
+
+        return array_merge($payload, [
+            'buyerDocs' => $buyerDocs,
+            'buyerPaymentsList' => $buyerPaymentsList,
+            'supplierDocs' => $supplierDocs,
+            'supplierPaymentsList' => $supplierPaymentsList,
+            'totalPeriodPurchases' => $totalPeriodPurchases,
+            'totalPaid' => $totalPaid,
+            'totalDebt' => $totalDebt,
+            'totalOpeningCard' => $totalOpeningCard,
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function reconciliationExportFilename(array $data, string $ext): string
+    {
+        $mode = $data['mode'] === self::MODE_BUYERS ? 'pokupateli' : 'postavshchiki';
+        $from = $data['from']->format('Y-m-d');
+        $to = $data['to']->format('Y-m-d');
+        /** @var Counterparty|null $cp */
+        $cp = $data['counterparty'];
+        if ($cp !== null) {
+            $label = Str::slug(Str::limit(trim((string) ($cp->full_name ?: $cp->name)), 40, ''), '-');
+            if ($label === '') {
+                $label = 'kontragent-'.$cp->id;
+            }
+
+            return "sverka_{$mode}_{$label}_{$from}_{$to}.{$ext}";
+        }
+
+        return "sverka_{$mode}_{$from}_{$to}.{$ext}";
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildReconciliationSpreadsheet(array $data): Spreadsheet
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Сверка');
+
+        $isList = $data['counterparty'] === null;
+        $isBuyers = $data['mode'] === self::MODE_BUYERS;
+        $branchName = auth()->user()->branch?->name ?? '—';
+
+        $sheet->setCellValue('A1', 'Сверка с контрагентами');
+        $sheet->mergeCells('A1:E1');
+        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
+        $sheet->setCellValue('A2', 'Филиал: '.$branchName);
+
+        $row = 4;
+        if ($isList) {
+            $sheet->setCellValue('A'.$row, $isBuyers ? 'Покупатели' : 'Поставщики');
+            $sheet->getStyle('A'.$row)->getFont()->setBold(true);
+            $row++;
+            $headers = $isBuyers
+                ? ['Контрагент', 'Начальные долги', 'Всего купил у нас', 'Всего перевёл', 'Долг нам (сейчас)']
+                : ['Контрагент', 'Начальные долги', 'Всего закупили у него', 'Всего оплатили', 'Мы должны (сейчас)'];
+            $col = 'A';
+            foreach ($headers as $h) {
+                $sheet->setCellValue($col.$row, $h);
+                $col++;
+            }
+            $headerRow = $row;
+            $row++;
+            /** @var Collection $summaryRows */
+            $summaryRows = $data['summaryRows'];
+            foreach ($summaryRows as $sr) {
+                $cp = $sr['counterparty'];
+                $label = trim((string) $cp->full_name) !== '' ? $cp->full_name : $cp->name;
+                $sheet->setCellValue('A'.$row, $label);
+                $sheet->setCellValue('B'.$row, $this->excelMoney($sr['opening_debt_card'] ?? '0'));
+                $sheet->setCellValue('C'.$row, $this->excelMoney($sr['period_purchases']));
+                $sheet->setCellValue('D'.$row, $this->excelMoney($sr['paid']));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($sr['debt']));
+                $row++;
+            }
+            $lastFilledRow = $row - 1;
+            if ($summaryRows->isNotEmpty()) {
+                $sheet->setCellValue('A'.$row, 'Итого по списку');
+                $sheet->getStyle('A'.$row)->getFont()->setBold(true);
+                $sheet->setCellValue('B'.$row, $this->excelMoney($data['totalOpeningCard']));
+                $sheet->setCellValue('C'.$row, $this->excelMoney($data['totalPeriodPurchases']));
+                $sheet->setCellValue('D'.$row, $this->excelMoney($data['totalPaid']));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($data['totalDebt']));
+                $lastFilledRow = $row;
+            }
+            $this->applySheetBorders($sheet, $headerRow, $lastFilledRow);
+        } else {
+            /** @var Counterparty $cp */
+            $cp = $data['counterparty'];
+            $cpLabel = trim((string) $cp->full_name) !== '' ? $cp->full_name : $cp->name;
+            $sheet->setCellValue('A'.$row, 'Контрагент: '.$cpLabel);
+            $sheet->getStyle('A'.$row)->getFont()->setBold(true);
+            $row++;
+            $sheet->setCellValue(
+                'A'.$row,
+                'Период: '.$data['from']->format('d.m.Y').' — '.$data['to']->format('d.m.Y')
+            );
+            $row += 2;
+
+            if ($isBuyers) {
+                $buyerPayV = $data['buyerPaymentsList']->values();
+                $buyerDocV = $data['buyerDocs']->values();
+                $pairRows = max($buyerPayV->count(), $buyerDocV->count());
+                $sheet->setCellValue('A'.$row, 'Оплатил');
+                $sheet->mergeCells('A'.$row.':B'.$row);
+                $sheet->setCellValue('C'.$row, 'Продажи и возвраты');
+                $sheet->mergeCells('C'.$row.':E'.$row);
+                $sheet->getStyle('A'.$row.':E'.$row)->getFont()->setBold(true);
+                $sheet->getStyle('A'.$row.':E'.$row)->getFill()
+                    ->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB('E8EEF5');
+                $row++;
+                $sheet->setCellValue('A'.$row, 'Дата');
+                $sheet->setCellValue('B'.$row, 'Сумма оплаты');
+                $sheet->setCellValue('C'.$row, 'Дата');
+                $sheet->setCellValue('D'.$row, 'Документ');
+                $sheet->setCellValue('E'.$row, 'Сумма');
+                $headerRow = $row;
+                $row++;
+                for ($i = 0; $i < $pairRows; $i++) {
+                    if (isset($buyerPayV[$i])) {
+                        $sheet->setCellValue('A'.$row, $buyerPayV[$i]['date']->format('d.m.Y'));
+                        $sheet->setCellValue('B'.$row, $this->excelMoney($buyerPayV[$i]['credit']));
+                    }
+                    if (isset($buyerDocV[$i])) {
+                        $d = $buyerDocV[$i];
+                        $sheet->setCellValue('C'.$row, $d['date']->format('d.m.Y'));
+                        $docLabel = $d['title'].($d['detail'] !== '' && ($d['kind'] ?? '') !== 'opening_card' ? ' · '.$d['detail'] : '');
+                        $sheet->setCellValue('D'.$row, $docLabel);
+                        if (($d['kind'] ?? '') === 'return') {
+                            $sheet->setCellValue('E'.$row, $this->excelMoneyNeg($d['credit']));
+                        } else {
+                            $sheet->setCellValue('E'.$row, $this->excelMoney($d['debit']));
+                        }
+                    }
+                    $row++;
+                }
+            } else {
+                $supPayV = $data['supplierPaymentsList']->values();
+                $supDocV = $data['supplierDocs']->values();
+                $pairRows = max($supPayV->count(), $supDocV->count());
+                $sheet->setCellValue('A'.$row, 'Оплатили');
+                $sheet->mergeCells('A'.$row.':B'.$row);
+                $sheet->setCellValue('C'.$row, 'Закупки');
+                $sheet->mergeCells('C'.$row.':E'.$row);
+                $sheet->getStyle('A'.$row.':E'.$row)->getFont()->setBold(true);
+                $sheet->getStyle('A'.$row.':E'.$row)->getFill()
+                    ->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB('E8EEF5');
+                $row++;
+                $sheet->setCellValue('A'.$row, 'Дата');
+                $sheet->setCellValue('B'.$row, 'Сумма оплаты');
+                $sheet->setCellValue('C'.$row, 'Дата');
+                $sheet->setCellValue('D'.$row, 'Документ');
+                $sheet->setCellValue('E'.$row, 'Сумма');
+                $headerRow = $row;
+                $row++;
+                for ($i = 0; $i < $pairRows; $i++) {
+                    if (isset($supPayV[$i])) {
+                        $sheet->setCellValue('A'.$row, $supPayV[$i]['date']->format('d.m.Y'));
+                        $sheet->setCellValue('B'.$row, $this->excelMoney($supPayV[$i]['debit']));
+                    }
+                    if (isset($supDocV[$i])) {
+                        $d = $supDocV[$i];
+                        $sheet->setCellValue('C'.$row, $d['date']->format('d.m.Y'));
+                        $docLabel = $d['title'].($d['detail'] !== '' && ($d['kind'] ?? '') !== 'opening_card' ? ' · '.$d['detail'] : '');
+                        $sheet->setCellValue('D'.$row, $docLabel);
+                        if (($d['kind'] ?? '') === 'purchase_return') {
+                            $sheet->setCellValue('E'.$row, $this->excelMoneyNeg($d['debit']));
+                        } else {
+                            $sheet->setCellValue('E'.$row, $this->excelMoney($d['credit']));
+                        }
+                    }
+                    $row++;
+                }
+            }
+            $this->applySheetBorders($sheet, $headerRow, $row - 1);
+            $row += 2;
+            $sheet->setCellValue('A'.$row, 'Итог');
+            $sheet->mergeCells('A'.$row.':E'.$row);
+            $sheet->getStyle('A'.$row)->getFont()->setBold(true);
+            $row++;
+            if ($isBuyers) {
+                $sheet->setCellValue('A'.$row, 'Сальдо на '.$data['from']->format('d.m.Y'));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($data['buyerOpening']));
+                $row++;
+                $sheet->setCellValue('A'.$row, 'Долг нам на '.$data['to']->format('d.m.Y'));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($data['buyerClosing']));
+                $sheet->getStyle('A'.$row.':E'.$row)->getFont()->setBold(true);
+            } else {
+                $sheet->setCellValue('A'.$row, 'Сальдо на '.$data['from']->format('d.m.Y'));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($data['supplierOpening']));
+                $row++;
+                $sheet->setCellValue('A'.$row, 'Мы должны на '.$data['to']->format('d.m.Y'));
+                $sheet->setCellValue('E'.$row, $this->excelMoney($data['supplierClosing']));
+                $sheet->getStyle('A'.$row.':E'.$row)->getFont()->setBold(true);
+            }
+        }
+
+        foreach (range('A', 'E') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+
+        return $spreadsheet;
+    }
+
+    private function excelMoney(?string $v): float
+    {
+        if ($v === null || $v === '') {
+            return 0.0;
+        }
+
+        return (float) $v;
+    }
+
+    private function excelMoneyNeg(?string $v): float
+    {
+        return -1 * abs($this->excelMoney($v));
+    }
+
+    private function applySheetBorders(\PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet, int $headerRow, int $lastRow): void
+    {
+        if ($lastRow < $headerRow) {
+            return;
+        }
+        $style = [
+            'borders' => [
+                'allBorders' => [
+                    'borderStyle' => Border::BORDER_THIN,
+                    'color' => ['rgb' => 'CCCCCC'],
+                ],
+            ],
+        ];
+        $sheet->getStyle('A'.$headerRow.':E'.$lastRow)->applyFromArray($style);
+        $sheet->getStyle('A'.$headerRow.':E'.$headerRow)->getFont()->setBold(true);
+        if ($lastRow > $headerRow) {
+            $sheet->getStyle('B'.($headerRow + 1).':E'.$lastRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_RIGHT);
+        }
     }
 
     /**

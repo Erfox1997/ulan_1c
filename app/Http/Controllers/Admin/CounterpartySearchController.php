@@ -34,7 +34,7 @@ class CounterpartySearchController extends Controller
                 })
                 ->orderBy('name')
                 ->limit(25)
-                ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn']);
+                ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn', 'phone']);
 
             return response()->json($rows);
         }
@@ -66,7 +66,7 @@ class CounterpartySearchController extends Controller
             ->orderByRaw($orderSql, $orderBindings)
             ->orderBy('name')
             ->limit(25)
-            ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn']);
+            ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn', 'phone']);
 
         return response()->json($rows);
     }

@@ -53,6 +53,11 @@ class Counterparty extends Model
         return $this->hasMany(CounterpartyBankAccount::class)->orderBy('sort_order')->orderBy('id');
     }
 
+    public function customerVehicles(): HasMany
+    {
+        return $this->hasMany(CustomerVehicle::class)->orderBy('id');
+    }
+
     public function resolveRouteBinding($value, $field = null)
     {
         $field ??= $this->getRouteKeyName();

@@ -2,14 +2,14 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Employee;
 use App\Models\Good;
-use App\Models\OrganizationBankAccount;
 use App\Models\OpeningStockBalance;
+use App\Models\ServiceOrder;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
-class StoreRetailSaleRequest extends FormRequest
+class StoreServiceOrderLinesRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -18,35 +18,26 @@ class StoreRetailSaleRequest extends FormRequest
 
     public function rules(): array
     {
-        $branchId = (int) $this->user()->branch_id;
-
         return [
-            'warehouse_id' => [
-                'required',
-                'integer',
-                Rule::exists('warehouses', 'id')->where(fn ($q) => $q->where('branch_id', $branchId)),
-            ],
-            'organization_bank_account_id' => [
-                'required',
-                'integer',
-                function (string $attribute, mixed $value, \Closure $fail) use ($branchId): void {
-                    $acc = OrganizationBankAccount::query()->with('organization:id,branch_id')->find((int) $value);
-                    if ($acc === null || $acc->organization === null || (int) $acc->organization->branch_id !== $branchId) {
-                        $fail('Выберите счёт или кассу из справочника организаций филиала.');
-                    }
-                },
-            ],
-            'document_date' => ['required', 'date'],
             'lines' => ['required', 'array'],
             'lines.*.article_code' => ['nullable', 'string', 'max:128'],
             'lines.*.quantity' => ['nullable'],
             'lines.*.unit_price' => ['nullable'],
+            'lines.*.performer_employee_id' => ['nullable'],
         ];
     }
 
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $v): void {
+            /** @var ServiceOrder|null $order */
+            $order = $this->route('serviceOrder');
+            if (! $order instanceof ServiceOrder) {
+                $v->errors()->add('lines', 'Заявка не найдена.');
+
+                return;
+            }
+
             $lines = $this->input('lines', []);
             if (! is_array($lines)) {
                 $v->errors()->add('lines', 'Некорректный формат данных.');
@@ -55,7 +46,7 @@ class StoreRetailSaleRequest extends FormRequest
             }
 
             $branchId = (int) $this->user()->branch_id;
-            $warehouseId = (int) $this->input('warehouse_id');
+            $warehouseId = (int) $order->warehouse_id;
             $hasAny = false;
             $articleCounts = [];
 
@@ -91,9 +82,25 @@ class StoreRetailSaleRequest extends FormRequest
                     ->first();
 
                 if ($good === null) {
-                    $v->errors()->add("lines.{$i}.article_code", 'Товар «'.$code.'» не найден в номенклатуре филиала.');
+                    $v->errors()->add("lines.{$i}.article_code", 'Позиция «'.$code.'» не найдена в номенклатуре филиала.');
 
                     continue;
+                }
+
+                if ($good->is_service) {
+                    $pid = $line['performer_employee_id'] ?? null;
+                    if ($pid === null || $pid === '') {
+                        $v->errors()->add("lines.{$i}.performer_employee_id", 'Укажите мастера для услуги «'.$good->name.'».');
+                    } else {
+                        $ok = Employee::query()
+                            ->where('branch_id', $branchId)
+                            ->where('job_type', Employee::JOB_MASTER)
+                            ->whereKey((int) $pid)
+                            ->exists();
+                        if (! $ok) {
+                            $v->errors()->add("lines.{$i}.performer_employee_id", 'Некорректный мастер для услуги «'.$good->name.'».');
+                        }
+                    }
                 }
 
                 if (! $good->is_service && $warehouseId > 0 && $qty !== null && $qty !== '' && is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty))) {
@@ -114,11 +121,11 @@ class StoreRetailSaleRequest extends FormRequest
 
             $dupArticles = array_keys(array_filter($articleCounts, fn (int $c): bool => $c > 1));
             if ($dupArticles !== []) {
-                $v->errors()->add('lines', 'В чеке повторяются артикулы: '.implode(', ', $dupArticles));
+                $v->errors()->add('lines', 'В заявке повторяются артикулы: '.implode(', ', $dupArticles));
             }
 
             if (! $hasAny) {
-                $v->errors()->add('lines', 'Добавьте в чек минимум одну позицию.');
+                $v->errors()->add('lines', 'Добавьте минимум одну позицию.');
             }
         });
     }

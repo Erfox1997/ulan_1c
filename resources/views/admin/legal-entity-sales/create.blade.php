@@ -190,18 +190,6 @@
                                                 required
                                             />
                                         </div>
-                                        <div class="les-esf-field flex min-w-0 flex-col">
-                                            <label for="issue_esf" class="block cursor-pointer">ЭСФ</label>
-                                            <input
-                                                id="issue_esf"
-                                                type="checkbox"
-                                                name="issue_esf"
-                                                value="1"
-                                                class="les-esf-check"
-                                                title="Электронная счёт-фактура"
-                                                @checked(old('issue_esf'))
-                                            />
-                                        </div>
                                     </div>
                                     <div class="les-buyer-pin-full">
                                         <label for="buyer_pin">ИНН / ПИН покупателя</label>
@@ -220,6 +208,15 @@
 
                                 <div class="ob-1c-toolbar">
                                     <button type="button" class="ob-tb-btn" @click="addRow()">Добавить</button>
+                                    <button
+                                        type="button"
+                                        class="ob-tb-btn"
+                                        x-show="!isCustomerReturn"
+                                        title="Подставить оптовую цену из карточки товара по артикулам строк"
+                                        @click="applyWholesalePrices()"
+                                    >
+                                        Продать по оптовой цене
+                                    </button>
                                     <button type="button" class="ob-tb-btn ob-tb-btn-icon" title="Вверх" @click="moveUp()">▲</button>
                                     <button type="button" class="ob-tb-btn ob-tb-btn-icon" title="Вниз" @click="moveDown()">▼</button>
                                     <span class="mx-1 h-4 w-px bg-slate-300/90" aria-hidden="true"></span>
@@ -243,7 +240,6 @@
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('document_date')" />
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_name')" />
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_pin')" />
-                                <x-input-error class="mx-3 mt-2" :messages="$errors->get('issue_esf')" />
 
                                 @php
                                     $lineFieldErrors = collect($errors->getMessages())->filter(fn ($_, $k) => str_starts_with((string) $k, 'lines.'));
@@ -366,6 +362,11 @@
                                                 class="text-[10px] text-emerald-800"
                                                 x-show="item.sale_price != null && item.sale_price !== ''"
                                                 x-text="'Цена в карточке: ' + item.sale_price"
+                                            ></span>
+                                            <span
+                                                class="text-[10px] text-sky-800"
+                                                x-show="item.wholesale_price != null && item.wholesale_price !== ''"
+                                                x-text="'Оптовая: ' + item.wholesale_price"
                                             ></span>
                                         </button>
                                     </template>

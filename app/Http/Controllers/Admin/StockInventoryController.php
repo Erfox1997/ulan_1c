@@ -15,8 +15,10 @@ use App\Models\StockWriteoff;
 use App\Models\StockWriteoffLine;
 use App\Models\Warehouse;
 use App\Services\OpeningBalanceService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -671,6 +673,7 @@ class StockInventoryController extends Controller
             'defaultDocumentDate' => now()->toDateString(),
             'document' => null,
             'initialRows' => $this->auditInitialRowsForForm($request, $branchId, null),
+            'linesLoadUrl' => null,
         ]);
     }
 
@@ -690,13 +693,40 @@ class StockInventoryController extends Controller
             $warehouseId = (int) $stockAudit->warehouse_id;
         }
 
+        $hasOldLines = is_array($request->old('lines')) && count($request->old('lines')) > 0;
+        $linesLoadUrl = null;
+        if ($hasOldLines) {
+            $initialRows = $this->auditInitialRowsForForm($request, $branchId, $stockAudit);
+        } elseif ($stockAudit->lines()->count() > 400) {
+            $initialRows = [];
+            $linesLoadUrl = route('admin.stock.audit.lines', $stockAudit);
+        } else {
+            $initialRows = $this->auditInitialRowsForForm($request, $branchId, $stockAudit);
+        }
+
         return view('admin.stock.audit.create', [
             'pageTitle' => 'Ревизия — черновик № '.$stockAudit->id,
             'warehouses' => $warehouses,
             'warehouseId' => $warehouseId,
             'defaultDocumentDate' => old('document_date', $stockAudit->document_date->format('Y-m-d')),
             'document' => $stockAudit,
-            'initialRows' => $this->auditInitialRowsForForm($request, $branchId, $stockAudit),
+            'initialRows' => $initialRows,
+            'linesLoadUrl' => $linesLoadUrl,
+        ]);
+    }
+
+    public function auditLinesJson(StockAudit $stockAudit): JsonResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        if ((int) $stockAudit->branch_id !== $branchId) {
+            abort(404);
+        }
+        if (! $stockAudit->is_draft) {
+            abort(404);
+        }
+
+        return response()->json([
+            'lines' => $this->stockAuditDocumentRowsForClient($stockAudit),
         ]);
     }
 
@@ -1064,40 +1094,6 @@ class StockInventoryController extends Controller
             ->with('status', 'Документ ревизии удалён, остатки по складу откатаны.');
     }
 
-    public function balances(Request $request): View
-    {
-        $branchId = (int) auth()->user()->branch_id;
-
-        $warehouses = Warehouse::query()
-            ->where('branch_id', $branchId)
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get();
-
-        $selectedWarehouseId = (int) $request->integer('warehouse_id');
-        $defaultId = $warehouses->firstWhere('is_default')?->id ?? $warehouses->first()?->id;
-        if ($selectedWarehouseId === 0 || ! $warehouses->contains('id', $selectedWarehouseId)) {
-            $selectedWarehouseId = (int) ($defaultId ?? 0);
-        }
-
-        $rows = collect();
-        if ($selectedWarehouseId > 0) {
-            $rows = OpeningStockBalance::query()
-                ->where('branch_id', $branchId)
-                ->where('warehouse_id', $selectedWarehouseId)
-                ->with('good')
-                ->orderBy('id')
-                ->get();
-        }
-
-        return view('admin.stock.balances', [
-            'pageTitle' => 'Товары: остатки',
-            'warehouses' => $warehouses,
-            'selectedWarehouseId' => $selectedWarehouseId,
-            'rows' => $rows,
-        ]);
-    }
-
     /**
      * Строки формы перемещения после ошибки валидации (товары только из справочника).
      *
@@ -1280,7 +1276,7 @@ class StockInventoryController extends Controller
     }
 
     /**
-     * @return \Illuminate\Support\Collection<int, \App\Models\Warehouse>
+     * @return Collection<int, Warehouse>
      */
     private function warehousesForBranch(int $branchId)
     {
@@ -1471,32 +1467,42 @@ class StockInventoryController extends Controller
         }
 
         if ($document !== null) {
-            $document->loadMissing('lines.good');
-            $wid = (int) $document->warehouse_id;
-
-            return $document->lines->map(function ($line) use ($wid) {
-                $g = $line->good;
-                $stockQty = null;
-                if ($wid > 0 && $line->good_id) {
-                    $bal = OpeningStockBalance::query()
-                        ->where('warehouse_id', $wid)
-                        ->where('good_id', $line->good_id)
-                        ->first();
-                    $stockQty = $bal?->quantity;
-                }
-
-                return [
-                    'good_id' => (int) $line->good_id,
-                    'name' => $g?->name ?? '',
-                    'article' => $g?->article_code ?? '',
-                    'unit' => $g?->unit ?? 'шт.',
-                    'quantity_counted' => (string) $line->quantity_counted,
-                    'stock_qty' => $stockQty,
-                    'barcode' => $g?->barcode ?? '',
-                ];
-            })->values()->all();
+            return $this->stockAuditDocumentRowsForClient($document);
         }
 
         return [];
+    }
+
+    /**
+     * Строки черновика ревизии в формате для формы / JSON.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function stockAuditDocumentRowsForClient(StockAudit $document): array
+    {
+        $document->loadMissing('lines.good');
+        $wid = (int) $document->warehouse_id;
+
+        return $document->lines->map(function ($line) use ($wid) {
+            $g = $line->good;
+            $stockQty = null;
+            if ($wid > 0 && $line->good_id) {
+                $bal = OpeningStockBalance::query()
+                    ->where('warehouse_id', $wid)
+                    ->where('good_id', $line->good_id)
+                    ->first();
+                $stockQty = $bal?->quantity;
+            }
+
+            return [
+                'good_id' => (int) $line->good_id,
+                'name' => $g?->name ?? '',
+                'article' => $g?->article_code ?? '',
+                'unit' => $g?->unit ?? 'шт.',
+                'quantity_counted' => (string) $line->quantity_counted,
+                'stock_qty' => $stockQty,
+                'barcode' => $g?->barcode ?? '',
+            ];
+        })->values()->all();
     }
 }

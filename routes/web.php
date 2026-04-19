@@ -1,38 +1,42 @@
 <?php
 
-use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
-use App\Http\Controllers\Admin\OpeningBalanceController;
-use App\Http\Controllers\Admin\OrganizationController;
 use App\Http\Controllers\Admin\BankCashController;
-use App\Http\Controllers\Admin\PlaceholderController;
-use App\Http\Controllers\Admin\CounterpartyController;
-use App\Http\Controllers\Admin\CounterpartySearchController;
+use App\Http\Controllers\Admin\BranchRoleController;
 use App\Http\Controllers\Admin\CashShiftController;
 use App\Http\Controllers\Admin\CategorySuggestController;
-use App\Http\Controllers\Admin\GoodSearchController;
+use App\Http\Controllers\Admin\CounterpartyController;
+use App\Http\Controllers\Admin\CounterpartySearchController;
 use App\Http\Controllers\Admin\CustomerReturnController;
+use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+use App\Http\Controllers\Admin\EmployeeAdvanceController;
+use App\Http\Controllers\Admin\EmployeeController;
+use App\Http\Controllers\Admin\EmployeePenaltyController;
 use App\Http\Controllers\Admin\EsfController;
+use App\Http\Controllers\Admin\ArticleSequenceController;
+use App\Http\Controllers\Admin\GoodSearchController;
 use App\Http\Controllers\Admin\LegalEntitySaleController;
+use App\Http\Controllers\Admin\OpeningBalanceController;
+use App\Http\Controllers\Admin\OrganizationController;
 use App\Http\Controllers\Admin\PaymentInvoiceController;
+use App\Http\Controllers\Admin\PayrollController;
+use App\Http\Controllers\Admin\PlaceholderController;
+use App\Http\Controllers\Admin\PurchaseRequestController;
 use App\Http\Controllers\Admin\PurchaseReceiptController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\RetailSaleController;
 use App\Http\Controllers\Admin\SaleServiceController;
+use App\Http\Controllers\Admin\CustomerVehicleController;
 use App\Http\Controllers\Admin\ServiceOrderController;
 use App\Http\Controllers\Admin\StockInventoryController;
-use App\Http\Controllers\Admin\BranchRoleController;
-use App\Http\Controllers\Admin\EmployeeController;
-use App\Http\Controllers\Admin\EmployeeAdvanceController;
-use App\Http\Controllers\Admin\EmployeePenaltyController;
-use App\Http\Controllers\Admin\PayrollController;
 use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SuperAdmin\BranchAdminController;
 use App\Http\Controllers\SuperAdmin\BranchController;
-use App\Http\Controllers\SuperAdmin\DatabaseClearController;
 use App\Http\Controllers\SuperAdmin\DashboardController as SuperAdminDashboardController;
+use App\Http\Controllers\SuperAdmin\DatabaseClearController;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -88,8 +92,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::delete('p/stock.audit/{stockAudit}', [StockInventoryController::class, 'auditDestroy'])->name('stock.audit.destroy');
         Route::post('p/stock.audit', [StockInventoryController::class, 'auditStore'])->name('stock.audit.store');
         Route::get('p/stock.audit/{stockAudit}/export', [StockInventoryController::class, 'auditExport'])->name('stock.audit.export');
+        Route::get('p/stock.audit/{stockAudit}/lines', [StockInventoryController::class, 'auditLinesJson'])->name('stock.audit.lines');
         Route::get('p/stock.audit', [StockInventoryController::class, 'auditIndex'])->name('stock.audit');
-        Route::get('p/stock.report-balances', [StockInventoryController::class, 'balances'])->name('stock.report-balances');
+        Route::get('p/stock.report-balances', function (Request $request) {
+            return redirect()->route('admin.reports.goods-stock', $request->query());
+        })->name('stock.report-balances');
         Route::get('p/trade.purchase-in/create', [PurchaseReceiptController::class, 'create'])->name('purchase-receipts.create');
         Route::get('p/trade.purchase-in/{purchaseReceipt}/edit', [PurchaseReceiptController::class, 'edit'])->name('purchase-receipts.edit');
         Route::get('p/trade.purchase-in/{purchaseReceipt}/print', [PurchaseReceiptController::class, 'print'])->name('purchase-receipts.print');
@@ -120,8 +127,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('p/trade.invoice/merged/pdf', [PaymentInvoiceController::class, 'mergedPdf'])->name('trade-invoices.merged-pdf');
         Route::get('p/trade.invoice/{legalEntitySale}/print', [PaymentInvoiceController::class, 'print'])->name('trade-invoices.print');
         Route::get('p/trade.invoice/{legalEntitySale}/pdf', [PaymentInvoiceController::class, 'pdf'])->name('trade-invoices.pdf');
+        Route::get('p/trade.reconciliation/excel', [ReconciliationController::class, 'exportExcel'])->name('reconciliation.export-excel');
+        Route::get('p/trade.reconciliation/pdf', [ReconciliationController::class, 'exportPdf'])->name('reconciliation.export-pdf');
         Route::get('p/trade.reconciliation', [ReconciliationController::class, 'index'])->name('reconciliation.index');
         Route::get('p/trade.esf', [EsfController::class, 'index'])->name('esf.index');
+        Route::post('p/trade.esf/queue-bulk', [EsfController::class, 'queueBulk'])->name('esf.queue-bulk');
+        Route::post('p/trade.esf/{legalEntitySale}/queue', [EsfController::class, 'queueForEsf'])->name('esf.queue');
+        Route::post('p/trade.esf/{legalEntitySale}/queue/clear', [EsfController::class, 'unqueueFromEsf'])->name('esf.unqueue');
         Route::get('p/trade.esf/{legalEntitySale}/xml', [EsfController::class, 'downloadXml'])->name('esf.xml');
         Route::post('p/trade.esf/{legalEntitySale}/submitted', [EsfController::class, 'markSubmitted'])->name('esf.submitted');
         Route::post('p/trade.esf/{legalEntitySale}/submitted/clear', [EsfController::class, 'unmarkSubmitted'])->name('esf.submitted.clear');
@@ -137,12 +149,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('p/trade.sale-services/create', [SaleServiceController::class, 'create'])->name('sale-services.create');
         Route::prefix('p/trade.sale-services/sell')->name('service-sales.')->group(function () {
             Route::get('/', [ServiceOrderController::class, 'sell'])->name('sell');
-            Route::post('/request', [ServiceOrderController::class, 'storeRequest'])->name('request.store');
+            Route::post('/', [ServiceOrderController::class, 'storeHeader'])->name('sell.store');
+            Route::get('{serviceOrder}/lines', [ServiceOrderController::class, 'sellLines'])->name('sell.lines');
+            Route::post('{serviceOrder}/lines', [ServiceOrderController::class, 'storeLines'])->name('sell.lines.store');
         });
         Route::prefix('p/trade.sale-services/requests')->name('service-sales.')->group(function () {
             Route::get('/', [ServiceOrderController::class, 'requestsIndex'])->name('requests');
+            Route::get('/{serviceOrder}/print', [ServiceOrderController::class, 'printWorkOrder'])->name('requests.print');
             Route::get('/{serviceOrder}/edit', [ServiceOrderController::class, 'editRequest'])->name('requests.edit');
-            Route::put('/{serviceOrder}', [ServiceOrderController::class, 'updateRequest'])->name('requests.update');
+            Route::put('/{serviceOrder}', [ServiceOrderController::class, 'updateHeader'])->name('requests.update');
             Route::delete('/{serviceOrder}', [ServiceOrderController::class, 'destroy'])->name('requests.destroy');
             Route::get('/{serviceOrder}', [ServiceOrderController::class, 'fulfillForm'])->name('requests.show');
             Route::post('/{serviceOrder}/fulfill-retail', [ServiceOrderController::class, 'fulfillRetail'])->name('requests.fulfill-retail');
@@ -154,15 +169,27 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::delete('p/trade.sale-services/{service}', [SaleServiceController::class, 'destroy'])->whereNumber('service')->name('sale-services.destroy');
         Route::get('p/trade.sale-services', [SaleServiceController::class, 'index'])->name('sale-services.index');
         Route::get('p/trade.sale-physical/history', [RetailSaleController::class, 'history'])->name('retail-sales.history');
+        Route::get('p/trade.sale-physical/checkout', [RetailSaleController::class, 'checkout'])->name('retail-sales.checkout');
+        Route::get('p/trade.sale-physical/debtor-hints', [RetailSaleController::class, 'debtorHints'])->name('retail-sales.debtor-hints');
+        Route::post('p/trade.sale-physical/checkout-draft', [RetailSaleController::class, 'saveCheckoutDraft'])->name('retail-sales.checkout-draft');
+        Route::get('p/trade.sale-physical/debts', [RetailSaleController::class, 'debts'])->name('retail-sales.debts');
+        Route::post('p/trade.sale-physical/pay-debt-group', [RetailSaleController::class, 'payDebtGroup'])->name('retail-sales.pay-debt-group');
+        Route::post('p/trade.sale-physical/{retailSale}/pay-debt', [RetailSaleController::class, 'payDebt'])->name('retail-sales.pay-debt');
+        Route::get('p/trade.sale-physical/{retailSale}/return-data', [RetailSaleController::class, 'returnData'])->name('retail-sales.return-data');
+        Route::post('p/trade.sale-physical/{retailSale}/return', [RetailSaleController::class, 'returnFromSale'])->name('retail-sales.return-from-sale');
+        Route::get('p/trade.sale-physical/{retailSale}/receipt', [RetailSaleController::class, 'receipt'])->name('retail-sales.receipt');
         Route::get('p/trade.sale-physical/{retailSale}/edit', [RetailSaleController::class, 'edit'])->name('retail-sales.edit');
         Route::put('p/trade.sale-physical/{retailSale}', [RetailSaleController::class, 'update'])->name('retail-sales.update');
         Route::delete('p/trade.sale-physical/{retailSale}', [RetailSaleController::class, 'destroy'])->name('retail-sales.destroy');
         Route::get('p/trade.sale-physical', [RetailSaleController::class, 'index'])->name('retail-sales.index');
         Route::post('p/trade.sale-physical', [RetailSaleController::class, 'store'])->name('retail-sales.store');
         Route::get('api/goods/search', GoodSearchController::class)->name('goods.search');
+        Route::post('api/goods/article-code-reserve', [ArticleSequenceController::class, 'reserve'])->name('goods.article-code-reserve');
         Route::get('api/goods/categories', CategorySuggestController::class)->name('goods.categories');
         Route::get('api/counterparties/search', CounterpartySearchController::class)->name('counterparties.search');
         Route::post('api/counterparties/quick', [CounterpartyController::class, 'quickStore'])->name('counterparties.quick-store');
+        Route::get('api/customer-vehicles', [CustomerVehicleController::class, 'index'])->name('customer-vehicles.index');
+        Route::post('api/customer-vehicles', [CustomerVehicleController::class, 'store'])->name('customer-vehicles.store');
         Route::prefix('p')->group(function () {
             Route::get('trade.counterparties', [CounterpartyController::class, 'index'])->name('counterparties.index');
             Route::get('trade.counterparties/create', [CounterpartyController::class, 'create'])->name('counterparties.create');
@@ -202,8 +229,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('transfers', [BankCashController::class, 'storeTransfer'])->name('transfers.store');
             Route::get('report-movement', [BankCashController::class, 'reportMovement'])->name('report-movement');
         });
+        Route::get('purchase-requests', [PurchaseRequestController::class, 'index'])->name('purchase-requests.index');
+        Route::post('purchase-requests/export/excel', [PurchaseRequestController::class, 'exportExcel'])->name('purchase-requests.export.excel');
+        Route::post('purchase-requests/export/pdf', [PurchaseRequestController::class, 'exportPdf'])->name('purchase-requests.export.pdf');
+        Route::get('purchase-requests/{purchaseRequest}', [PurchaseRequestController::class, 'show'])->name('purchase-requests.show');
+        Route::post('purchase-requests', [PurchaseRequestController::class, 'store'])->name('purchase-requests.store');
+
         Route::prefix('reports')->name('reports.')->group(function () {
             Route::get('goods-stock', [ReportController::class, 'goodsStock'])->name('goods-stock');
+            Route::get('goods-stock-historical', [ReportController::class, 'goodsStockHistorical'])->name('goods-stock-historical');
             Route::get('goods-movement', [ReportController::class, 'goodsMovement'])->name('goods-movement');
             Route::get('cash-movement', [ReportController::class, 'cashMovement'])->name('cash-movement');
             Route::get('cash-balances', [ReportController::class, 'cashBalances'])->name('cash-balances');
@@ -212,6 +246,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('gross-profit', [ReportController::class, 'grossProfit'])->name('gross-profit');
             Route::get('expenses-by-category', [ReportController::class, 'expensesByCategory'])->name('expenses-by-category');
             Route::get('turnover', [ReportController::class, 'turnover'])->name('turnover');
+            Route::get('goods-characteristics', [ReportController::class, 'goodsCharacteristics'])->name('goods-characteristics');
+            Route::post('goods-characteristics', [ReportController::class, 'goodsCharacteristicsStore'])->name('goods-characteristics.store');
         });
         Route::get('p/settings.responsible', [BranchRoleController::class, 'index'])->name('settings.responsible');
         Route::post('p/settings.responsible/roles', [BranchRoleController::class, 'store'])->name('settings.responsible.roles.store');
@@ -230,6 +266,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::get('p/payroll.placeholder', fn () => redirect()->route('admin.payroll', [], 301));
         Route::get('p/payroll', [PayrollController::class, 'index'])->name('payroll');
+        Route::get('p/payroll/{employee}', [PayrollController::class, 'show'])->name('payroll.show');
+        Route::post('p/payroll/{employee}/payout', [PayrollController::class, 'payoutForEmployee'])->name('payroll.payout-employee');
+        Route::get('p/payroll/{employee}/pay-slip', [PayrollController::class, 'paySlip'])->name('payroll.pay-slip');
+        Route::post('p/payroll/{employee}/revoke-payout', [PayrollController::class, 'revokePayout'])->name('payroll.revoke-payout');
         Route::post('p/payroll/payout', [PayrollController::class, 'payout'])->name('payroll.payout');
         Route::get('p/payroll.advances/create', [EmployeeAdvanceController::class, 'create'])->name('payroll.advances.create');
         Route::post('p/payroll.advances', [EmployeeAdvanceController::class, 'store'])->name('payroll.advances.store');

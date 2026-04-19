@@ -4,7 +4,15 @@
     $orgName = $org?->name ?? ($branch->name ?? '—');
     $documentTitle = InvoiceNakladnayaFormatter::paymentInvoiceDocumentTitle($legalEntitySale->document_date, $legalEntitySale->id);
     $amountWords = InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalSum);
-    $linesCount = $lines->count();
+    $invoiceFormat = $invoiceFormat ?? 'summary';
+    $useAggregateInvoiceRows = $useAggregateInvoiceRows ?? false;
+    $goodsSum = $goodsSum ?? '0';
+    $servicesSum = $servicesSum ?? '0';
+    if ($useAggregateInvoiceRows) {
+        $linesCount = (bccomp($goodsSum, '0', 2) === 1 ? 1 : 0) + (bccomp($servicesSum, '0', 2) === 1 ? 1 : 0);
+    } else {
+        $linesCount = $lines->count();
+    }
 @endphp
 <!DOCTYPE html>
 <html lang="ru">
@@ -82,6 +90,10 @@
         table.grid td.c { text-align: center; }
         table.grid th.num,
         table.grid td.num { text-align: right; }
+        table.grid tr.subsection td {
+            font-weight: bold;
+            background: #f1f5f9;
+        }
         .totals-wrap {
             display: table;
             width: 100%;
@@ -104,11 +116,6 @@
             margin-top: 10px;
             font-weight: bold;
             font-size: 10pt;
-        }
-        .notice {
-            margin-top: 28px;
-            font-size: 9pt;
-            color: #334155;
         }
         .no-print {
             margin: 16px 0;
@@ -149,12 +156,19 @@
             @php
                 $printUrl = route('admin.trade-invoices.print', $legalEntitySale);
                 $pdfUrl = route('admin.trade-invoices.pdf', $legalEntitySale);
-                $pdfOrgSuffix = $organization ? '?organization_id='.$organization->id : '';
+                $pdfQuery = [];
+                if ($organization) {
+                    $pdfQuery['organization_id'] = $organization->id;
+                }
+                if ($invoiceFormat === 'detail') {
+                    $pdfQuery['invoice_format'] = 'detail';
+                }
+                $pdfHref = $pdfUrl.(count($pdfQuery) ? '?'.http_build_query($pdfQuery) : '');
             @endphp
             <div class="no-print" style="margin:10px 0 12px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;font-size:10pt;">
                 <span style="color:#334155;margin-right:8px;">Организация в шапке:</span>
                 <select
-                    onchange="var v=this.value||'';var q=v?'?organization_id='+v:'';location.href='{{ $printUrl }}'+q"
+                    onchange="(function(sel){var p=new URLSearchParams();if(sel.value)p.set('organization_id',sel.value);@if($invoiceFormat==='detail')p.set('invoice_format','detail');@endif;location.href='{{ $printUrl }}'+(p.toString()?'?'+p.toString():'');})(this)"
                     style="max-width:min(28rem,100%);padding:4px 8px;font-size:10pt;border:1px solid #94a3b8;border-radius:4px;"
                 >
                     @foreach ($printOrganizations as $o)
@@ -162,7 +176,7 @@
                     @endforeach
                 </select>
                 <a
-                    href="{{ $pdfUrl }}{{ $pdfOrgSuffix }}"
+                    href="{{ $pdfHref }}"
                     style="margin-left:12px;font-size:10pt;color:#059669;text-decoration:underline;"
                 >Скачать PDF</a>
             </div>
@@ -238,15 +252,42 @@
             </tr>
         </thead>
         <tbody>
-            @foreach ($lines as $i => $line)
-                <tr>
-                    <td class="c">{{ $i + 1 }}</td>
-                    <td>{{ $line->name }}</td>
-                    <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
-                    <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
-                    <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+            @if ($useAggregateInvoiceRows)
+                <tr class="subsection">
+                    <td colspan="5">Техническое обслуживание и ремонт автомобилей</td>
                 </tr>
-            @endforeach
+                @php $rowNum = 0; @endphp
+                @if (bccomp($goodsSum, '0', 2) === 1)
+                    @php $rowNum++; @endphp
+                    <tr>
+                        <td class="c">{{ $rowNum }}</td>
+                        <td>Оплата за запасные части</td>
+                        <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                        <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $goodsSum) }}</td>
+                        <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $goodsSum) }}</td>
+                    </tr>
+                @endif
+                @if (bccomp($servicesSum, '0', 2) === 1)
+                    @php $rowNum++; @endphp
+                    <tr>
+                        <td class="c">{{ $rowNum }}</td>
+                        <td>Оплата за услуги ремонта</td>
+                        <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                        <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $servicesSum) }}</td>
+                        <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $servicesSum) }}</td>
+                    </tr>
+                @endif
+            @else
+                @foreach ($lines as $i => $line)
+                    <tr>
+                        <td class="c">{{ $i + 1 }}</td>
+                        <td>{{ $line->name }}</td>
+                        <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
+                        <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
+                        <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+                    </tr>
+                @endforeach
+            @endif
         </tbody>
     </table>
 
@@ -264,9 +305,5 @@
         Всего наименований {{ $linesCount }}, на сумму {{ InvoiceNakladnayaFormatter::formatMoney((float) $totalSum) }}
     </div>
     <div class="amount-words">{{ $amountWords }}</div>
-
-    <p class="notice">
-        Счёт действителен до оплаты. НДС / НСП уточняйте по договору и учётной политике.
-    </p>
 </body>
 </html>

@@ -86,8 +86,14 @@
                                     @endif
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-right">
-                                    @if ($order->isAwaitingFulfillment())
-                                        <div class="flex flex-wrap items-center justify-end gap-2">
+                                    <div class="flex flex-wrap items-center justify-end gap-2">
+                                        <a
+                                            href="{{ route('admin.service-sales.requests.print', $order) }}"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
+                                        >Печать</a>
+                                        @if ($order->isAwaitingFulfillment())
                                             <a
                                                 href="{{ route('admin.service-sales.requests.edit', $order) }}"
                                                 class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
@@ -111,10 +117,8 @@
                                                     Удалить
                                                 </button>
                                             </form>
-                                        </div>
-                                    @else
-                                        <span class="text-slate-300">—</span>
-                                    @endif
+                                        @endif
+                                    </div>
                                 </td>
                             </tr>
                         @empty

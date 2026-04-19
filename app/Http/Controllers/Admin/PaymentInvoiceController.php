@@ -7,6 +7,7 @@ use App\Models\Counterparty;
 use App\Models\LegalEntitySale;
 use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
+use App\Models\LegalEntitySaleLine;
 use App\Models\Warehouse;
 use App\Support\InvoiceNakladnayaFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -158,7 +159,11 @@ class PaymentInvoiceController extends Controller
             $data = array_merge($this->mergedInvoiceViewData($request, $orgId), ['forPdf' => true]);
             $ids = $data['saleIds'];
             sort($ids);
-            $filename = 'schet-obedinennyj-'.$ids[0].'-'.$ids[count($ids) - 1].'.pdf';
+            $filename = 'schet-obedinennyj-'.$ids[0].'-'.$ids[count($ids) - 1];
+            if (($data['invoiceFormat'] ?? 'summary') === 'detail') {
+                $filename .= '-podrobno';
+            }
+            $filename .= '.pdf';
 
             return Pdf::loadView('admin.trade-invoices.invoice-merged', $data)
                 ->setPaper('a4', 'portrait')
@@ -173,9 +178,10 @@ class PaymentInvoiceController extends Controller
     public function print(Request $request, LegalEntitySale $legalEntitySale): View
     {
         $orgId = $this->parseOrganizationQueryId($request);
+        $invoiceFormat = $this->parseInvoiceFormatQuery($request);
 
         return view('admin.trade-invoices.invoice', array_merge(
-            $this->invoiceViewData($legalEntitySale, $orgId),
+            $this->invoiceViewData($legalEntitySale, $orgId, $invoiceFormat),
             ['forPdf' => false]
         ));
     }
@@ -183,8 +189,13 @@ class PaymentInvoiceController extends Controller
     public function pdf(Request $request, LegalEntitySale $legalEntitySale)
     {
         $orgId = $this->parseOrganizationQueryId($request);
-        $data = array_merge($this->invoiceViewData($legalEntitySale, $orgId), ['forPdf' => true]);
-        $filename = 'schet-'.$legalEntitySale->id.'-'.$legalEntitySale->document_date->format('Y-m-d').'.pdf';
+        $invoiceFormat = $this->parseInvoiceFormatQuery($request);
+        $data = array_merge($this->invoiceViewData($legalEntitySale, $orgId, $invoiceFormat), ['forPdf' => true]);
+        $filename = 'schet-'.$legalEntitySale->id.'-'.$legalEntitySale->document_date->format('Y-m-d');
+        if ($invoiceFormat === 'detail') {
+            $filename .= '-podrobno';
+        }
+        $filename .= '.pdf';
 
         return Pdf::loadView('admin.trade-invoices.invoice', $data)
             ->setPaper('a4', 'portrait')
@@ -216,6 +227,19 @@ class PaymentInvoiceController extends Controller
         $id = (int) $raw;
 
         return $id > 0 ? $id : null;
+    }
+
+    /**
+     * Формат таблицы счёта: summary — суммарно (запчасти / услуги), detail — все позиции.
+     */
+    private function parseInvoiceFormatQuery(Request $request): string
+    {
+        $raw = $request->query('invoice_format');
+        if ($raw === 'detail') {
+            return 'detail';
+        }
+
+        return 'summary';
     }
 
     /**
@@ -253,6 +277,8 @@ class PaymentInvoiceController extends Controller
      */
     private function mergedInvoiceViewData(Request $request, ?int $organizationId = null): array
     {
+        $invoiceFormat = $this->parseInvoiceFormatQuery($request);
+
         $branchId = (int) auth()->user()->branch_id;
         $ids = $this->parseSaleIdsFromRequest($request);
 
@@ -263,7 +289,7 @@ class PaymentInvoiceController extends Controller
         $sales = LegalEntitySale::query()
             ->where('branch_id', $branchId)
             ->whereIn('id', $ids)
-            ->with(['lines', 'warehouse'])
+            ->with(['lines.good', 'warehouse'])
             ->orderByDesc('document_date')
             ->orderByDesc('id')
             ->get();
@@ -323,6 +349,11 @@ class PaymentInvoiceController extends Controller
 
         $documentTitle = InvoiceNakladnayaFormatter::mergedPaymentInvoiceDocumentTitle($latestDate, $saleIdsSorted);
 
+        $saleInvoiceAggregates = [];
+        foreach ($salesOrdered as $sale) {
+            $saleInvoiceAggregates[$sale->id] = $this->aggregateGoodsAndServicesSums($sale->lines);
+        }
+
         return [
             'salesOrdered' => $salesOrdered,
             'saleIds' => $saleIdsSorted,
@@ -333,13 +364,15 @@ class PaymentInvoiceController extends Controller
             'bankAccount' => $bankAccount,
             'printOrganizations' => $printOrganizations,
             'totalSum' => $totalSum,
+            'saleInvoiceAggregates' => $saleInvoiceAggregates,
+            'invoiceFormat' => $invoiceFormat,
         ];
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function invoiceViewData(LegalEntitySale $legalEntitySale, ?int $organizationId = null): array
+    private function invoiceViewData(LegalEntitySale $legalEntitySale, ?int $organizationId = null, string $invoiceFormat = 'summary'): array
     {
         $legalEntitySale->load(['lines.good', 'warehouse', 'branch']);
 
@@ -378,6 +411,11 @@ class PaymentInvoiceController extends Controller
             }
         }
 
+        $aggregates = $this->aggregateGoodsAndServicesSums($lines);
+        $useAggregateInvoiceRows = $invoiceFormat !== 'detail'
+            && $lines->isNotEmpty()
+            && (bccomp($aggregates['goods'], '0', 2) === 1 || bccomp($aggregates['services'], '0', 2) === 1);
+
         return [
             'legalEntitySale' => $legalEntitySale,
             'branch' => $branch,
@@ -386,6 +424,36 @@ class PaymentInvoiceController extends Controller
             'printOrganizations' => $printOrganizations,
             'lines' => $lines,
             'totalSum' => $totalSum,
+            'goodsSum' => $aggregates['goods'],
+            'servicesSum' => $aggregates['services'],
+            'useAggregateInvoiceRows' => $useAggregateInvoiceRows,
+            'invoiceFormat' => $invoiceFormat,
         ];
+    }
+
+    /**
+     * Суммы для счёта: запасные части (не услуга) и услуги ремонта (is_service у номенклатуры).
+     *
+     * @param  \Illuminate\Support\Collection<int, LegalEntitySaleLine>  $lines
+     * @return array{goods: string, services: string}
+     */
+    private function aggregateGoodsAndServicesSums(Collection $lines): array
+    {
+        $goods = '0';
+        $services = '0';
+        foreach ($lines as $line) {
+            if ($line->line_sum === null) {
+                continue;
+            }
+            $s = (string) $line->line_sum;
+            $isService = $line->good !== null && $line->good->is_service;
+            if ($isService) {
+                $services = bcadd($services, $s, 2);
+            } else {
+                $goods = bcadd($goods, $s, 2);
+            }
+        }
+
+        return ['goods' => $goods, 'services' => $services];
     }
 }

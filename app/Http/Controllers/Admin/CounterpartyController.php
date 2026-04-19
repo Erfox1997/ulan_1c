@@ -73,6 +73,8 @@ class CounterpartyController extends Controller
             abort(403);
         }
 
+        $kind = $request->input('kind', Counterparty::KIND_SUPPLIER);
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:500'],
             'legal_form' => ['required', 'string', Rule::in([
@@ -81,6 +83,12 @@ class CounterpartyController extends Controller
                 Counterparty::LEGAL_INDIVIDUAL,
                 Counterparty::LEGAL_OTHER,
             ])],
+            'phone' => [
+                Rule::requiredIf((string) $kind === Counterparty::KIND_BUYER),
+                'nullable',
+                'string',
+                'max:64',
+            ],
             'kind' => ['sometimes', 'string', Rule::in([
                 Counterparty::KIND_SUPPLIER,
                 Counterparty::KIND_BUYER,
@@ -94,7 +102,10 @@ class CounterpartyController extends Controller
         }
 
         $legalForm = $validated['legal_form'];
-        $kind = $validated['kind'] ?? Counterparty::KIND_SUPPLIER;
+        $kind = (string) ($validated['kind'] ?? Counterparty::KIND_SUPPLIER);
+
+        $phoneRaw = $validated['phone'] ?? null;
+        $phone = $phoneRaw !== null && trim((string) $phoneRaw) !== '' ? trim((string) $phoneRaw) : null;
 
         $counterparty = Counterparty::query()->create([
             'branch_id' => (int) $branchId,
@@ -103,7 +114,7 @@ class CounterpartyController extends Controller
             'legal_form' => $legalForm,
             'full_name' => Counterparty::buildFullName($legalForm, $name),
             'inn' => null,
-            'phone' => null,
+            'phone' => $phone,
             'address' => null,
         ]);
 

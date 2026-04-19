@@ -42,7 +42,7 @@
                         @forelse ($employees as $e)
                             <tr class="hover:bg-emerald-50/30">
                                 <td class="px-4 py-2.5 font-medium text-slate-900">{{ $e->full_name }}</td>
-                                <td class="px-4 py-2.5 text-slate-700">{{ $e->position ?: '—' }}</td>
+                                <td class="px-4 py-2.5 text-slate-700">{{ $e->jobTypeLabel() }}</td>
                                 <td class="px-4 py-2.5 font-mono text-xs text-slate-600">{{ $e->user->email }}</td>
                                 <td class="px-4 py-2.5 text-slate-700">
                                     @if ($e->user->branchRole)

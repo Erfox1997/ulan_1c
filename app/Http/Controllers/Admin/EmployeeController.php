@@ -59,7 +59,7 @@ class EmployeeController extends Controller
 
         $validated = $request->validate([
             'full_name' => ['required', 'string', 'max:255'],
-            'position' => ['nullable', 'string', 'max:255'],
+            'job_type' => ['required', 'string', Rule::in(array_keys(Employee::JOB_TYPE_LABELS))],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'confirmed', Password::defaults()],
             'branch_role_id' => ['nullable', 'integer', Rule::exists('branch_roles', 'id')->where('branch_id', $branchId)],
@@ -83,7 +83,8 @@ class EmployeeController extends Controller
                 'branch_id' => $branchId,
                 'user_id' => $user->id,
                 'full_name' => $validated['full_name'],
-                'position' => $validated['position'] ?? null,
+                'job_type' => $validated['job_type'],
+                'position' => null,
                 'salary_fixed' => $validated['salary_fixed'] ?? null,
                 'salary_percent_goods' => $validated['salary_percent_goods'] ?? null,
                 'salary_percent_services' => $validated['salary_percent_services'] ?? null,
@@ -123,7 +124,7 @@ class EmployeeController extends Controller
 
         $validated = $request->validate([
             'full_name' => ['required', 'string', 'max:255'],
-            'position' => ['nullable', 'string', 'max:255'],
+            'job_type' => ['required', 'string', Rule::in(array_keys(Employee::JOB_TYPE_LABELS))],
             'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')->ignore($employee->user_id)],
             'password' => ['nullable', 'string', 'min:8', 'confirmed'],
             'branch_role_id' => ['nullable', 'integer', Rule::exists('branch_roles', 'id')->where('branch_id', $branchId)],
@@ -144,7 +145,8 @@ class EmployeeController extends Controller
 
             $employee->update([
                 'full_name' => $validated['full_name'],
-                'position' => $validated['position'] ?? null,
+                'job_type' => $validated['job_type'],
+                'position' => null,
                 'salary_fixed' => $validated['salary_fixed'] ?? null,
                 'salary_percent_goods' => $validated['salary_percent_goods'] ?? null,
                 'salary_percent_services' => $validated['salary_percent_services'] ?? null,

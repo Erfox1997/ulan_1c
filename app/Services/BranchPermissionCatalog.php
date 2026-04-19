@@ -20,7 +20,12 @@ class BranchPermissionCatalog
         $items[] = ['group' => 'Общее', 'label' => 'Смена кассы', 'pattern' => 'admin.cash-shifts.*'];
         $items[] = ['group' => 'Общее', 'label' => 'API: поиск товаров и категорий', 'pattern' => 'admin.goods.*'];
         $items[] = ['group' => 'Общее', 'label' => 'API: контрагенты поиск и быстрый ввод', 'pattern' => 'admin.counterparties.search'];
+        $items[] = ['group' => 'Общее', 'label' => 'API: подсказки должников (розница)', 'pattern' => 'admin.retail-sales.debtor-hints'];
+        $items[] = ['group' => 'Общее', 'label' => 'Розница: единая оплата долга по группе', 'pattern' => 'admin.retail-sales.pay-debt-group'];
+        $items[] = ['group' => 'Общее', 'label' => 'Розница: возврат по чеку из истории (данные)', 'pattern' => 'admin.retail-sales.return-data'];
+        $items[] = ['group' => 'Общее', 'label' => 'Розница: провести возврат по чеку', 'pattern' => 'admin.retail-sales.return-from-sale'];
         $items[] = ['group' => 'Общее', 'label' => 'API: быстрый ввод контрагента', 'pattern' => 'admin.counterparties.quick-store'];
+        $items[] = ['group' => 'Общее', 'label' => 'API: автомобили клиента (заявки на продажу)', 'pattern' => 'admin.customer-vehicles.*'];
 
         foreach (config('branch_menu', []) as $section) {
             $group = $section['label'] ?? '—';
@@ -41,7 +46,14 @@ class BranchPermissionCatalog
             foreach ($section['children'] ?? [] as $child) {
                 $label = $child['label'] ?? '';
                 if (isset($child['route_is'])) {
-                    $items[] = ['group' => $group, 'label' => $label, 'pattern' => $child['route_is']];
+                    $routeIs = $child['route_is'];
+                    $patterns = is_array($routeIs) ? $routeIs : [$routeIs];
+                    foreach ($patterns as $p) {
+                        if (! is_string($p) || $p === '') {
+                            continue;
+                        }
+                        $items[] = ['group' => $group, 'label' => $label, 'pattern' => $p];
+                    }
 
                     continue;
                 }

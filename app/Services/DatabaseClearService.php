@@ -8,21 +8,33 @@ use Illuminate\Support\Facades\Schema;
 class DatabaseClearService
 {
     /**
-     * Таблицы, которые не очищаем: учётные записи и служебная история миграций Laravel.
+     * Таблицы, которые не очищаем: миграции, учётные записи, филиалы, склады и организации,
+     * а также роли и права филиалов (чтобы админы филиалов оставались работоспособными).
      *
      * @var list<string>
      */
-    private const EXCLUDED = ['users', 'migrations'];
+    private const EXCLUDED = [
+        'migrations',
+        'users',
+        'branches',
+        'warehouses',
+        'organizations',
+        'organization_bank_accounts',
+        'branch_roles',
+        'branch_role_permissions',
+        'branch_user_permissions',
+    ];
 
     /**
-     * Удалить данные из всех таблиц, кроме исключённых. Ссылки пользователей на филиалы сбрасываются.
+     * Удалить операционные данные из всех таблиц, кроме исключённых.
      */
     public function clearOperationalData(): void
     {
         $tableNames = Schema::getTableListing(null, false);
+        $excludedLower = array_map('strtolower', self::EXCLUDED);
 
-        $toClear = array_values(array_filter($tableNames, function (string $t) {
-            return ! in_array(strtolower($t), array_map('strtolower', self::EXCLUDED), true);
+        $toClear = array_values(array_filter($tableNames, function (string $t) use ($excludedLower) {
+            return ! in_array(strtolower($t), $excludedLower, true);
         }));
 
         Schema::disableForeignKeyConstraints();
@@ -33,10 +45,6 @@ class DatabaseClearService
                     continue;
                 }
                 DB::table($table)->truncate();
-            }
-
-            if (Schema::hasColumn('users', 'branch_id')) {
-                DB::table('users')->update(['branch_id' => null]);
             }
         } finally {
             Schema::enableForeignKeyConstraints();

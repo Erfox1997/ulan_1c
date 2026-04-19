@@ -35,12 +35,17 @@
                 </div>
 
                 <div>
-                    <label class="mb-1 block text-xs font-semibold text-slate-700">Должность</label>
-                    <input
-                        name="position"
-                        value="{{ old('position') }}"
-                        class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                    />
+                    <label class="mb-1 block text-xs font-semibold text-slate-700">Должность *</label>
+                    <select
+                        name="job_type"
+                        required
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    >
+                        <option value="" disabled @selected(old('job_type') === null)>Выберите</option>
+                        @foreach (\App\Models\Employee::JOB_TYPE_LABELS as $key => $label)
+                            <option value="{{ $key }}" @selected(old('job_type') === $key)>{{ $label }}</option>
+                        @endforeach
+                    </select>
                 </div>
 
                 <div>

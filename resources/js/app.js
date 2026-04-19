@@ -516,25 +516,26 @@ document.addEventListener('alpine:init', () => {
             });
             if (n === 0) window.alert('Нет строк с пустым штрихкодом.');
         },
-        genArticlesEmptyOnly() {
-            if (typeof window.obGenArticle !== 'function') {
+        async genArticlesEmptyOnly() {
+            const emptyRows = this.lines.filter((r) => (r.article_code || '').trim() === '');
+            if (emptyRows.length === 0) {
+                window.alert('Нет строк с пустым артикулом.');
+                return;
+            }
+            if (typeof window.reserveBranchArticleCodes !== 'function') {
                 window.alert('Генератор артикулов не загружен. Обновите страницу.');
                 return;
             }
-            const used = new Set(this.lines.map((r) => (r.article_code || '').trim()).filter(Boolean));
-            let n = 0;
-            this.lines.forEach((row) => {
-                if ((row.article_code || '').trim() !== '') return;
-                let code = '';
-                for (let k = 0; k < 60; k++) {
-                    code = window.obGenArticle();
-                    if (!used.has(code)) break;
-                }
-                row.article_code = code;
-                used.add(code);
-                n++;
-            });
-            if (n === 0) window.alert('Нет строк с пустым артикулом.');
+            try {
+                const codes = await window.reserveBranchArticleCodes(emptyRows.length);
+                let idx = 0;
+                this.lines.forEach((row) => {
+                    if ((row.article_code || '').trim() !== '') return;
+                    row.article_code = codes[idx++];
+                });
+            } catch (e) {
+                window.alert(e && e.message ? e.message : 'Не удалось получить артикулы с сервера.');
+            }
         },
         addRow() {
             this.closeAllSuggests();
@@ -712,6 +713,8 @@ document.addEventListener('alpine:init', () => {
             unit: 'шт.',
             quantity: '',
             unit_price: '',
+            wholesale_price: '',
+            min_sale_price: '',
         });
 
         const crInit =
@@ -757,6 +760,8 @@ document.addEventListener('alpine:init', () => {
             unit: r.unit ?? 'шт.',
             quantity: r.quantity ?? '',
             unit_price: r.unit_price ?? '',
+            wholesale_price: r.wholesale_price ?? '',
+            min_sale_price: r.min_sale_price ?? '',
         }));
 
         const u = urls && typeof urls === 'object' ? urls : {};
@@ -914,10 +919,85 @@ document.addEventListener('alpine:init', () => {
                 row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
                 row.category = item.category != null && item.category !== '' ? String(item.category) : '';
                 row.unit = item.unit && String(item.unit).trim() ? String(item.unit).trim() : 'шт.';
+                row.wholesale_price =
+                    item.wholesale_price != null && item.wholesale_price !== ''
+                        ? String(item.wholesale_price)
+                        : '';
+                row.min_sale_price =
+                    item.min_sale_price != null && item.min_sale_price !== '' ? String(item.min_sale_price) : '';
                 if (item.sale_price != null && item.sale_price !== '') {
                     row.unit_price = String(item.sale_price);
                 }
                 this.nameSuggestClose();
+            },
+            async applyWholesalePrices() {
+                this.closeAllSuggests();
+                const skipped = [];
+                for (let i = 0; i < this.lines.length; i++) {
+                    const row = this.lines[i];
+                    const code = (row.article_code || '').trim();
+                    if (!code) {
+                        continue;
+                    }
+                    let parsedWp = parseFloat(
+                        String(row.wholesale_price ?? '').replace(/\s/g, '').replace(',', '.')
+                    );
+                    if (!Number.isFinite(parsedWp) || parsedWp <= 0) {
+                        if (!this.goodsSearchUrl) {
+                            skipped.push(code);
+                            continue;
+                        }
+                        try {
+                            let url =
+                                this.goodsSearchUrl +
+                                '?q=' +
+                                encodeURIComponent(code) +
+                                '&exact_article=1&exclude_services=1';
+                            if (this.warehouseId > 0) {
+                                url += '&warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                            }
+                            const res = await fetch(url, {
+                                headers: {
+                                    Accept: 'application/json',
+                                    'X-Requested-With': 'XMLHttpRequest',
+                                },
+                            });
+                            if (!res.ok) {
+                                skipped.push(code);
+                                continue;
+                            }
+                            const data = await res.json();
+                            const hit = Array.isArray(data) && data[0] ? data[0] : null;
+                            if (hit) {
+                                row.wholesale_price =
+                                    hit.wholesale_price != null && hit.wholesale_price !== ''
+                                        ? String(hit.wholesale_price)
+                                        : '';
+                                row.min_sale_price =
+                                    hit.min_sale_price != null && hit.min_sale_price !== ''
+                                        ? String(hit.min_sale_price)
+                                        : '';
+                            }
+                        } catch (e) {
+                            skipped.push(code);
+                            continue;
+                        }
+                    }
+                    parsedWp = parseFloat(
+                        String(row.wholesale_price ?? '').replace(/\s/g, '').replace(',', '.')
+                    );
+                    if (Number.isFinite(parsedWp) && parsedWp > 0) {
+                        row.unit_price = String(row.wholesale_price).replace(/\s/g, '');
+                    } else {
+                        skipped.push(code);
+                    }
+                }
+                if (skipped.length) {
+                    window.alert(
+                        'Не задана оптовая цена в карточке для артикулов: ' +
+                            [...new Set(skipped)].join(', ')
+                    );
+                }
             },
             onBuyerFocus(event) {
                 clearTimeout(this.cpSuggestBlurTimer);
@@ -1378,17 +1458,22 @@ document.addEventListener('alpine:init', () => {
             mergedPrint,
             mergedPdf,
             printOrgId: printOrgIdInit,
-            orgSuffixSingle() {
-                return this.printOrgId != null && this.printOrgId !== ''
-                    ? '?organization_id=' + encodeURIComponent(String(this.printOrgId))
-                    : '';
+            /** @param {'summary'|'detail'} format */
+            formatSuffixSingle(format) {
+                const fmt = format === 'detail' ? 'detail' : 'summary';
+                const p = new URLSearchParams();
+                if (this.printOrgId != null && this.printOrgId !== '') {
+                    p.set('organization_id', String(this.printOrgId));
+                }
+                if (fmt === 'detail') {
+                    p.set('invoice_format', 'detail');
+                }
+                const s = p.toString();
+                return s ? '?' + s : '';
             },
-            orgSuffixMerged() {
-                return this.printOrgId != null && this.printOrgId !== ''
-                    ? '&organization_id=' + encodeURIComponent(String(this.printOrgId))
-                    : '';
-            },
-            openPrint() {
+            /** @param {'summary'|'detail'} format */
+            openPrint(format) {
+                const fmt = format === 'detail' ? 'detail' : 'summary';
                 if (this.selectedIds.length === 0 || !this.invoiceBase) return;
                 if (this.selectedIds.length === 1) {
                     window.open(
@@ -1396,7 +1481,7 @@ document.addEventListener('alpine:init', () => {
                             '/' +
                             String(this.selectedIds[0]) +
                             '/print' +
-                            this.orgSuffixSingle(),
+                            this.formatSuffixSingle(fmt),
                         '_blank'
                     );
                     return;
@@ -1404,9 +1489,17 @@ document.addEventListener('alpine:init', () => {
                 if (!this.mergedPrint) return;
                 const q = new URLSearchParams();
                 this.selectedIds.forEach((id) => q.append('sale_ids[]', String(id)));
-                window.open(this.mergedPrint + '?' + q.toString() + this.orgSuffixMerged(), '_blank');
+                if (this.printOrgId != null && this.printOrgId !== '') {
+                    q.set('organization_id', String(this.printOrgId));
+                }
+                if (fmt === 'detail') {
+                    q.set('invoice_format', 'detail');
+                }
+                window.open(this.mergedPrint + '?' + q.toString(), '_blank');
             },
-            openPdf() {
+            /** @param {'summary'|'detail'} format */
+            openPdf(format) {
+                const fmt = format === 'detail' ? 'detail' : 'summary';
                 if (this.selectedIds.length === 0 || !this.invoiceBase) return;
                 if (this.selectedIds.length === 1) {
                     window.location.href =
@@ -1414,13 +1507,19 @@ document.addEventListener('alpine:init', () => {
                         '/' +
                         String(this.selectedIds[0]) +
                         '/pdf' +
-                        this.orgSuffixSingle();
+                        this.formatSuffixSingle(fmt);
                     return;
                 }
                 if (!this.mergedPdf) return;
                 const q = new URLSearchParams();
                 this.selectedIds.forEach((id) => q.append('sale_ids[]', String(id)));
-                window.location.href = this.mergedPdf + '?' + q.toString() + this.orgSuffixMerged();
+                if (this.printOrgId != null && this.printOrgId !== '') {
+                    q.set('organization_id', String(this.printOrgId));
+                }
+                if (fmt === 'detail') {
+                    q.set('invoice_format', 'detail');
+                }
+                window.location.href = this.mergedPdf + '?' + q.toString();
             },
             bulkSubmit(sent) {
                 if (this.selectedIds.length === 0) return;
@@ -1949,19 +2048,324 @@ document.addEventListener('alpine:init', () => {
         };
     });
 
+    Alpine.data('serviceOrderHeaderForm', () => {
+        const c =
+            typeof window !== 'undefined' &&
+            window.__serviceOrderHeaderInit &&
+            typeof window.__serviceOrderHeaderInit === 'object'
+                ? window.__serviceOrderHeaderInit
+                : {};
+        const counterpartySearchUrl = typeof c.counterpartySearchUrl === 'string' ? c.counterpartySearchUrl : '';
+        const counterpartyQuickUrl = typeof c.counterpartyQuickUrl === 'string' ? c.counterpartyQuickUrl : '';
+        const vehiclesIndexUrl = typeof c.customerVehiclesIndexUrl === 'string' ? c.customerVehiclesIndexUrl : '';
+        const vehiclesStoreUrl = typeof c.customerVehiclesStoreUrl === 'string' ? c.customerVehiclesStoreUrl : '';
+        const csrf = typeof c.csrf === 'string' ? c.csrf : '';
+        const masters = Array.isArray(c.masters) ? c.masters : [];
+        const initialCp =
+            c.initialCounterparty && typeof c.initialCounterparty === 'object' ? c.initialCounterparty : null;
+        const rawVid = c.initialVehicleId;
+        const initialVehicleId =
+            rawVid != null && rawVid !== '' && !Number.isNaN(parseInt(String(rawVid), 10))
+                ? parseInt(String(rawVid), 10)
+                : null;
+        const warehouseId =
+            typeof c.warehouseId === 'number' && !Number.isNaN(c.warehouseId)
+                ? c.warehouseId
+                : parseInt(String(c.warehouseId ?? '0'), 10) || 0;
+
+        return {
+            counterpartySearchUrl,
+            counterpartyQuickUrl,
+            vehiclesIndexUrl,
+            vehiclesStoreUrl,
+            csrf,
+            masters,
+            warehouseId,
+            counterpartyId: null,
+            counterpartyLabel: '',
+            cpQuery: '',
+            cpItems: [],
+            cpOpen: false,
+            cpLoading: false,
+            vehicles: [],
+            vehicleLoading: false,
+            customerVehicleId: '',
+            clientModalOpen: false,
+            quickName: '',
+            quickLegalForm: 'individual',
+            quickPhone: '',
+            quickSaving: false,
+            quickError: '',
+            vehicleModalOpen: false,
+            vBrand: '',
+            vVin: '',
+            vYear: '',
+            vEngine: '',
+            vPlate: '',
+            vehicleSaving: false,
+            vehicleError: '',
+            init() {
+                if (initialCp && initialCp.id) {
+                    this.counterpartyId = initialCp.id;
+                    this.counterpartyLabel = initialCp.label || '';
+                    this.cpQuery = this.counterpartyLabel;
+                    this.loadVehicles().then(() => {
+                        if (initialVehicleId != null) {
+                            this.customerVehicleId = String(initialVehicleId);
+                        }
+                    });
+                }
+                this.$watch('cpQuery', (val) => {
+                    if (
+                        this.counterpartyId != null &&
+                        String(val ?? '').trim() !== String(this.counterpartyLabel ?? '').trim()
+                    ) {
+                        this.counterpartyId = null;
+                        this.vehicles = [];
+                        this.customerVehicleId = '';
+                    }
+                });
+            },
+            async loadVehicles() {
+                if (!this.counterpartyId) {
+                    this.vehicles = [];
+                    return;
+                }
+                this.vehicleLoading = true;
+                try {
+                    const url =
+                        this.vehiclesIndexUrl + '?counterparty_id=' + encodeURIComponent(String(this.counterpartyId));
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json();
+                    this.vehicles = Array.isArray(data) ? data : [];
+                } catch (e) {
+                    this.vehicles = [];
+                } finally {
+                    this.vehicleLoading = false;
+                }
+            },
+            async searchCp() {
+                if (!this.counterpartySearchUrl) {
+                    return;
+                }
+                const q = this.cpQuery.trim();
+                if (q.length < 2) {
+                    this.cpItems = [];
+                    return;
+                }
+                this.cpLoading = true;
+                try {
+                    const res = await fetch(
+                        this.counterpartySearchUrl + '?q=' + encodeURIComponent(q) + '&for=sale',
+                        { headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' } },
+                    );
+                    const data = await res.json();
+                    this.cpItems = Array.isArray(data) ? data : [];
+                    this.cpOpen = true;
+                } catch (e) {
+                    this.cpItems = [];
+                } finally {
+                    this.cpLoading = false;
+                }
+            },
+            pickCp(item) {
+                if (!item) return;
+                this.counterpartyId = item.id;
+                this.counterpartyLabel = item.full_name || item.name || '';
+                this.cpQuery = this.counterpartyLabel;
+                this.cpItems = [];
+                this.cpOpen = false;
+                this.customerVehicleId = '';
+                this.loadVehicles().then(() => {
+                    if (this.vehicles.length === 1) {
+                        this.customerVehicleId = String(this.vehicles[0].id);
+                    }
+                });
+            },
+            clearCp() {
+                this.counterpartyId = null;
+                this.counterpartyLabel = '';
+                this.cpQuery = '';
+                this.cpItems = [];
+                this.cpOpen = false;
+                this.vehicles = [];
+                this.customerVehicleId = '';
+            },
+            async quickSaveClient() {
+                this.quickError = '';
+                const name = this.quickName.trim();
+                const phone = this.quickPhone.trim();
+                if (!name) {
+                    this.quickError = 'Введите наименование.';
+                    return;
+                }
+                if (!phone) {
+                    this.quickError = 'Введите номер телефона.';
+                    return;
+                }
+                if (!this.counterpartyQuickUrl) {
+                    this.quickError = 'Внутренняя ошибка.';
+                    return;
+                }
+                this.quickSaving = true;
+                try {
+                    const res = await fetch(this.counterpartyQuickUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Accept: 'application/json',
+                            'X-CSRF-TOKEN': this.csrf,
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: JSON.stringify({
+                            name,
+                            legal_form: this.quickLegalForm,
+                            phone,
+                            kind: 'buyer',
+                        }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        let msg = data.message || '';
+                        if (!msg && data.errors && typeof data.errors === 'object') {
+                            msg = Object.values(data.errors)
+                                .flat()
+                                .join(' ');
+                        }
+                        this.quickError = msg || 'Не удалось сохранить.';
+                        return;
+                    }
+                    this.pickCp({
+                        id: data.id,
+                        full_name: data.full_name,
+                        name: data.name,
+                    });
+                    this.clientModalOpen = false;
+                    this.quickName = '';
+                    this.quickPhone = '';
+                } catch (e) {
+                    this.quickError = 'Ошибка сети.';
+                } finally {
+                    this.quickSaving = false;
+                }
+            },
+            openVehicleModal() {
+                if (!this.counterpartyId) {
+                    return;
+                }
+                this.vehicleError = '';
+                this.vBrand = '';
+                this.vVin = '';
+                this.vYear = '';
+                this.vEngine = '';
+                this.vPlate = '';
+                this.vehicleModalOpen = true;
+            },
+            async saveVehicle() {
+                this.vehicleError = '';
+                const vehicle_brand = this.vBrand.trim();
+                const vin = this.vVin.trim();
+                if (!vehicle_brand || !vin) {
+                    this.vehicleError = 'Укажите марку и VIN.';
+                    return;
+                }
+                if (!this.counterpartyId) {
+                    this.vehicleError = 'Сначала выберите клиента.';
+                    return;
+                }
+                this.vehicleSaving = true;
+                try {
+                    const body = {
+                        counterparty_id: this.counterpartyId,
+                        vehicle_brand,
+                        vin,
+                    };
+                    const y = parseInt(String(this.vYear || ''), 10);
+                    if (Number.isFinite(y) && y > 0) {
+                        body.vehicle_year = y;
+                    }
+                    const ev = this.vEngine.trim();
+                    if (ev) {
+                        body.engine_volume = ev;
+                    }
+                    const pl = this.vPlate.trim();
+                    if (pl) {
+                        body.plate_number = pl;
+                    }
+                    const res = await fetch(this.vehiclesStoreUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Accept: 'application/json',
+                            'X-CSRF-TOKEN': this.csrf,
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        let msg = data.message || '';
+                        if (!msg && data.errors && typeof data.errors === 'object') {
+                            msg = Object.values(data.errors)
+                                .flat()
+                                .join(' ');
+                        }
+                        this.vehicleError = msg || 'Не удалось сохранить.';
+                        return;
+                    }
+                    if (data.id) {
+                        await this.loadVehicles();
+                        this.customerVehicleId = String(data.id);
+                    }
+                    this.vehicleModalOpen = false;
+                } catch (e) {
+                    this.vehicleError = 'Ошибка сети.';
+                } finally {
+                    this.vehicleSaving = false;
+                }
+            },
+            vehicleLabel(v) {
+                if (!v) return '';
+                const parts = [
+                    v.vehicle_brand,
+                    v.plate_number ? '№ ' + v.plate_number : null,
+                    v.vin ? 'VIN ' + v.vin : null,
+                ].filter(Boolean);
+                return parts.length ? parts.join(' · ') : 'Авто #' + v.id;
+            },
+        };
+    });
+
     Alpine.data('retailPosForm', () => {
         const c =
             typeof window !== 'undefined' && window.__retailPosInit && typeof window.__retailPosInit === 'object'
                 ? window.__retailPosInit
                 : {};
         const goodsSearchUrl = typeof c.goodsSearchUrl === 'string' ? c.goodsSearchUrl : '';
-        const warehouseId =
+        const rawWarehouseId =
             typeof c.warehouseId === 'number' && !Number.isNaN(c.warehouseId)
                 ? c.warehouseId
                 : parseInt(String(c.warehouseId ?? '0'), 10) || 0;
+        const defaultWarehouseId =
+            typeof c.defaultWarehouseId === 'number' && !Number.isNaN(c.defaultWarehouseId)
+                ? c.defaultWarehouseId
+                : parseInt(String(c.defaultWarehouseId ?? '0'), 10) || 0;
+        const warehouseId =
+            rawWarehouseId > 0 ? rawWarehouseId : defaultWarehouseId > 0 ? defaultWarehouseId : 0;
         const editMode = c.editMode === true;
         const serviceRequestMode = c.serviceRequestMode === true;
         const initialCartRaw = Array.isArray(c.initialCart) ? c.initialCart : [];
+        const counterpartySearchUrl =
+            typeof c.counterpartySearchUrl === 'string' ? c.counterpartySearchUrl : '';
+        const masters = Array.isArray(c.masters) ? c.masters : [];
+        const initialCp =
+            c.initialCounterparty && typeof c.initialCounterparty === 'object' ? c.initialCounterparty : null;
+        const defaultDocumentDate =
+            typeof c.defaultDocumentDate === 'string'
+                ? c.defaultDocumentDate
+                : new Date().toISOString().slice(0, 10);
 
         return {
             query: '',
@@ -1970,11 +2374,26 @@ document.addEventListener('alpine:init', () => {
             results: [],
             cart: [],
             clientPaid: '',
+            clientQueue: [],
+            defaultDocumentDate,
             goodsSearchUrl,
             warehouseId,
             editMode,
             serviceRequestMode,
+            counterpartySearchUrl,
+            masters,
+            counterpartyId: null,
+            counterpartyLabel: '',
+            cpQuery: '',
+            cpItems: [],
+            cpOpen: false,
+            cpLoading: false,
             init() {
+                if (initialCp && initialCp.id) {
+                    this.counterpartyId = initialCp.id;
+                    this.counterpartyLabel = initialCp.label || '';
+                    this.cpQuery = this.counterpartyLabel;
+                }
                 if (initialCartRaw.length > 0) {
                     this.cart = initialCartRaw.map((row) => ({
                         good_id: row.good_id,
@@ -1985,6 +2404,10 @@ document.addEventListener('alpine:init', () => {
                             row.unit_price != null && row.unit_price !== '' ? String(row.unit_price) : '',
                         stock_quantity: row.stock_quantity != null ? row.stock_quantity : null,
                         is_service: row.is_service === true || row.is_service === 1,
+                        performer_employee_id:
+                            row.performer_employee_id != null && row.performer_employee_id !== ''
+                                ? String(row.performer_employee_id)
+                                : '',
                     }));
                 }
                 if (this.editMode) {
@@ -1999,6 +2422,67 @@ document.addEventListener('alpine:init', () => {
                     },
                     { deep: true },
                 );
+                if (this.serviceRequestMode) {
+                    this.$watch('cpQuery', (val) => {
+                        if (
+                            this.counterpartyId != null &&
+                            String(val ?? '').trim() !== String(this.counterpartyLabel ?? '').trim()
+                        ) {
+                            this.counterpartyId = null;
+                        }
+                    });
+                }
+                this.loadQueueFromStorage();
+            },
+            loadQueueFromStorage() {
+                try {
+                    const raw = localStorage.getItem('retailPosQueue');
+                    if (!raw) {
+                        return;
+                    }
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) {
+                        this.clientQueue = parsed;
+                    }
+                } catch (_) {
+                    /* ignore */
+                }
+            },
+            saveQueueToStorage() {
+                try {
+                    localStorage.setItem('retailPosQueue', JSON.stringify(this.clientQueue));
+                } catch (_) {
+                    /* ignore */
+                }
+            },
+            holdCurrentClient() {
+                if (this.cart.length === 0) {
+                    return;
+                }
+                const n = this.clientQueue.length + 1;
+                this.clientQueue.push({
+                    id: Date.now(),
+                    cart: JSON.parse(JSON.stringify(this.cart)),
+                    label: 'Клиент ' + n,
+                    lines: this.cart.length,
+                });
+                this.cart = [];
+                this.query = '';
+                this.results = [];
+                this.searchOpen = false;
+                this.saveQueueToStorage();
+            },
+            resumeQueue(idx) {
+                const slot = this.clientQueue[idx];
+                if (!slot || !Array.isArray(slot.cart)) {
+                    return;
+                }
+                if (this.cart.length > 0) {
+                    this.holdCurrentClient();
+                }
+                this.cart = slot.cart.map((row) => ({ ...row }));
+                this.clientQueue.splice(idx, 1);
+                this.saveQueueToStorage();
             },
             syncClientPaidFromCart() {
                 if (this.cart.length === 0) {
@@ -2010,6 +2494,39 @@ document.addEventListener('alpine:init', () => {
             parseMoney(s) {
                 if (s == null || s === '') return NaN;
                 return parseFloat(String(s).replace(/\s/g, '').replace(',', '.'));
+            },
+            /** Текст остатка в списке поиска (0, если записи на складе нет). */
+            goodsRowStockDisplay(row) {
+                if (!row || row.is_service === true || row.is_service === 1) return '';
+                const raw = row.stock_quantity;
+                if (raw == null || String(raw).trim() === '') return '0';
+                return String(raw).trim();
+            },
+            /** Товар без остатка на выбранном складе (услуги не учитываем). */
+            goodsRowOutOfStock(row) {
+                if (!row) return false;
+                if (row.is_service === true || row.is_service === 1) return false;
+                if (this.warehouseId <= 0) return false;
+                const raw = row.stock_quantity;
+                if (raw == null || String(raw).trim() === '') return true;
+                const n = this.parseMoney(raw);
+                if (!Number.isFinite(n)) return true;
+                return n < 1 - 1e-9;
+            },
+            /** Позиция в чеке: нет остатка или количество больше доступного. */
+            cartLineStockDanger(line) {
+                if (!line) return false;
+                if (line.is_service === true || line.is_service === 1) return false;
+                const raw = line.stock_quantity;
+                if (raw == null || String(raw).trim() === '') {
+                    return this.warehouseId > 0;
+                }
+                const stock = this.parseMoney(raw);
+                if (!Number.isFinite(stock)) return this.warehouseId > 0;
+                if (stock < 1 - 1e-9) return true;
+                const qty = this.parseMoney(line.quantity);
+                if (Number.isFinite(qty) && qty > stock + 1e-9) return true;
+                return false;
             },
             async search() {
                 const q = this.query.trim();
@@ -2076,11 +2593,56 @@ document.addEventListener('alpine:init', () => {
                         unit_price: price,
                         stock_quantity: isService ? null : row.stock_quantity,
                         is_service: isService,
+                        performer_employee_id: isService ? '' : '',
                     });
                 }
                 this.searchOpen = false;
                 this.query = '';
                 this.results = [];
+            },
+            async searchCp() {
+                if (!this.counterpartySearchUrl) {
+                    return;
+                }
+                const q = this.cpQuery.trim();
+                if (q.length < 2) {
+                    this.cpItems = [];
+                    return;
+                }
+                this.cpLoading = true;
+                try {
+                    const res = await fetch(
+                        this.counterpartySearchUrl +
+                            '?q=' +
+                            encodeURIComponent(q) +
+                            '&for=sale',
+                        {
+                            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                        },
+                    );
+                    const data = await res.json();
+                    this.cpItems = Array.isArray(data) ? data : [];
+                    this.cpOpen = true;
+                } catch (e) {
+                    this.cpItems = [];
+                } finally {
+                    this.cpLoading = false;
+                }
+            },
+            pickCp(item) {
+                if (!item) return;
+                this.counterpartyId = item.id;
+                this.counterpartyLabel = item.full_name || item.name || '';
+                this.cpQuery = this.counterpartyLabel;
+                this.cpItems = [];
+                this.cpOpen = false;
+            },
+            clearCp() {
+                this.counterpartyId = null;
+                this.counterpartyLabel = '';
+                this.cpQuery = '';
+                this.cpItems = [];
+                this.cpOpen = false;
             },
             removeLine(i) {
                 this.cart.splice(i, 1);
@@ -2146,6 +2708,217 @@ document.addEventListener('alpine:init', () => {
                 if (this.cart.length === 0) {
                     e.preventDefault();
                 }
+            },
+            handleCheckoutDraft(e) {
+                if (this.cart.length === 0) {
+                    e.preventDefault();
+                }
+            },
+        };
+    });
+
+    Alpine.data('retailCheckoutForm', () => {
+        const c =
+            typeof window !== 'undefined' && window.__retailCheckoutInit && typeof window.__retailCheckoutInit === 'object'
+                ? window.__retailCheckoutInit
+                : {};
+        const defaultId =
+            c.defaultAccountId != null && c.defaultAccountId !== '' ? String(c.defaultAccountId) : '';
+        const draftTotalSrc = c.draftTotal;
+        const parseDraftTotal = () => {
+            if (draftTotalSrc == null || draftTotalSrc === '') {
+                return 0;
+            }
+            const n = parseFloat(String(draftTotalSrc).replace(/\s/g, '').replace(',', '.'));
+            return Number.isFinite(n) ? n : 0;
+        };
+        const debtorHintsUrl = typeof c.debtorHintsUrl === 'string' ? c.debtorHintsUrl : '';
+        const counterpartySearchUrl = typeof c.counterpartySearchUrl === 'string' ? c.counterpartySearchUrl : '';
+        return {
+            payments: [{ organization_bank_account_id: defaultId, amount: '' }],
+            documentDate: typeof c.documentDate === 'string' ? c.documentDate : '',
+            draftTotal: parseDraftTotal(),
+            debtorName: typeof c.oldDebtorName === 'string' ? c.oldDebtorName : '',
+            debtorPhone: typeof c.oldDebtorPhone === 'string' ? c.oldDebtorPhone : '',
+            debtorComment: typeof c.oldDebtorComment === 'string' ? c.oldDebtorComment : '',
+            debtorHints: [],
+            debtorHintsOpen: false,
+            debtorHintsLoading: false,
+            init() {
+                if (this.payments.length === 1 && this.draftTotal > 0) {
+                    this.payments[0].amount = this.draftTotal.toLocaleString('ru-RU', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                    });
+                }
+            },
+            addPaymentRow() {
+                this.payments.push({ organization_bank_account_id: defaultId, amount: '' });
+            },
+            removePaymentRow(i) {
+                if (this.payments.length <= 1) {
+                    return;
+                }
+                this.payments.splice(i, 1);
+            },
+            parseMoney(s) {
+                if (s == null || s === '') {
+                    return NaN;
+                }
+                return parseFloat(String(s).replace(/\s/g, '').replace(',', '.'));
+            },
+            get sumPaid() {
+                let t = 0;
+                for (const row of this.payments) {
+                    const v = this.parseMoney(row.amount);
+                    if (Number.isFinite(v)) {
+                        t += v;
+                    }
+                }
+                return t;
+            },
+            get sumPaidFormatted() {
+                return this.sumPaid.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            get debtAmount() {
+                return Math.max(0, this.draftTotal - this.sumPaid);
+            },
+            get debtFormatted() {
+                return this.debtAmount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            onDebtorNameFocus() {
+                const q = String(this.debtorName ?? '').trim();
+                if (q.length >= 2) {
+                    this.fetchDebtorHints();
+                }
+            },
+            async fetchDebtorHints() {
+                if (this.debtAmount <= 0.004 || !debtorHintsUrl) {
+                    this.debtorHints = [];
+                    this.debtorHintsOpen = false;
+                    return;
+                }
+                const q = String(this.debtorName ?? '').trim();
+                if (q.length < 2) {
+                    this.debtorHints = [];
+                    this.debtorHintsOpen = false;
+                    return;
+                }
+                this.debtorHintsLoading = true;
+                const headers = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+                try {
+                    const histRes = await fetch(debtorHintsUrl + '?q=' + encodeURIComponent(q), { headers });
+                    const hist = await histRes.json();
+                    let cps = [];
+                    if (counterpartySearchUrl !== '') {
+                        let cpUrl;
+                        try {
+                            const u = new URL(counterpartySearchUrl, window.location.href);
+                            u.searchParams.set('q', q);
+                            cpUrl = u.toString();
+                        } catch (_) {
+                            const sep = counterpartySearchUrl.includes('?') ? '&' : '?';
+                            cpUrl = counterpartySearchUrl + sep + 'q=' + encodeURIComponent(q);
+                        }
+                        const cpRes = await fetch(cpUrl, { headers });
+                        cps = await cpRes.json();
+                    }
+                    const merged = [];
+                    const seen = new Set();
+                    const add = (name, phone) => {
+                        const n = String(name || '').trim();
+                        if (!n) return;
+                        const p = String(phone || '').trim();
+                        const key = n.toLowerCase() + '|' + p;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        merged.push({ debtor_name: n, debtor_phone: p });
+                    };
+                    for (const h of Array.isArray(hist) ? hist : []) {
+                        add(h.debtor_name, h.debtor_phone);
+                    }
+                    for (const row of Array.isArray(cps) ? cps : []) {
+                        add(row.full_name || row.name, row.phone || '');
+                    }
+                    this.debtorHints = merged.slice(0, 22);
+                    this.debtorHintsOpen = this.debtorHints.length > 0;
+                } catch (_) {
+                    this.debtorHints = [];
+                    this.debtorHintsOpen = false;
+                } finally {
+                    this.debtorHintsLoading = false;
+                }
+            },
+            pickDebtorHint(h) {
+                if (!h) return;
+                this.debtorName = h.debtor_name || '';
+                this.debtorPhone = h.debtor_phone != null ? String(h.debtor_phone) : '';
+                this.debtorHints = [];
+                this.debtorHintsOpen = false;
+            },
+        };
+    });
+
+    Alpine.data('retailDebtsPage', (raw) => {
+        const config = typeof raw === 'object' && raw !== null ? raw : {};
+        const defaultId =
+            config.defaultAccountId != null && config.defaultAccountId !== ''
+                ? String(config.defaultAccountId)
+                : '';
+        const limit = config.limit != null ? Number(config.limit) : 100;
+        const payUrls = config.payUrls && typeof config.payUrls === 'object' ? config.payUrls : {};
+        const groupPayUrl = typeof config.groupPayUrl === 'string' ? config.groupPayUrl : '';
+
+        return {
+            modalOpen: false,
+            formAction: '',
+            amount: '',
+            accountId: defaultId,
+            limit,
+            saleIdLabel: '',
+            payUrls,
+            groupModalOpen: false,
+            groupAmount: '',
+            groupAccountId: defaultId,
+            groupSaleIds: [],
+            openPay(saleId, debtAmountRaw) {
+                const id = Number(saleId);
+                const url = payUrls[id] ?? payUrls[String(id)];
+                if (!url) {
+                    return;
+                }
+                this.formAction = url;
+                this.saleIdLabel = String(id);
+                const s = String(debtAmountRaw ?? '')
+                    .replace(/\s/g, '')
+                    .replace(',', '.');
+                const n = parseFloat(s);
+                this.amount = Number.isFinite(n)
+                    ? n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : '';
+                this.accountId = defaultId;
+                this.modalOpen = true;
+            },
+            closeModal() {
+                this.modalOpen = false;
+            },
+            openGroupPay(saleIds, totalDebtRaw) {
+                if (!groupPayUrl || !Array.isArray(saleIds) || saleIds.length < 2) {
+                    return;
+                }
+                this.groupSaleIds = saleIds.map((id) => Number(id));
+                const s = String(totalDebtRaw ?? '')
+                    .replace(/\s/g, '')
+                    .replace(',', '.');
+                const n = parseFloat(s);
+                this.groupAmount = Number.isFinite(n)
+                    ? n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : '';
+                this.groupAccountId = defaultId;
+                this.groupModalOpen = true;
+            },
+            closeGroupModal() {
+                this.groupModalOpen = false;
             },
         };
     });
@@ -2789,29 +3562,97 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('stockAuditDoc', (config) => ({
         searchUrl: typeof config.searchUrl === 'string' ? config.searchUrl : '',
         warehouseId: Number(config.warehouseId) || 0,
+        formAction: typeof config.formAction === 'string' ? config.formAction : '',
+        csrfToken: typeof config.csrfToken === 'string' ? config.csrfToken : '',
+        isEdit: !!config.isEdit,
         scanQuery: '',
         scanResults: [],
         scanOpen: false,
         scanLoading: false,
+        linesLoading: false,
+        linesLoadError: '',
+        auditSubmitting: false,
+        auditPage: 1,
+        auditPageSize: 100,
         rows: [],
-        maxRows: 500,
-        init() {
-            const initial = Array.isArray(config.initialRows) ? config.initialRows : null;
-            if (initial && initial.length > 0) {
-                this.rows = initial.map((r) => ({
-                    goodId: r.good_id != null && Number(r.good_id) > 0 ? String(r.good_id) : '',
-                    manual: false,
-                    query: '',
-                    name: String(r.name ?? ''),
-                    article: String(r.article ?? ''),
-                    unit: String(r.unit ?? 'шт.'),
-                    barcode: String(r.barcode ?? ''),
-                    stockQty: r.stock_qty != null && r.stock_qty !== '' ? r.stock_qty : null,
-                    qty: String(r.quantity_counted ?? ''),
-                    results: [],
-                    open: false,
-                    loading: false,
-                }));
+        maxRows: 200000,
+        mapInitialRow(r) {
+            return {
+                goodId: r.good_id != null && Number(r.good_id) > 0 ? String(r.good_id) : '',
+                manual: false,
+                query: '',
+                name: String(r.name ?? ''),
+                article: String(r.article ?? ''),
+                unit: String(r.unit ?? 'шт.'),
+                barcode: String(r.barcode ?? ''),
+                stockQty: r.stock_qty != null && r.stock_qty !== '' ? r.stock_qty : null,
+                qty: String(r.quantity_counted ?? ''),
+                results: [],
+                open: false,
+                loading: false,
+            };
+        },
+        auditTotalPages() {
+            const size = Number(this.auditPageSize) || 100;
+            if (this.rows.length === 0) {
+                return 1;
+            }
+            return Math.max(1, Math.ceil(this.rows.length / size));
+        },
+        auditRowIndices() {
+            const size = Number(this.auditPageSize) || 100;
+            const tp = this.auditTotalPages();
+            const page = Math.min(Math.max(1, this.auditPage), tp);
+            const start = (page - 1) * size;
+            const end = Math.min(start + size, this.rows.length);
+            const indices = [];
+            for (let i = start; i < end; i++) {
+                indices.push(i);
+            }
+            return indices;
+        },
+        auditPageLabel() {
+            const tp = this.auditTotalPages();
+            const p = Math.min(Math.max(1, this.auditPage), tp);
+            return `${p} / ${tp}`;
+        },
+        goToLastAuditPage() {
+            this.auditPage = this.auditTotalPages();
+        },
+        goToPageForGlobalIndex(globalIdx) {
+            const size = Number(this.auditPageSize) || 100;
+            if (size <= 0) {
+                return;
+            }
+            const idx = Number(globalIdx) || 0;
+            this.auditPage = Math.max(1, Math.floor(idx / size) + 1);
+        },
+        async init() {
+            const loadUrl = typeof config.linesLoadUrl === 'string' ? config.linesLoadUrl : '';
+            if (loadUrl.length > 0) {
+                this.linesLoading = true;
+                this.linesLoadError = '';
+                try {
+                    const res = await fetch(loadUrl, {
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) {
+                        throw new Error('load failed');
+                    }
+                    const data = await res.json();
+                    const lines = Array.isArray(data.lines) ? data.lines : [];
+                    this.rows = lines.map((r) => this.mapInitialRow(r));
+                } catch {
+                    this.linesLoadError = 'Не удалось загрузить строки документа. Обновите страницу.';
+                } finally {
+                    this.linesLoading = false;
+                }
+            } else {
+                const initial = Array.isArray(config.initialRows) ? config.initialRows : null;
+                if (initial && initial.length > 0) {
+                    this.rows = initial.map((r) => this.mapInitialRow(r));
+                }
             }
             this.$watch('warehouseId', (value, old) => {
                 if (old == null) {
@@ -2826,8 +3667,73 @@ document.addEventListener('alpine:init', () => {
                 this.scanQuery = '';
                 this.scanResults = [];
                 this.scanOpen = false;
+                this.auditPage = 1;
+            });
+            this.$watch('rows', () => {
+                const tp = this.auditTotalPages();
+                if (this.auditPage > tp) {
+                    this.auditPage = Math.max(1, tp);
+                }
+            });
+            this.$watch('auditPageSize', () => {
+                const tp = this.auditTotalPages();
+                if (this.auditPage > tp) {
+                    this.auditPage = Math.max(1, tp);
+                }
             });
             this.$nextTick(() => this.$refs.scanEl?.focus());
+        },
+        playAmbiguousBarcodeAlert() {
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) {
+                    return;
+                }
+                if (!this._auditAudioCtx) {
+                    this._auditAudioCtx = new AC();
+                }
+                const ctx = this._auditAudioCtx;
+                if (ctx.state === 'suspended') {
+                    ctx.resume();
+                }
+                const tone = (startOffsetSec, freqHz, durationSec, peakGain) => {
+                    const o = ctx.createOscillator();
+                    const g = ctx.createGain();
+                    o.type = 'triangle';
+                    o.frequency.value = freqHz;
+                    o.connect(g);
+                    g.connect(ctx.destination);
+                    const t0 = ctx.currentTime + startOffsetSec;
+                    g.gain.setValueAtTime(0.0001, t0);
+                    g.gain.exponentialRampToValueAtTime(peakGain, t0 + 0.03);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t0 + durationSec);
+                    o.start(t0);
+                    o.stop(t0 + durationSec + 0.02);
+                };
+                /* Два заметных тона + короткое повторение — чтобы однозначно остановиться и выбрать позицию из списка */
+                tone(0, 585, 0.32, 0.38);
+                tone(0.36, 440, 0.32, 0.38);
+                tone(0.74, 585, 0.22, 0.32);
+            } catch (_) {
+                /* ignore */
+            }
+        },
+        incrementCountedQty(row) {
+            const raw = (row.qty || '').trim().replace(',', '.');
+            let n = 0;
+            if (raw !== '') {
+                const p = parseFloat(raw);
+                if (!Number.isNaN(p)) {
+                    n = p;
+                }
+            }
+            const next = n + 1;
+            if (Math.abs(next - Math.round(next)) < 1e-8) {
+                row.qty = String(Math.round(next));
+            } else {
+                const r = Math.round(next * 10000) / 10000;
+                row.qty = String(r);
+            }
         },
         async handleScanSubmit() {
             const q = (this.scanQuery || '').trim();
@@ -2868,6 +3774,7 @@ document.addEventListener('alpine:init', () => {
                     this.addFromGood(data[0]);
                     return;
                 }
+                this.playAmbiguousBarcodeAlert();
                 this.scanResults = data;
                 this.scanOpen = true;
             } catch {
@@ -2882,6 +3789,7 @@ document.addEventListener('alpine:init', () => {
             this.addFromGood(g);
         },
         focusQtyInput(rowIndex) {
+            this.goToPageForGlobalIndex(rowIndex);
             const id = `audit-qty-${rowIndex}`;
             const tryFocus = () => {
                 const el = document.getElementById(id);
@@ -2938,11 +3846,15 @@ document.addEventListener('alpine:init', () => {
             const id = String(g.id);
             const idx = this.rows.findIndex((r) => r.goodId === id);
             if (idx >= 0) {
+                const row = this.rows[idx];
+                this.incrementCountedQty(row);
                 this.scanQuery = '';
-                this.focusQtyInput(idx);
+                this.goToPageForGlobalIndex(idx);
+                this.focusScanInput();
                 return;
             }
             if (this.rows.length >= this.maxRows) {
+                window.alert('Достигнут лимит позиций (' + this.maxRows + ').');
                 return;
             }
             this.rows.push({
@@ -2954,17 +3866,18 @@ document.addEventListener('alpine:init', () => {
                 unit: g.unit || 'шт.',
                 barcode: g.barcode || '',
                 stockQty: g.stock_quantity != null && g.stock_quantity !== '' ? g.stock_quantity : null,
-                qty: '',
+                qty: '1',
                 results: [],
                 open: false,
                 loading: false,
             });
             this.scanQuery = '';
-            const last = this.rows.length - 1;
-            this.focusQtyInput(last);
+            this.goToLastAuditPage();
+            this.focusScanInput();
         },
         addManualLine() {
             if (this.rows.length >= this.maxRows) {
+                window.alert('Достигнут лимит позиций (' + this.maxRows + ').');
                 return;
             }
             this.rows.push({
@@ -2981,6 +3894,7 @@ document.addEventListener('alpine:init', () => {
                 open: false,
                 loading: false,
             });
+            this.goToLastAuditPage();
             this.$nextTick(() => {
                 const i = this.rows.length - 1;
                 const el = this.$el.querySelector(`[data-audit-search="${i}"]`);
@@ -2992,6 +3906,10 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
             this.rows.splice(i, 1);
+            const tp = this.auditTotalPages();
+            if (this.auditPage > tp) {
+                this.auditPage = Math.max(1, tp);
+            }
         },
         onQtyEnter(e) {
             e.preventDefault();
@@ -3064,7 +3982,10 @@ document.addEventListener('alpine:init', () => {
             }
             return '—';
         },
-        validateAuditSubmit(e) {
+        async submitStockAudit(commit) {
+            if (this.auditSubmitting) {
+                return;
+            }
             const has = this.rows.some((r) => {
                 if (!r.goodId) {
                     return false;
@@ -3077,11 +3998,370 @@ document.addEventListener('alpine:init', () => {
                 return !Number.isNaN(n) && n >= 0;
             });
             if (!has) {
-                e.preventDefault();
                 window.alert('Добавьте хотя бы одну строку: выберите товар и укажите фактическое количество.');
+                return;
+            }
+            const lines = [];
+            for (const r of this.rows) {
+                if (!r.goodId) {
+                    continue;
+                }
+                const raw = (r.qty || '').trim().replace(',', '.');
+                if (raw === '') {
+                    continue;
+                }
+                lines.push({
+                    good_id: String(r.goodId),
+                    quantity_counted: raw,
+                });
+            }
+            if (lines.length === 0) {
+                window.alert('Укажите фактическое количество по выбранным товарам.');
+                return;
+            }
+            if (!this.formAction || !this.csrfToken) {
+                window.alert('Ошибка формы. Обновите страницу.');
+                return;
+            }
+            const whEl = document.getElementById('au_wh');
+            const dateEl = document.getElementById('au_date');
+            const noteEl = document.getElementById('au_note');
+            const payload = {
+                _token: this.csrfToken,
+                warehouse_id: whEl ? whEl.value : '',
+                document_date: dateEl ? dateEl.value : '',
+                note: noteEl ? noteEl.value : '',
+                commit,
+                lines,
+            };
+            if (this.isEdit) {
+                payload._method = 'PUT';
+            }
+            this.auditSubmitting = true;
+            try {
+                const res = await fetch(this.formAction, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    redirect: 'manual',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': this.csrfToken,
+                    },
+                    body: JSON.stringify(payload),
+                });
+                if (res.status === 422) {
+                    let msg = 'Проверьте данные.';
+                    try {
+                        const j = await res.json();
+                        if (j.message) {
+                            msg = j.message;
+                        } else if (j.errors) {
+                            msg = Object.values(j.errors)
+                                .flat()
+                                .join('\n');
+                        }
+                    } catch (_) {
+                        /* ignore */
+                    }
+                    window.alert(msg);
+                    return;
+                }
+                if (res.status === 419) {
+                    window.alert('Сессия устарела. Обновите страницу.');
+                    return;
+                }
+                if (res.status >= 300 && res.status < 400) {
+                    const loc = res.headers.get('Location');
+                    window.location.href = loc
+                        ? new URL(loc, window.location.origin).href
+                        : this.formAction;
+                    return;
+                }
+                if (res.ok) {
+                    window.location.href = res.url || this.formAction;
+                    return;
+                }
+                window.alert('Не удалось сохранить документ (код ' + res.status + ').');
+            } catch {
+                window.alert('Ошибка сети.');
+            } finally {
+                this.auditSubmitting = false;
             }
         },
     }));
+
+    Alpine.data('journalSaleGoodFilter', (rawConfig) => {
+        const cfg = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+        const goodsSearchUrl = typeof cfg.goodsSearchUrl === 'string' ? cfg.goodsSearchUrl : '';
+        const warehouseId =
+            typeof cfg.warehouseId === 'number' && !Number.isNaN(cfg.warehouseId)
+                ? cfg.warehouseId
+                : parseInt(String(cfg.warehouseId ?? '0'), 10) || 0;
+        const initialGoodId = parseInt(String(cfg.initialGoodId ?? '0'), 10) || 0;
+        const initialSummary = typeof cfg.initialSummary === 'string' ? cfg.initialSummary : '';
+        const formSelector =
+            typeof cfg.formSelector === 'string' && cfg.formSelector !== ''
+                ? cfg.formSelector
+                : '[data-journal-filter-form]';
+        return {
+            query: '',
+            results: [],
+            open: false,
+            loading: false,
+            suggestTimer: null,
+            blurTimer: null,
+            selectedGoodId: initialGoodId > 0 ? initialGoodId : 0,
+            selectedSummary: initialSummary,
+            goodsSearchUrl,
+            warehouseId,
+            formSelector,
+            init() {
+                this.$watch('query', (q) => {
+                    clearTimeout(this.suggestTimer);
+                    const term = (q || '').trim();
+                    if (term.length < 2) {
+                        this.results = [];
+                        this.open = false;
+                        return;
+                    }
+                    this.suggestTimer = setTimeout(() => {
+                        this.runSearch(term);
+                    }, 280);
+                });
+            },
+            async runSearch(term) {
+                if (!this.goodsSearchUrl) return;
+                this.loading = true;
+                try {
+                    let url = this.goodsSearchUrl + '?q=' + encodeURIComponent(term);
+                    if (this.warehouseId > 0) {
+                        url += '&warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                    }
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json();
+                    this.results = Array.isArray(data) ? data : [];
+                    this.open = this.results.length > 0;
+                } catch {
+                    this.results = [];
+                    this.open = false;
+                } finally {
+                    this.loading = false;
+                }
+            },
+            scheduleBlurClose() {
+                clearTimeout(this.blurTimer);
+                this.blurTimer = setTimeout(() => {
+                    this.open = false;
+                }, 180);
+            },
+            focusSuggest() {
+                clearTimeout(this.blurTimer);
+            },
+            pick(row) {
+                if (!row || row.id == null) return;
+                const form = document.querySelector(this.formSelector);
+                if (!form) return;
+                let input = form.querySelector('input[name="good_id"]');
+                if (!input) {
+                    input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'good_id';
+                    form.appendChild(input);
+                }
+                input.value = String(row.id);
+                form.submit();
+            },
+            clear() {
+                const form = document.querySelector(this.formSelector);
+                if (!form) return;
+                const input = form.querySelector('input[name="good_id"]');
+                if (input) input.value = '';
+                this.query = '';
+                this.selectedGoodId = 0;
+                this.selectedSummary = '';
+                this.results = [];
+                this.open = false;
+                form.submit();
+            },
+            itemLabel(row) {
+                if (!row) return '—';
+                const code = row.article_code != null ? String(row.article_code).trim() : '';
+                const name = row.name != null ? String(row.name).trim() : '';
+                if (code && name) return code + ' · ' + name;
+                return name || code || '—';
+            },
+        };
+    });
+
+    Alpine.data('retailSalesHistoryPage', (rawCfg) => {
+        const cfg = rawCfg && typeof rawCfg === 'object' ? rawCfg : {};
+        const physicalBase = typeof cfg.physicalBase === 'string' ? cfg.physicalBase.replace(/\/$/, '') : '';
+        const csrf = typeof cfg.csrf === 'string' ? cfg.csrf : '';
+        const hist = cfg.historyParams && typeof cfg.historyParams === 'object' ? cfg.historyParams : {};
+
+        return {
+            returnOpen: false,
+            returnLoading: false,
+            returnSubmitting: false,
+            returnErr: '',
+            activeSaleId: null,
+            returnLines: [],
+            returnAccounts: [],
+            returnAccountId: '',
+            returnDocDate: new Date().toISOString().slice(0, 10),
+            qty: {},
+            formatMoney(n) {
+                const x = Number(n);
+                if (!Number.isFinite(x)) return '—';
+                return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(x);
+            },
+            formatQty(s) {
+                const n = parseFloat(String(s ?? '').replace(/\s/g, '').replace(',', '.'));
+                if (!Number.isFinite(n)) return '—';
+                return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 4 }).format(n);
+            },
+            parseNum(s) {
+                if (s == null || s === '') return NaN;
+                return parseFloat(String(s).replace(/\s/g, '').replace(',', '.'));
+            },
+            lineSubtotal(row) {
+                const q = this.parseNum(this.qty[row.id] ?? '');
+                const p = this.parseNum(row.unit_price);
+                if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(p)) return 0;
+                return Math.round(q * p * 100) / 100;
+            },
+            totalRefund() {
+                let t = 0;
+                for (const row of this.returnLines || []) {
+                    t += this.lineSubtotal(row);
+                }
+                return Math.round(t * 100) / 100;
+            },
+            closeReturnModal() {
+                this.returnOpen = false;
+                this.returnErr = '';
+            },
+            async openReturn(saleId) {
+                if (!physicalBase) return;
+                this.activeSaleId = saleId;
+                this.returnErr = '';
+                this.returnLoading = true;
+                this.returnOpen = true;
+                this.qty = {};
+                this.returnLines = [];
+                this.returnAccounts = [];
+                this.returnAccountId = '';
+                try {
+                    const url = physicalBase + '/' + saleId + '/return-data';
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                        credentials: 'same-origin',
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                        this.returnErr = data.message || 'Не удалось загрузить чек.';
+                        return;
+                    }
+                    this.returnLines = Array.isArray(data.lines) ? data.lines : [];
+                    this.returnAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+                    const def = data.defaultAccountId != null ? parseInt(String(data.defaultAccountId), 10) : 0;
+                    this.returnAccountId = def > 0 ? String(def) : this.returnAccounts[0] ? String(this.returnAccounts[0].id) : '';
+                    if (data.sale && data.sale.document_date) {
+                        this.returnDocDate = String(data.sale.document_date).slice(0, 10);
+                    }
+                    const next = {};
+                    for (const row of this.returnLines) {
+                        next[row.id] = '0';
+                    }
+                    this.qty = next;
+                    const nothingToReturn = this.returnLines.every((r) => {
+                        const av = this.parseNum(r.quantity_available);
+                        return !Number.isFinite(av) || av <= 0;
+                    });
+                    if (nothingToReturn && this.returnLines.length > 0) {
+                        this.returnErr = 'По этому чеку уже всё возвращено или нет доступного количества.';
+                    }
+                } catch (e) {
+                    this.returnErr = 'Ошибка сети.';
+                } finally {
+                    this.returnLoading = false;
+                }
+            },
+            async submitReturn() {
+                if (!physicalBase || !this.activeSaleId || !csrf) return;
+                const rows = [];
+                for (const row of this.returnLines) {
+                    const raw = (this.qty[row.id] ?? '').toString().trim();
+                    if (raw === '') continue;
+                    const q = this.parseNum(raw.replace(',', '.'));
+                    if (!Number.isFinite(q) || q <= 0) continue;
+                    rows.push({ retail_sale_line_id: row.id, quantity: String(raw).replace(',', '.') });
+                }
+                if (rows.length === 0) {
+                    this.returnErr = 'Укажите количество хотя бы по одной позиции.';
+                    return;
+                }
+                const acc = parseInt(String(this.returnAccountId), 10);
+                if (!acc) {
+                    this.returnErr = 'Выберите счёт, с которого вернёте деньги покупателю.';
+                    return;
+                }
+                this.returnSubmitting = true;
+                this.returnErr = '';
+                const body = new URLSearchParams();
+                body.append('_token', csrf);
+                body.append('document_date', this.returnDocDate);
+                body.append('organization_bank_account_id', String(acc));
+                rows.forEach((r, i) => {
+                    body.append(`lines[${i}][retail_sale_line_id]`, String(r.retail_sale_line_id));
+                    body.append(`lines[${i}][quantity]`, r.quantity);
+                });
+                if (hist.warehouse_id != null && hist.warehouse_id !== '') body.append('return_warehouse_id', String(hist.warehouse_id));
+                if (hist.limit != null && hist.limit !== '') body.append('return_limit', String(hist.limit));
+                if (hist.date_from) body.append('return_date_from', String(hist.date_from));
+                if (hist.date_to) body.append('return_date_to', String(hist.date_to));
+                if (hist.good_id != null && hist.good_id !== '') body.append('return_good_id', String(hist.good_id));
+                try {
+                    const url = physicalBase + '/' + this.activeSaleId + '/return';
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            Accept: 'text/html,application/xhtml+xml',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': csrf,
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: body.toString(),
+                        credentials: 'same-origin',
+                        redirect: 'manual',
+                    });
+                    if (res.status === 302 || res.status === 301 || res.status === 303 || res.status === 307 || res.status === 308) {
+                        const loc = res.headers.get('Location');
+                        window.location.href = loc || window.location.href;
+                        return;
+                    }
+                    if (res.ok) {
+                        window.location.reload();
+                        return;
+                    }
+                    if (res.status === 0) {
+                        this.returnErr =
+                            'Ответ сервера недоступен (код 0). Обычно это несовпадение адреса: откройте тот же URL, что в .env (APP_URL), например только localhost или только 127.0.0.1. Либо сбой сети — повторите попытку.';
+                        return;
+                    }
+                    this.returnErr = 'Не удалось провести возврат (HTTP ' + res.status + ').';
+                } catch (e) {
+                    this.returnErr = 'Ошибка сети.';
+                } finally {
+                    this.returnSubmitting = false;
+                }
+            },
+        };
+    });
 });
 
 Alpine.start();

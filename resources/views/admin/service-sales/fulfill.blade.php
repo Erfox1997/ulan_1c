@@ -1,7 +1,8 @@
 @php
-    $rk = $serviceOrder->recipient_kind;
-    $showRetail = $rk === null || $rk === \App\Models\ServiceOrder::RECIPIENT_PHYSICAL;
-    $showLegal = $rk === null || $rk === \App\Models\ServiceOrder::RECIPIENT_LEGAL;
+    $cp = $serviceOrder->counterparty;
+    $lf = $cp?->legal_form;
+    $showRetail = $lf === null || $lf === \App\Models\Counterparty::LEGAL_INDIVIDUAL;
+    $showLegal = in_array($lf, [\App\Models\Counterparty::LEGAL_IP, \App\Models\Counterparty::LEGAL_OSOO, \App\Models\Counterparty::LEGAL_OTHER], true);
 @endphp
 <x-admin-layout pageTitle="Оформление №{{ $serviceOrder->id }}" main-class="bg-slate-100/80 px-3 py-4 sm:px-4 lg:px-6">
     <div class="mx-auto max-w-3xl space-y-4">
@@ -157,14 +158,6 @@
                                     class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                 />
                             </div>
-                            @if ($rk === \App\Models\ServiceOrder::RECIPIENT_LEGAL)
-                                <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">
-                                    <input type="checkbox" name="issue_esf" value="1" class="h-4 w-4 rounded border-slate-300 text-emerald-600 accent-amber-500 focus:ring-emerald-500" @checked(old('issue_esf')) />
-                                    Оформить ЭСФ
-                                </label>
-                            @else
-                                <input type="hidden" name="issue_esf" value="0" />
-                            @endif
                             <button
                                 type="submit"
                                 class="w-full rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3 text-sm font-bold text-white shadow-md transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-50"

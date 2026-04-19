@@ -108,5 +108,6 @@
             </main>
         </div>
     </div>
+    @include('admin.partials.nav-loading')
 </body>
 </html>

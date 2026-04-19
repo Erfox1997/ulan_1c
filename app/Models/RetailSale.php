@@ -15,6 +15,10 @@ class RetailSale extends Model
         'document_date',
         'user_id',
         'total_amount',
+        'debt_amount',
+        'debtor_name',
+        'debtor_phone',
+        'debtor_comment',
     ];
 
     protected function casts(): array
@@ -22,6 +26,7 @@ class RetailSale extends Model
         return [
             'document_date' => 'date',
             'total_amount' => 'decimal:2',
+            'debt_amount' => 'decimal:2',
         ];
     }
 
@@ -48,6 +53,21 @@ class RetailSale extends Model
     public function lines(): HasMany
     {
         return $this->hasMany(RetailSaleLine::class);
+    }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(RetailSalePayment::class);
+    }
+
+    public function customerReturns(): HasMany
+    {
+        return $this->hasMany(CustomerReturn::class);
+    }
+
+    public function retailSaleRefunds(): HasMany
+    {
+        return $this->hasMany(RetailSaleRefund::class);
     }
 
     public function resolveRouteBinding($value, $field = null)

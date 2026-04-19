@@ -178,18 +178,6 @@
                                             required
                                         />
                                     </div>
-                                    <div class="les-esf-field flex min-w-0 flex-col">
-                                        <label for="issue_esf" class="block cursor-pointer">ЭСФ</label>
-                                        <input
-                                            id="issue_esf"
-                                            type="checkbox"
-                                            name="issue_esf"
-                                            value="1"
-                                            class="les-esf-check"
-                                            title="Электронная счёт-фактура"
-                                            @checked(old('issue_esf', $legalEntitySale->issue_esf))
-                                        />
-                                    </div>
                                 </div>
                                 <div class="les-buyer-pin-full">
                                     <label for="buyer_pin">ИНН / ПИН покупателя</label>
@@ -269,7 +257,6 @@
                             <x-input-error class="mx-3 mt-2" :messages="$errors->get('document_date')" />
                             <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_name')" />
                             <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_pin')" />
-                            <x-input-error class="mx-3 mt-2" :messages="$errors->get('issue_esf')" />
 
                             @php
                                 $lineFieldErrors = collect($errors->getMessages())->filter(fn ($_, $k) => str_starts_with((string) $k, 'lines.'));

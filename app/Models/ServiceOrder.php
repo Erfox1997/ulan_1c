@@ -34,7 +34,12 @@ class ServiceOrder extends Model
     protected $fillable = [
         'branch_id',
         'warehouse_id',
-        'recipient_kind',
+        'counterparty_id',
+        'contact_name',
+        'customer_vehicle_id',
+        'mileage_km',
+        'lead_master_employee_id',
+        'deadline_date',
         'user_id',
         'status',
         'document_date',
@@ -49,7 +54,9 @@ class ServiceOrder extends Model
     {
         return [
             'document_date' => 'date',
+            'deadline_date' => 'date',
             'total_amount' => 'decimal:2',
+            'mileage_km' => 'decimal:2',
         ];
     }
 
@@ -88,6 +95,21 @@ class ServiceOrder extends Model
         return $this->hasMany(ServiceOrderLine::class);
     }
 
+    public function counterparty(): BelongsTo
+    {
+        return $this->belongsTo(Counterparty::class);
+    }
+
+    public function customerVehicle(): BelongsTo
+    {
+        return $this->belongsTo(CustomerVehicle::class, 'customer_vehicle_id');
+    }
+
+    public function leadMasterEmployee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'lead_master_employee_id');
+    }
+
     public function resolveRouteBinding($value, $field = null)
     {
         $branchId = auth()->user()?->branch_id;
@@ -109,10 +131,11 @@ class ServiceOrder extends Model
 
     public function recipientKindLabel(): string
     {
-        return match ($this->recipient_kind) {
-            self::RECIPIENT_PHYSICAL => 'Физлицо',
-            self::RECIPIENT_LEGAL => 'Юрлицо',
-            default => '—',
-        };
+        $cp = $this->relationLoaded('counterparty') ? $this->counterparty : null;
+        if ($cp === null) {
+            return '—';
+        }
+
+        return (string) ($cp->full_name ?: $cp->name);
     }
 }

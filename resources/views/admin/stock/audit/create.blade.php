@@ -23,6 +23,10 @@
                     searchUrl: @js(route('admin.goods.search')),
                     warehouseId: {{ (int) $warehouseId }},
                     initialRows: @js($initialRows ?? []),
+                    linesLoadUrl: @js($linesLoadUrl ?? null),
+                    formAction: @js($formAction),
+                    csrfToken: @js(csrf_token()),
+                    isEdit: @js($isEdit),
                 })"
                 class="space-y-4"
             >
@@ -30,12 +34,10 @@
                     method="POST"
                     action="{{ $formAction }}"
                     class="space-y-4"
-                    @submit="validateAuditSubmit($event)"
+                    x-ref="auditForm"
+                    @submit.prevent
                 >
                     @csrf
-                    @if ($isEdit)
-                        @method('PUT')
-                    @endif
                     <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)]">
                         <div class="border-b border-slate-200/80 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 px-5 py-4 sm:px-6">
                             <h1 class="text-base font-semibold tracking-tight text-white">{{ $pageTitle }}</h1>
@@ -85,10 +87,17 @@
                                 <p class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ $message }}</p>
                             @enderror
 
-                            <div class="relative rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
+                            <div
+                                class="relative rounded-xl border-2 border-dashed p-4 transition-colors sm:p-5"
+                                :class="scanOpen && scanResults.length ? 'border-amber-400 bg-amber-50/90 ring-2 ring-amber-400/45' : 'border-indigo-200 bg-indigo-50/40'"
+                            >
                                 <label for="audit_scan" class="mb-2 block text-xs font-bold uppercase tracking-wide text-indigo-900/80">
                                     Сканер штрихкода
                                 </label>
+                                <p class="mb-3 text-xs leading-relaxed text-slate-600">
+                                    Каждое сканирование добавляет <span class="font-semibold text-slate-800">+1</span> к факту по этой позиции (в любой очередности).
+                                    Если по штрихкоду находится несколько товаров — выберите нужный в списке (прозвучит сигнал).
+                                </p>
                                 <div class="relative">
                                     <input
                                         id="audit_scan"
@@ -134,7 +143,13 @@
                                 <div class="border-b border-slate-100 bg-slate-50/80 px-3 py-2 text-xs font-semibold text-slate-700">
                                     Строки ревизии
                                 </div>
-                                <div class="min-w-0 overflow-x-auto">
+                                <p x-show="linesLoading" class="px-3 py-6 text-center text-sm text-slate-600">Загрузка строк документа…</p>
+                                <p
+                                    x-show="!linesLoading && linesLoadError"
+                                    class="px-3 py-4 text-center text-sm text-rose-700"
+                                    x-text="linesLoadError"
+                                ></p>
+                                <div class="min-w-0 overflow-x-auto" x-show="!linesLoading">
                                     <table class="min-w-full text-left text-xs">
                                         <thead class="border-b border-slate-200 bg-slate-50/90 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                                             <tr>
@@ -147,7 +162,7 @@
                                             </tr>
                                         </thead>
                                         <tbody class="divide-y divide-slate-100">
-                                            <tr x-show="rows.length === 0">
+                                            <tr x-show="rows.length === 0 && !linesLoading">
                                                 <td colspan="6" class="px-4 py-10 text-center align-middle">
                                                     <p class="text-sm text-slate-600">Пока пусто — сканируйте штрихкод выше или добавьте строку вручную.</p>
                                                     <button
@@ -160,29 +175,28 @@
                                                     </button>
                                                 </td>
                                             </tr>
-                                            <template x-for="(row, i) in rows" :key="i">
+                                            <template x-for="i in auditRowIndices()" :key="'audit-line-' + i">
                                                 <tr class="align-top">
                                                     <td class="px-3 py-2.5 tabular-nums text-slate-500" x-text="i + 1"></td>
                                                     <td class="relative px-3 py-2">
-                                                        <input type="hidden" :name="'lines[' + i + '][good_id]'" :value="row.goodId" />
-                                                        <div x-show="row.manual" class="relative" x-cloak>
+                                                        <div x-show="rows[i].manual" class="relative" x-cloak>
                                                             <input
                                                                 type="search"
                                                                 class="w-full min-w-[12rem] rounded-lg border border-slate-200 px-2.5 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                                                                x-model="row.query"
+                                                                x-model="rows[i].query"
                                                                 :data-audit-search="i"
                                                                 @input.debounce.300ms="searchRow(i)"
-                                                                @focus="row.open = row.results.length > 0"
+                                                                @focus="rows[i].open = rows[i].results.length > 0"
                                                                 autocomplete="off"
                                                                 placeholder="Артикул или название…"
                                                             />
                                                             <div
                                                                 class="absolute left-0 right-0 top-full z-[9999] mt-1 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
-                                                                x-show="row.open && row.results.length"
+                                                                x-show="rows[i].open && rows[i].results.length"
                                                                 x-transition
-                                                                @click.outside="row.open = false"
+                                                                @click.outside="rows[i].open = false"
                                                             >
-                                                                <template x-for="g in row.results" :key="g.id">
+                                                                <template x-for="g in rows[i].results" :key="g.id">
                                                                     <button
                                                                         type="button"
                                                                         class="block w-full px-3 py-2 text-left text-sm hover:bg-indigo-50"
@@ -194,11 +208,11 @@
                                                                 </template>
                                                             </div>
                                                         </div>
-                                                        <div x-show="!row.manual" class="space-y-0.5">
-                                                            <p class="font-mono text-[11px] text-slate-500" x-text="row.article"></p>
-                                                            <p class="text-sm font-medium text-slate-900" x-text="row.name"></p>
-                                                            <p class="text-[11px] text-slate-400" x-show="row.barcode">
-                                                                ШК: <span x-text="row.barcode"></span>
+                                                        <div x-show="!rows[i].manual" class="space-y-0.5">
+                                                            <p class="font-mono text-[11px] text-slate-500" x-text="rows[i].article"></p>
+                                                            <p class="text-sm font-medium text-slate-900" x-text="rows[i].name"></p>
+                                                            <p class="text-[11px] text-slate-400" x-show="rows[i].barcode">
+                                                                ШК: <span x-text="rows[i].barcode"></span>
                                                             </p>
                                                         </div>
                                                     </td>
@@ -208,7 +222,7 @@
                                                             readonly
                                                             tabindex="-1"
                                                             class="w-full cursor-default rounded-lg border border-slate-200 bg-slate-50/95 px-2 py-1.5 text-right text-sm tabular-nums text-slate-700 shadow-sm"
-                                                            :value="rowStockDisplay(row)"
+                                                            :value="rowStockDisplay(rows[i])"
                                                         />
                                                     </td>
                                                     <td class="px-2 py-2">
@@ -217,7 +231,7 @@
                                                             readonly
                                                             tabindex="-1"
                                                             class="w-full cursor-default rounded-lg border border-slate-200 bg-slate-50/95 px-2 py-1.5 text-sm text-slate-700 shadow-sm"
-                                                            :value="rowUnitDisplay(row)"
+                                                            :value="rowUnitDisplay(rows[i])"
                                                         />
                                                     </td>
                                                     <td class="px-2 py-2">
@@ -226,10 +240,9 @@
                                                             inputmode="decimal"
                                                             autocomplete="off"
                                                             class="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-right text-sm tabular-nums shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                                                            x-model="row.qty"
+                                                            x-model="rows[i].qty"
                                                             :id="'audit-qty-' + i"
                                                             :data-audit-qty="i"
-                                                            :name="'lines[' + i + '][quantity_counted]'"
                                                             placeholder="Факт"
                                                             @keydown.enter.prevent="onQtyEnter($event)"
                                                             @keydown.tab="onQtyTab($event)"
@@ -251,18 +264,59 @@
                                     </table>
                                 </div>
                                 <div
-                                    class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/50 px-3 py-2.5"
+                                    class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/50 px-3 py-2.5"
                                     x-show="rows.length > 0"
                                 >
                                     <button
                                         type="button"
                                         class="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-800 shadow-sm hover:bg-indigo-50"
                                         @click="addManualLine()"
+                                        :disabled="linesLoading"
                                     >
                                         <span class="text-base leading-none">+</span>
                                         Добавить строку вручную
                                     </button>
-                                    <span class="text-[11px] text-slate-500">До <span x-text="maxRows"></span> позиций</span>
+                                    <div
+                                        class="flex flex-wrap items-center gap-2 text-[11px] text-slate-600"
+                                        x-show="auditTotalPages() > 1 || rows.length > auditPageSize"
+                                    >
+                                        <span class="tabular-nums">Страница <span x-text="auditPageLabel()"></span></span>
+                                        <div class="flex items-center gap-1">
+                                            <button
+                                                type="button"
+                                                class="rounded border border-slate-200 bg-white px-2 py-0.5 font-medium hover:bg-slate-50 disabled:opacity-40"
+                                                @click="auditPage = Math.max(1, auditPage - 1)"
+                                                :disabled="auditPage <= 1"
+                                            >
+                                                ←
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="rounded border border-slate-200 bg-white px-2 py-0.5 font-medium hover:bg-slate-50 disabled:opacity-40"
+                                                @click="auditPage = Math.min(auditTotalPages(), auditPage + 1)"
+                                                :disabled="auditPage >= auditTotalPages()"
+                                            >
+                                                →
+                                            </button>
+                                        </div>
+                                        <label class="inline-flex items-center gap-1.5">
+                                            <span class="text-slate-500">По</span>
+                                            <select
+                                                x-model.number="auditPageSize"
+                                                class="rounded border border-slate-200 bg-white py-0.5 pl-1.5 pr-6 text-[11px] font-medium"
+                                            >
+                                                <option value="50">50</option>
+                                                <option value="100">100</option>
+                                                <option value="200">200</option>
+                                                <option value="500">500</option>
+                                            </select>
+                                            <span class="text-slate-500">в листе</span>
+                                        </label>
+                                    </div>
+                                    <span class="text-[11px] text-slate-500">
+                                        Всего позиций: <span class="font-semibold tabular-nums text-slate-800" x-text="rows.length"></span>
+                                        <span class="text-slate-400">· макс. <span x-text="maxRows"></span></span>
+                                    </span>
                                 </div>
                             </div>
 
@@ -274,18 +328,18 @@
                                     Отмена
                                 </a>
                                 <button
-                                    type="submit"
-                                    name="commit"
-                                    value="draft"
-                                    class="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-900 shadow-sm hover:bg-indigo-100"
+                                    type="button"
+                                    class="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-900 shadow-sm hover:bg-indigo-100 disabled:opacity-50"
+                                    @click="submitStockAudit('draft')"
+                                    :disabled="auditSubmitting || linesLoading"
                                 >
                                     Сохранить черновик
                                 </button>
                                 <button
-                                    type="submit"
-                                    name="commit"
-                                    value="post"
-                                    class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                                    type="button"
+                                    class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+                                    @click="submitStockAudit('post')"
+                                    :disabled="auditSubmitting || linesLoading"
                                 >
                                     Провести ревизию
                                 </button>

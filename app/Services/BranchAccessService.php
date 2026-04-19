@@ -97,8 +97,8 @@ class BranchAccessService
             return collect($patterns)->contains(fn (string $p) => $p === 'placeholder:'.$key);
         }
 
-        // Выплата зарплаты — тот же доступ, что и к странице «Зарплата» (точное правило admin.payroll).
-        if ($routeName === 'admin.payroll.payout' && in_array('admin.payroll', $patterns, true)) {
+        // Выплата зарплаты и карточка сотрудника — тот же доступ, что и к странице «Зарплата».
+        if (in_array($routeName, ['admin.payroll.payout', 'admin.payroll.show', 'admin.payroll.payout-employee', 'admin.payroll.pay-slip', 'admin.payroll.revoke-payout'], true) && in_array('admin.payroll', $patterns, true)) {
             return true;
         }
 

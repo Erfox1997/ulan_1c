@@ -10,6 +10,7 @@ class ServiceOrderLine extends Model
     protected $fillable = [
         'service_order_id',
         'good_id',
+        'performer_employee_id',
         'article_code',
         'name',
         'unit',
@@ -35,5 +36,10 @@ class ServiceOrderLine extends Model
     public function good(): BelongsTo
     {
         return $this->belongsTo(Good::class);
+    }
+
+    public function performerEmployee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'performer_employee_id');
     }
 }

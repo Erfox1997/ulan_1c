@@ -7,6 +7,7 @@ use App\Models\LegalEntitySale;
 use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
 use App\Services\Esf\EsfXmlGenerator;
+use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -20,11 +21,49 @@ class EsfController extends Controller
         private readonly EsfXmlGenerator $esfXmlGenerator
     ) {}
 
-    public function index(): View
+    public function index(Request $request): View
     {
         $branchId = (int) auth()->user()->branch_id;
 
-        $sales = LegalEntitySale::query()
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+
+        $availableFilterError = null;
+        if (($dateFrom && ! $dateTo) || (! $dateFrom && $dateTo)) {
+            $availableFilterError = 'Укажите обе даты периода или оставьте поля пустыми (тогда показываются последние 50 документов).';
+            $dateFrom = null;
+            $dateTo = null;
+        }
+        if ($dateFrom && $dateTo && $dateFrom > $dateTo) {
+            $availableFilterError = 'Дата «с» не может быть позже даты «по».';
+            $dateFrom = null;
+            $dateTo = null;
+        }
+
+        $availableQuery = LegalEntitySale::query()
+            ->where('branch_id', $branchId)
+            ->where('issue_esf', false)
+            ->with(['warehouse', 'lines']);
+
+        if ($dateFrom && $dateTo) {
+            $availableQuery
+                ->whereDate('document_date', '>=', $dateFrom)
+                ->whereDate('document_date', '<=', $dateTo)
+                ->orderByDesc('document_date')
+                ->orderByDesc('id')
+                ->limit(500);
+            $availableListHint = 'Период: с '.Carbon::parse($dateFrom)->format('d.m.Y').' по '.Carbon::parse($dateTo)->format('d.m.Y').', не более 500 строк.';
+        } else {
+            $availableQuery
+                ->orderByDesc('document_date')
+                ->orderByDesc('id')
+                ->limit(50);
+            $availableListHint = 'Без периода: последние 50 реализаций по дате документа.';
+        }
+
+        $salesAvailable = $availableQuery->get();
+
+        $salesInEsfQueue = LegalEntitySale::query()
             ->where('branch_id', $branchId)
             ->where('issue_esf', true)
             ->with(['warehouse', 'lines'])
@@ -50,18 +89,118 @@ class EsfController extends Controller
             ])->values()->all(),
         ])->values()->all();
 
-        $salesPending = $sales->filter(fn (LegalEntitySale $s) => $s->esf_submitted_at === null)->values();
-        $salesRecorded = $sales->filter(fn (LegalEntitySale $s) => $s->esf_submitted_at !== null)->values();
+        $salesPending = $salesInEsfQueue->filter(fn (LegalEntitySale $s) => $s->esf_submitted_at === null)->values();
+        $salesRecorded = $salesInEsfQueue->filter(fn (LegalEntitySale $s) => $s->esf_submitted_at !== null)->values();
         $esfTabDefault = $salesPending->isNotEmpty() ? 'pending' : 'recorded';
 
+        $hasAnyLegalSales = LegalEntitySale::query()
+            ->where('branch_id', $branchId)
+            ->exists();
+
         return view('admin.esf.index', [
-            'sales' => $sales,
+            'salesAvailable' => $salesAvailable,
             'salesPending' => $salesPending,
             'salesRecorded' => $salesRecorded,
+            'hasAnyLegalSales' => $hasAnyLegalSales,
             'esfTabDefault' => $esfTabDefault,
             'organizations' => $organizations,
             'orgsPayload' => $orgsPayload,
+            'availableFilterDateFrom' => $dateFrom,
+            'availableFilterDateTo' => $dateTo,
+            'availableFilterError' => $availableFilterError,
+            'availableListHint' => $availableListHint,
+            'esfFilter' => [
+                'date_from' => $dateFrom ?? '',
+                'date_to' => $dateTo ?? '',
+            ],
         ]);
+    }
+
+    public function queueBulk(Request $request): RedirectResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:100'],
+            'ids.*' => [
+                'integer',
+                'distinct',
+                Rule::exists('legal_entity_sales', 'id')->where(fn ($q) => $q
+                    ->where('branch_id', $branchId)
+                    ->where('issue_esf', false)),
+            ],
+            'date_from' => ['nullable', 'string'],
+            'date_to' => ['nullable', 'string'],
+        ]);
+
+        $ids = array_values(array_map('intval', $validated['ids']));
+
+        $affected = LegalEntitySale::query()
+            ->where('branch_id', $branchId)
+            ->where('issue_esf', false)
+            ->whereIn('id', $ids)
+            ->update(['issue_esf' => true]);
+
+        return $this->redirectToEsfIndex($request)->with(
+            'status',
+            'Отмечено для ЭСФ документов: '.$affected.'.'
+        );
+    }
+
+    public function queueForEsf(Request $request, LegalEntitySale $legalEntitySale): RedirectResponse
+    {
+        if ((int) $legalEntitySale->branch_id !== (int) auth()->user()->branch_id) {
+            abort(403);
+        }
+
+        if ($legalEntitySale->issue_esf) {
+            return $this->redirectToEsfIndex($request)->with('status', 'По этому документу уже отмечено: требуется ЭСФ.');
+        }
+
+        $legalEntitySale->forceFill(['issue_esf' => true])->save();
+
+        return $this->redirectToEsfIndex($request)->with(
+            'status',
+            'Документ № '.$legalEntitySale->id.' отмечен: нужно выписать ЭСФ. Перейдите на вкладку «Нужно записать».'
+        );
+    }
+
+    public function unqueueFromEsf(Request $request, LegalEntitySale $legalEntitySale): RedirectResponse
+    {
+        if ((int) $legalEntitySale->branch_id !== (int) auth()->user()->branch_id) {
+            abort(403);
+        }
+
+        if (! $legalEntitySale->issue_esf) {
+            return $this->redirectToEsfIndex($request)->with('error', 'Документ не был в очереди на ЭСФ.');
+        }
+
+        if ($legalEntitySale->esf_submitted_at !== null) {
+            return $this->redirectToEsfIndex($request)->with(
+                'error',
+                'Нельзя убрать из очереди: ЭСФ уже отмечена как записанная в налоговой. Сначала снимите отметку «записано» на вкладке «Записано в ЭСФ».'
+            );
+        }
+
+        $legalEntitySale->forceFill([
+            'issue_esf' => false,
+            'esf_exchange_code' => null,
+        ])->save();
+
+        return $this->redirectToEsfIndex($request)->with(
+            'status',
+            'Документ № '.$legalEntitySale->id.' убран из очереди на ЭСФ.'
+        );
+    }
+
+    private function redirectToEsfIndex(Request $request): RedirectResponse
+    {
+        $q = array_filter([
+            'date_from' => $request->input('date_from'),
+            'date_to' => $request->input('date_to'),
+        ], static fn ($v) => $v !== null && $v !== '');
+
+        return redirect()->route('admin.esf.index', $q);
     }
 
     public function downloadXml(Request $request, LegalEntitySale $legalEntitySale): Response|RedirectResponse
@@ -192,7 +331,7 @@ class EsfController extends Controller
         ]);
     }
 
-    public function markSubmitted(LegalEntitySale $legalEntitySale): RedirectResponse
+    public function markSubmitted(Request $request, LegalEntitySale $legalEntitySale): RedirectResponse
     {
         if ((int) $legalEntitySale->branch_id !== (int) auth()->user()->branch_id) {
             abort(403);
@@ -203,19 +342,18 @@ class EsfController extends Controller
         }
 
         if ($legalEntitySale->esf_submitted_at !== null) {
-            return redirect()
-                ->route('admin.esf.index')
-                ->with('status', 'Эта реализация уже отмечена как записанная в ЭСФ.');
+            return $this->redirectToEsfIndex($request)->with('status', 'Эта реализация уже отмечена как записанная в ЭСФ.');
         }
 
         $legalEntitySale->forceFill(['esf_submitted_at' => now()])->save();
 
-        return redirect()
-            ->route('admin.esf.index')
-            ->with('status', 'Отмечено: ЭСФ записана в налоговой по документу № '.$legalEntitySale->id.'.');
+        return $this->redirectToEsfIndex($request)->with(
+            'status',
+            'Отмечено: ЭСФ записана в налоговой по документу № '.$legalEntitySale->id.'.'
+        );
     }
 
-    public function unmarkSubmitted(LegalEntitySale $legalEntitySale): RedirectResponse
+    public function unmarkSubmitted(Request $request, LegalEntitySale $legalEntitySale): RedirectResponse
     {
         if ((int) $legalEntitySale->branch_id !== (int) auth()->user()->branch_id) {
             abort(403);
@@ -230,8 +368,9 @@ class EsfController extends Controller
             'esf_exchange_code' => null,
         ])->save();
 
-        return redirect()
-            ->route('admin.esf.index')
-            ->with('status', 'Отметка «записано в ЭСФ» снята. При следующей выгрузке будет новый код обмена (exchangeCode).');
+        return $this->redirectToEsfIndex($request)->with(
+            'status',
+            'Отметка «записано в ЭСФ» снята. При следующей выгрузке будет новый код обмена (exchangeCode).'
+        );
     }
 }

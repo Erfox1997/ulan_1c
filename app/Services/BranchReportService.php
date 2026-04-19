@@ -14,9 +14,9 @@ use App\Models\PurchaseReceiptLine;
 use App\Models\PurchaseReturnLine;
 use App\Models\RetailSale;
 use App\Models\RetailSaleLine;
+use App\Models\StockSurplusLine;
 use App\Models\StockTransferLine;
 use App\Models\StockWriteoffLine;
-use App\Models\StockSurplusLine;
 use App\Models\Warehouse;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
@@ -32,7 +32,22 @@ class BranchReportService
     /**
      * Остатки товаров: по складу или сводно по филиалу.
      *
-     * @return Collection<int, array{article: string, name: string, unit: string, warehouse: string, quantity: float, amount: ?float}>
+     * @return Collection<int, array{
+     *     article: string,
+     *     name: string,
+     *     unit: string,
+     *     barcode: string,
+     *     category: string,
+     *     sale_price: ?float,
+     *     min_sale_price: ?float,
+     *     oem: string,
+     *     factory_number: string,
+     *     min_stock: ?float,
+     *     warehouse: string,
+     *     quantity: float,
+     *     unit_cost: ?float,
+     *     amount: ?float
+     * }>
      */
     public function goodsStock(int $branchId, int $warehouseId): Collection
     {
@@ -56,16 +71,90 @@ class BranchReportService
             $qty = (float) $b->quantity;
             $cost = $b->unit_cost !== null ? (float) $b->unit_cost : null;
             $amount = $cost !== null ? round($qty * $cost, 2) : null;
+            $g = $b->good;
 
             return [
-                'article' => (string) ($b->good?->article_code ?? ''),
-                'name' => (string) ($b->good?->name ?? ''),
-                'unit' => (string) ($b->good?->unit ?? 'шт.'),
+                'opening_stock_balance_id' => (int) $b->id,
+                'good_id' => (int) $b->good_id,
+                'warehouse_id' => (int) $b->warehouse_id,
+                'article' => (string) ($g?->article_code ?? ''),
+                'name' => (string) ($g?->name ?? ''),
+                'unit' => (string) ($g?->unit ?? 'шт.'),
+                'barcode' => (string) ($g?->barcode ?? ''),
+                'category' => (string) ($g?->category ?? ''),
+                'sale_price' => $g?->sale_price !== null ? (float) $g->sale_price : null,
+                'min_sale_price' => $g?->min_sale_price !== null ? (float) $g->min_sale_price : null,
+                'oem' => (string) ($g?->oem ?? ''),
+                'factory_number' => (string) ($g?->factory_number ?? ''),
+                'min_stock' => $g?->min_stock !== null ? (float) $g->min_stock : null,
                 'warehouse' => $warehouses->get($b->warehouse_id)?->name ?? '—',
                 'quantity' => $qty,
+                'unit_cost' => $cost,
                 'amount' => $amount,
             ];
         })->values();
+    }
+
+    /**
+     * Помечает строки отчёта «Остатки»: для группы с одинаковым непустым ОЭМ суммируется количество по всем строкам;
+     * без ОЭМ каждая строка — отдельная «группа». oem_group_low = true, если сумма < мин. остатка (минимум порога по группе).
+     *
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function enrichGoodsStockWithOemGroupLow(Collection $rows): Collection
+    {
+        if ($rows->isEmpty()) {
+            return $rows;
+        }
+
+        $sumByKey = [];
+        $minByKey = [];
+
+        foreach ($rows as $r) {
+            if (! is_array($r)) {
+                continue;
+            }
+            $key = $this->goodsStockOemGroupKey($r);
+            $qty = (float) ($r['quantity'] ?? 0);
+            $sumByKey[$key] = ($sumByKey[$key] ?? 0.0) + $qty;
+            $ms = $r['min_stock'] ?? null;
+            if ($ms !== null) {
+                $fv = (float) $ms;
+                if (! isset($minByKey[$key])) {
+                    $minByKey[$key] = $fv;
+                } else {
+                    $minByKey[$key] = min($minByKey[$key], $fv);
+                }
+            }
+        }
+
+        return $rows->map(function (array $r) use ($sumByKey, $minByKey): array {
+            $key = $this->goodsStockOemGroupKey($r);
+            $sum = (float) ($sumByKey[$key] ?? 0);
+            $min = $minByKey[$key] ?? null;
+            $r['oem_group_sum'] = $sum;
+            $r['oem_group_min'] = $min;
+            $r['oem_group_low'] = $min !== null && $sum < $min;
+
+            return $r;
+        })->values();
+    }
+
+    /**
+     * Ключ группы для суммирования остатков по ОЭМ.
+     */
+    private function goodsStockOemGroupKey(array $r): string
+    {
+        $oem = trim((string) ($r['oem'] ?? ''));
+        if ($oem !== '') {
+            return 'oem:'.$oem;
+        }
+
+        $article = (string) ($r['article'] ?? '');
+        $wh = (string) ($r['warehouse'] ?? '');
+
+        return 'empty:'.$article."\x1f".$wh;
     }
 
     /**
@@ -104,7 +193,7 @@ class BranchReportService
             ];
         }
 
-        $add = function (string $key, \Illuminate\Support\Collection $sums) use (&$buckets): void {
+        $add = function (string $key, Collection $sums) use (&$buckets): void {
             foreach ($sums as $goodId => $qty) {
                 $gid = (int) $goodId;
                 if (! isset($buckets[$gid])) {
@@ -304,6 +393,136 @@ class BranchReportService
     }
 
     /**
+     * Суммарное изменение остатка по движениям после даты (строго: document_date > on).
+     * Остаток на конец дня on = текущий остаток из opening_stock_balances − delta.
+     *
+     * Ключ: "good_id|warehouse_id" => изменение (+ приход на склад, − расход).
+     *
+     * @return array<string, float>
+     */
+    public function netGoodsStockDeltaAfterDate(int $branchId, int $warehouseId, CarbonInterface $on): array
+    {
+        $onStr = $on->format('Y-m-d');
+        $map = [];
+
+        $add = function (int $goodId, int $whId, float $delta) use (&$map, $warehouseId): void {
+            if ($warehouseId > 0 && $whId !== $warehouseId) {
+                return;
+            }
+            $k = $goodId.'|'.$whId;
+            $map[$k] = ($map[$k] ?? 0.0) + $delta;
+        };
+
+        $purchaseRows = PurchaseReceiptLine::query()
+            ->join('purchase_receipts as pr', 'pr.id', '=', 'purchase_receipt_lines.purchase_receipt_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $purchaseRows->where('pr.warehouse_id', $warehouseId);
+        }
+        foreach ($purchaseRows->get(['purchase_receipt_lines.good_id', 'pr.warehouse_id', 'purchase_receipt_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, (float) $r->quantity);
+        }
+
+        $purchaseReturnRows = PurchaseReturnLine::query()
+            ->join('purchase_returns as pr', 'pr.id', '=', 'purchase_return_lines.purchase_return_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $purchaseReturnRows->where('pr.warehouse_id', $warehouseId);
+        }
+        foreach ($purchaseReturnRows->get(['purchase_return_lines.good_id', 'pr.warehouse_id', 'purchase_return_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, -(float) $r->quantity);
+        }
+
+        $retailRows = RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $retailRows->where('rs.warehouse_id', $warehouseId);
+        }
+        foreach ($retailRows->get(['retail_sale_lines.good_id', 'rs.warehouse_id', 'retail_sale_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, -(float) $r->quantity);
+        }
+
+        $legalRows = LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $legalRows->where('ls.warehouse_id', $warehouseId);
+        }
+        foreach ($legalRows->get(['legal_entity_sale_lines.good_id', 'ls.warehouse_id', 'legal_entity_sale_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, -(float) $r->quantity);
+        }
+
+        $customerReturnRows = CustomerReturnLine::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'customer_return_lines.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $customerReturnRows->where('cr.warehouse_id', $warehouseId);
+        }
+        foreach ($customerReturnRows->get(['customer_return_lines.good_id', 'cr.warehouse_id', 'customer_return_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, (float) $r->quantity);
+        }
+
+        $writeoffRows = StockWriteoffLine::query()
+            ->join('stock_writeoffs as sw', 'sw.id', '=', 'stock_writeoff_lines.stock_writeoff_id')
+            ->where('sw.branch_id', $branchId)
+            ->whereDate('sw.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $writeoffRows->where('sw.warehouse_id', $warehouseId);
+        }
+        foreach ($writeoffRows->get(['stock_writeoff_lines.good_id', 'sw.warehouse_id', 'stock_writeoff_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, -(float) $r->quantity);
+        }
+
+        $surplusRows = StockSurplusLine::query()
+            ->join('stock_surpluses as ss', 'ss.id', '=', 'stock_surplus_lines.stock_surplus_id')
+            ->where('ss.branch_id', $branchId)
+            ->whereDate('ss.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $surplusRows->where('ss.warehouse_id', $warehouseId);
+        }
+        foreach ($surplusRows->get(['stock_surplus_lines.good_id', 'ss.warehouse_id', 'stock_surplus_lines.quantity']) as $r) {
+            $add((int) $r->good_id, (int) $r->warehouse_id, (float) $r->quantity);
+        }
+
+        $transferLines = StockTransferLine::query()
+            ->join('stock_transfers as st', 'st.id', '=', 'stock_transfer_lines.stock_transfer_id')
+            ->where('st.branch_id', $branchId)
+            ->whereDate('st.document_date', '>', $onStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false));
+        if ($warehouseId > 0) {
+            $transferLines->where(function ($q) use ($warehouseId) {
+                $q->where('st.from_warehouse_id', $warehouseId)
+                    ->orWhere('st.to_warehouse_id', $warehouseId);
+            });
+        }
+        foreach ($transferLines->get([
+            'stock_transfer_lines.good_id',
+            'stock_transfer_lines.quantity',
+            'st.from_warehouse_id',
+            'st.to_warehouse_id',
+        ]) as $r) {
+            $qty = (float) $r->quantity;
+            $add((int) $r->good_id, (int) $r->from_warehouse_id, -$qty);
+            $add((int) $r->good_id, (int) $r->to_warehouse_id, $qty);
+        }
+
+        return $map;
+    }
+
+    /**
      * Остатки по денежным счетам на дату.
      *
      * @return Collection<int, array{id: int, label: string, currency: string, balance: float}>
@@ -332,11 +551,15 @@ class BranchReportService
     }
 
     /**
-     * Продажи по товарам (количество и выручка).
+     * Продажи по товарам (количество, выручка, доля в % и сводка по категориям).
      *
-     * @return Collection<int, array{good_id: int, article: string, name: string, unit: string, quantity: float, revenue: float}>
+     * @return array{
+     *     rows: Collection<int, array{good_id: int, article: string, name: string, unit: string, category: string, quantity: float, revenue: float, revenue_share_pct: float}>,
+     *     categoryRows: Collection<int, array{category: string, revenue: float, revenue_share_pct: float}>,
+     *     totalRevenue: float
+     * }
      */
-    public function salesByGoods(int $branchId, CarbonInterface $from, CarbonInterface $to): Collection
+    public function salesByGoods(int $branchId, CarbonInterface $from, CarbonInterface $to): array
     {
         $fromStr = $from->format('Y-m-d');
         $toStr = $to->format('Y-m-d');
@@ -398,18 +621,56 @@ class BranchReportService
             ->get()
             ->keyBy('id');
 
-        return $mergedCollection->map(function (array $item) use ($goods) {
+        $rows = $mergedCollection->map(function (array $item) use ($goods) {
             $g = $goods->get($item['good_id']);
+            $cat = trim((string) ($g?->category ?? ''));
+            if ($cat === '') {
+                $cat = 'Без категории';
+            }
 
             return [
                 'good_id' => $item['good_id'],
                 'article' => (string) ($g?->article_code ?? ''),
                 'name' => (string) ($g?->name ?? ''),
                 'unit' => (string) ($g?->unit ?? 'шт.'),
+                'category' => $cat,
                 'quantity' => $item['quantity'],
                 'revenue' => round($item['revenue'], 2),
             ];
         })->sortByDesc('revenue')->values();
+
+        $totalRevenue = round((float) $rows->sum('revenue'), 2);
+
+        $rows = $rows->map(function (array $row) use ($totalRevenue): array {
+            $pct = $totalRevenue > 0.0
+                ? round($row['revenue'] / $totalRevenue * 100, 2)
+                : 0.0;
+
+            return $row + ['revenue_share_pct' => $pct];
+        });
+
+        $categoryRows = $rows
+            ->groupBy('category')
+            ->map(function (Collection $group) use ($totalRevenue): array {
+                $revenue = round((float) $group->sum('revenue'), 2);
+                $pct = $totalRevenue > 0.0
+                    ? round($revenue / $totalRevenue * 100, 2)
+                    : 0.0;
+
+                return [
+                    'category' => (string) $group->first()['category'],
+                    'revenue' => $revenue,
+                    'revenue_share_pct' => $pct,
+                ];
+            })
+            ->sortByDesc('revenue')
+            ->values();
+
+        return [
+            'rows' => $rows,
+            'categoryRows' => $categoryRows,
+            'totalRevenue' => $totalRevenue,
+        ];
     }
 
     /**

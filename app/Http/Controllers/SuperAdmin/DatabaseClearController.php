@@ -29,6 +29,6 @@ class DatabaseClearController extends Controller
 
         return redirect()
             ->route('superadmin.dashboard')
-            ->with('status', 'Данные удалены. Учётные записи пользователей сохранены. Назначьте филиалы заново при необходимости.');
+            ->with('status', 'Данные удалены. Сохранены: филиалы, склады, организации, пользователи и права доступа филиалов.');
     }
 }

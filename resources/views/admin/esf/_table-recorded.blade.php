@@ -1,3 +1,6 @@
+@php
+    $esfFilter = $esfFilter ?? ['date_from' => '', 'date_to' => ''];
+@endphp
 <table class="w-full min-w-[900px] border-collapse border border-slate-300 text-sm">
     <thead>
         <tr class="bg-slate-100">
@@ -26,6 +29,8 @@
                     <div class="flex flex-col gap-2">
                         <form method="POST" action="{{ route('admin.esf.submitted.clear', $sale) }}">
                             @csrf
+                            <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
+                            <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
                             <button
                                 type="submit"
                                 class="w-full rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"

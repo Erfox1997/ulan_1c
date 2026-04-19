@@ -30,10 +30,17 @@
             </div>
         @endif
 
+        @if ((float) $retailSale->debt_amount > 0.004)
+            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                У этой продажи был долг {{ number_format((float) $retailSale->debt_amount, 2, ',', ' ') }} сом. После сохранения правок долг будет сброшен (оплата считается полной по выбранному счёту).
+            </div>
+        @endif
+
         <script>
             window.__retailPosInit = {
                 goodsSearchUrl: @json($goodsSearchUrl),
                 warehouseId: {{ (int) $retailSale->warehouse_id }},
+                defaultWarehouseId: {{ (int) ($retailSale->warehouse_id ?: 0) }},
                 editMode: true,
                 initialCart: @json($linesForJs),
             };
@@ -73,14 +80,22 @@
                             <template x-for="row in results" :key="row.id">
                                 <button
                                     type="button"
-                                    class="flex w-full flex-col items-start gap-0.5 border-b border-slate-50 px-4 py-2.5 text-left transition hover:bg-emerald-50/80"
+                                    class="flex w-full flex-col items-start gap-0.5 border-b px-4 py-2.5 text-left transition"
+                                    :class="goodsRowOutOfStock(row) ? 'border-red-100 bg-red-50 hover:bg-red-100/90' : 'border-slate-50 hover:bg-emerald-50/80'"
                                     @click="addProduct(row)"
                                 >
-                                    <span class="font-medium text-slate-900" x-text="row.name"></span>
+                                    <span class="font-medium" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>
                                     <span class="text-xs font-medium text-teal-700" x-show="row.is_service === true || row.is_service === 1">Услуга</span>
-                                    <span class="text-xs text-slate-600" x-show="row.stock_quantity != null && row.stock_quantity !== ''">
-                                        Остаток: <span class="font-mono" x-text="row.stock_quantity"></span>
-                                        <span x-show="row.sale_price != null && row.sale_price !== ''" class="text-emerald-700">
+                                    <span
+                                        class="text-xs"
+                                        x-show="warehouseId > 0 && !(row.is_service === true || row.is_service === 1)"
+                                        :class="goodsRowOutOfStock(row) ? 'font-medium text-red-700' : 'text-slate-600'"
+                                    >
+                                        Остаток: <span class="font-mono tabular-nums" x-text="goodsRowStockDisplay(row)"></span>
+                                        <span
+                                            x-show="!goodsRowOutOfStock(row) && row.sale_price != null && row.sale_price !== ''"
+                                            class="text-emerald-700"
+                                        >
                                             · <span x-text="row.sale_price"></span> сом
                                         </span>
                                     </span>
@@ -145,9 +160,16 @@
                             </div>
                         </template>
                         <template x-for="(line, idx) in cart" :key="`${idx}-${line.good_id}-${line.article_code}`">
-                            <div class="flex flex-col gap-3 px-4 py-3.5 transition-colors hover:bg-slate-50/90 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+                            <div
+                                class="flex flex-col gap-3 px-4 py-3.5 transition-colors sm:flex-row sm:items-center sm:gap-4 sm:px-5"
+                                :class="cartLineStockDanger(line) ? 'bg-red-50/70 hover:bg-red-50/85' : 'hover:bg-slate-50/90'"
+                            >
                                 <div class="min-w-0 flex-1">
-                                    <p class="text-[15px] font-semibold leading-snug text-slate-900" x-text="line.name"></p>
+                                    <p
+                                        class="text-[15px] font-semibold leading-snug"
+                                        :class="cartLineStockDanger(line) ? 'text-red-950' : 'text-slate-900'"
+                                        x-text="line.name"
+                                    ></p>
                                     <input type="hidden" :name="`lines[${idx}][article_code]`" :value="line.article_code" />
                                 </div>
                                 <div class="flex flex-wrap items-center gap-2 sm:justify-end">

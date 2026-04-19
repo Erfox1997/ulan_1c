@@ -4,7 +4,8 @@ namespace App\Services;
 
 use App\Models\CashMovement;
 use App\Models\OrganizationBankAccount;
-use App\Models\RetailSale;
+use App\Models\RetailSalePayment;
+use App\Models\RetailSaleRefund;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
@@ -36,11 +37,20 @@ class CashLedgerService
         $opening = (float) $acc->opening_balance;
         $dateStr = $at->copy()->startOfDay()->toDateString();
 
-        $r = (float) (RetailSale::query()
-            ->where('branch_id', $branchId)
+        $r = (float) (RetailSalePayment::query()
+            ->whereHas('retailSale', function ($q) use ($branchId, $dateStr) {
+                $q->where('branch_id', $branchId)
+                    ->where('document_date', '<', $dateStr);
+            })
             ->where('organization_bank_account_id', $accountId)
-            ->where('document_date', '<', $dateStr)
-            ->sum('total_amount'));
+            ->sum('amount'));
+
+        $retailRefundOut = (float) (RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '<', $dateStr)
+            ->where('retail_sale_refunds.organization_bank_account_id', $accountId)
+            ->sum('retail_sale_refunds.amount'));
 
         $inc = (float) (CashMovement::query()
             ->where('branch_id', $branchId)
@@ -77,7 +87,7 @@ class CashLedgerService
             ->where('occurred_on', '<', $dateStr)
             ->sum('amount'));
 
-        return $opening + $r + $inc + $tIn - $outS - $outO - $tOut;
+        return $opening + $r - $retailRefundOut + $inc + $tIn - $outS - $outO - $tOut;
     }
 
     /**
@@ -96,13 +106,16 @@ class CashLedgerService
             ->orderByDesc('id')
             ->get();
 
-        $retail = RetailSale::query()
-            ->where('branch_id', $branchId)
-            ->with('organizationBankAccount')
-            ->when($from, fn ($q) => $q->whereDate('document_date', '>=', $from))
-            ->when($to, fn ($q) => $q->whereDate('document_date', '<=', $to))
-            ->orderByDesc('document_date')
-            ->orderByDesc('id')
+        $retailPayments = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->when($from, fn ($q) => $q->whereDate('rs.document_date', '>=', $from))
+            ->when($to, fn ($q) => $q->whereDate('rs.document_date', '<=', $to))
+            ->orderByDesc('rs.document_date')
+            ->orderByDesc('rs.id')
+            ->orderByDesc('retail_sale_payments.id')
+            ->select('retail_sale_payments.*')
+            ->with(['retailSale', 'organizationBankAccount'])
             ->get();
 
         $rows = collect();
@@ -111,22 +124,67 @@ class CashLedgerService
             $rows->push($this->rowFromCashMovement($m));
         }
 
-        foreach ($retail as $sale) {
-            $acc = $sale->organizationBankAccount;
+        foreach ($retailPayments as $payment) {
+            $sale = $payment->retailSale;
+            if ($sale === null) {
+                continue;
+            }
+            $acc = $payment->organizationBankAccount;
+            $sortId = (int) ($sale->id * 100000 + $payment->id);
             $rows->push([
                 'sort_at' => $sale->document_date->copy()->startOfDay()->timestamp,
                 'sort_bucket' => 0,
-                'sort_id' => (int) $sale->id,
+                'sort_id' => $sortId,
                 'date' => $sale->document_date->format('d.m.Y'),
                 'title' => 'Розничная продажа (ФЛ)',
                 'account_label' => $acc?->movementReportLabel() ?? '—',
-                'in' => (float) $sale->total_amount,
+                'in' => (float) $payment->amount,
                 'out' => 0.0,
                 'detail' => 'Документ № '.$sale->id,
-                'source' => 'retail_sale',
-                'source_id' => $sale->id,
+                'source' => 'retail_sale_payment',
+                'source_id' => $payment->id,
                 'affected_account_ids' => $acc ? [$acc->id] : [],
-                'delta_by_account' => $acc ? [$acc->id => (float) $sale->total_amount] : [],
+                'delta_by_account' => $acc ? [$acc->id => (float) $payment->amount] : [],
+            ]);
+        }
+
+        $retailRefunds = RetailSaleRefund::query()
+            ->whereHas('customerReturn', function ($q) use ($branchId, $from, $to) {
+                $q->where('branch_id', $branchId);
+                if ($from) {
+                    $q->whereDate('document_date', '>=', $from);
+                }
+                if ($to) {
+                    $q->whereDate('document_date', '<=', $to);
+                }
+            })
+            ->with(['customerReturn', 'retailSale', 'organizationBankAccount'])
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($retailRefunds as $refund) {
+            $cr = $refund->customerReturn;
+            $sale = $refund->retailSale;
+            $acc = $refund->organizationBankAccount;
+            if ($cr === null || $sale === null) {
+                continue;
+            }
+            $sortId = (int) (300000000000 + $refund->id);
+            $amt = (float) $refund->amount;
+            $rows->push([
+                'sort_at' => $cr->document_date->copy()->startOfDay()->timestamp,
+                'sort_bucket' => 0,
+                'sort_id' => $sortId,
+                'date' => $cr->document_date->format('d.m.Y'),
+                'title' => 'Возврат покупателю (розница, ФЛ)',
+                'account_label' => $acc?->movementReportLabel() ?? '—',
+                'in' => 0.0,
+                'out' => $amt,
+                'detail' => 'Чек № '.$sale->id.' · возврат от клиента',
+                'source' => 'retail_sale_refund',
+                'source_id' => $refund->id,
+                'affected_account_ids' => $acc ? [$acc->id] : [],
+                'delta_by_account' => $acc ? [$acc->id => -$amt] : [],
             ]);
         }
 
@@ -269,16 +327,38 @@ class CashLedgerService
             }
         }
 
-        $retail = RetailSale::query()
-            ->where('branch_id', $branchId)
-            ->whereDate('document_date', '>=', $fromStr)
-            ->whereDate('document_date', '<=', $toStr)
+        $retailPayments = RetailSalePayment::query()
+            ->whereHas('retailSale', function ($q) use ($branchId, $fromStr, $toStr) {
+                $q->where('branch_id', $branchId)
+                    ->whereDate('document_date', '>=', $fromStr)
+                    ->whereDate('document_date', '<=', $toStr);
+            })
+            ->with('retailSale')
             ->get();
 
-        foreach ($retail as $sale) {
+        foreach ($retailPayments as $payment) {
+            $sale = $payment->retailSale;
+            if ($sale === null) {
+                continue;
+            }
             $d = $sale->document_date->format('Y-m-d');
             $ensure($d);
-            $bucket[$d]['income'] += (float) $sale->total_amount;
+            $bucket[$d]['income'] += (float) $payment->amount;
+        }
+
+        $refundSums = RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->groupBy('cr.document_date')
+            ->selectRaw('cr.document_date as d, SUM(retail_sale_refunds.amount) as s')
+            ->get();
+
+        foreach ($refundSums as $rs) {
+            $d = $rs->d instanceof \Carbon\CarbonInterface ? $rs->d->format('Y-m-d') : (string) $rs->d;
+            $ensure($d);
+            $bucket[$d]['income'] -= (float) $rs->s;
         }
 
         ksort($bucket);
@@ -336,18 +416,32 @@ class CashLedgerService
             $net[$accountId] = round(($net[$accountId] ?? 0.0) + $delta, 2);
         };
 
-        $retailRows = RetailSale::query()
-            ->where('branch_id', $branchId)
-            ->where('created_at', '>=', $from)
-            ->where('created_at', '<=', $until)
-            ->whereNotNull('organization_bank_account_id')
-            ->when($cashierUserId !== null, fn ($q) => $q->where('user_id', $cashierUserId))
-            ->selectRaw('organization_bank_account_id as aid, SUM(total_amount) as s')
-            ->groupBy('organization_bank_account_id')
+        $retailRows = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->where('rs.created_at', '>=', $from)
+            ->where('rs.created_at', '<=', $until)
+            ->when($cashierUserId !== null, fn ($q) => $q->where('rs.user_id', $cashierUserId))
+            ->selectRaw('retail_sale_payments.organization_bank_account_id as aid, SUM(retail_sale_payments.amount) as s')
+            ->groupBy('retail_sale_payments.organization_bank_account_id')
             ->get();
 
         foreach ($retailRows as $row) {
             $add((int) $row->aid, (float) $row->s);
+        }
+
+        $refundShift = RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->where('retail_sale_refunds.created_at', '>=', $from)
+            ->where('retail_sale_refunds.created_at', '<=', $until)
+            ->when($cashierUserId !== null, fn ($q) => $q->whereHas('retailSale', fn ($rq) => $rq->where('user_id', $cashierUserId)))
+            ->selectRaw('retail_sale_refunds.organization_bank_account_id as aid, SUM(retail_sale_refunds.amount) as s')
+            ->groupBy('retail_sale_refunds.organization_bank_account_id')
+            ->get();
+
+        foreach ($refundShift as $row) {
+            $add((int) $row->aid, -(float) $row->s);
         }
 
         $movements = CashMovement::query()

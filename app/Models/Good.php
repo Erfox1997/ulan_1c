@@ -17,14 +17,22 @@ class Good extends Model
         'category',
         'unit',
         'sale_price',
+        'wholesale_price',
         'is_service',
+        'min_sale_price',
+        'oem',
+        'factory_number',
+        'min_stock',
     ];
 
     protected function casts(): array
     {
         return [
             'sale_price' => 'decimal:2',
+            'wholesale_price' => 'decimal:2',
             'is_service' => 'boolean',
+            'min_sale_price' => 'decimal:2',
+            'min_stock' => 'decimal:4',
         ];
     }
 

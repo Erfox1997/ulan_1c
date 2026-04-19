@@ -3,9 +3,27 @@
     $org = $organization;
     $orgName = $org?->name ?? ($branch->name ?? '—');
     $amountWords = InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalSum);
+    $saleInvoiceAggregates = $saleInvoiceAggregates ?? [];
+    $invoiceFormat = $invoiceFormat ?? 'summary';
     $linesCount = 0;
     foreach ($salesOrdered as $s) {
-        $linesCount += $s->lines->count();
+        if ($invoiceFormat === 'detail') {
+            $linesCount += $s->lines->count();
+            continue;
+        }
+        $agg = $saleInvoiceAggregates[$s->id] ?? ['goods' => '0', 'services' => '0'];
+        $useAgg = $s->lines->isNotEmpty()
+            && (bccomp($agg['goods'], '0', 2) === 1 || bccomp($agg['services'], '0', 2) === 1);
+        if ($useAgg) {
+            if (bccomp($agg['goods'], '0', 2) === 1) {
+                $linesCount++;
+            }
+            if (bccomp($agg['services'], '0', 2) === 1) {
+                $linesCount++;
+            }
+        } else {
+            $linesCount += $s->lines->count();
+        }
     }
 @endphp
 <!DOCTYPE html>
@@ -85,6 +103,10 @@
         table.grid td.c { text-align: center; }
         table.grid th.num,
         table.grid td.num { text-align: right; }
+        table.grid tr.subsection td {
+            font-weight: bold;
+            background: #f1f5f9;
+        }
         .totals-wrap {
             display: table;
             width: 100%;
@@ -107,11 +129,6 @@
             margin-top: 10px;
             font-weight: bold;
             font-size: 10pt;
-        }
-        .notice {
-            margin-top: 28px;
-            font-size: 9pt;
-            color: #334155;
         }
         .sale-block {
             margin: 18px 0 20px 0;
@@ -180,12 +197,13 @@
                 $idsJoined = implode(',', $saleIds);
                 $printUrlBase = route('admin.trade-invoices.merged-print');
                 $pdfUrlBase = route('admin.trade-invoices.merged-pdf');
+                $fmtPart = $invoiceFormat === 'detail' ? '&invoice_format=detail' : '';
                 $pdfOrgSuffix = $organization ? '&organization_id='.$organization->id : '';
             @endphp
             <div class="no-print" style="margin:10px 0 12px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;font-size:10pt;">
                 <span style="color:#334155;margin-right:8px;">Организация в шапке:</span>
                 <select
-                    onchange="var v=this.value||''; var q='sale_ids={{ $idsJoined }}' + (v?'&organization_id='+v:''); location.href='{{ $printUrlBase }}?' + q"
+                    onchange="var v=this.value||''; var q='sale_ids={{ $idsJoined }}' + (v?'&organization_id='+v:'') + '{{ $fmtPart }}'; location.href='{{ $printUrlBase }}?' + q"
                     style="max-width:min(28rem,100%);padding:4px 8px;font-size:10pt;border:1px solid #94a3b8;border-radius:4px;"
                 >
                     @foreach ($printOrganizations as $o)
@@ -193,7 +211,7 @@
                     @endforeach
                 </select>
                 <a
-                    href="{{ $pdfUrlBase }}?sale_ids={{ $idsJoined }}{{ $pdfOrgSuffix }}"
+                    href="{{ $pdfUrlBase }}?sale_ids={{ $idsJoined }}{{ $pdfOrgSuffix }}{{ $fmtPart }}"
                     style="margin-left:12px;font-size:10pt;color:#059669;text-decoration:underline;"
                 >Скачать PDF</a>
             </div>
@@ -263,6 +281,10 @@
                     $saleSum = bcadd($saleSum, (string) $ln->line_sum, 2);
                 }
             }
+            $agg = $saleInvoiceAggregates[$sale->id] ?? ['goods' => '0', 'services' => '0'];
+            $useAggregateInvoiceRows = $invoiceFormat !== 'detail'
+                && $saleLines->isNotEmpty()
+                && (bccomp($agg['goods'], '0', 2) === 1 || bccomp($agg['services'], '0', 2) === 1);
         @endphp
         <section class="sale-block">
             <h2 class="sale-heading">Реализация № {{ $sale->id }} от {{ $sale->document_date->format('d.m.Y') }}</h2>
@@ -281,15 +303,42 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach ($saleLines as $i => $line)
-                        <tr>
-                            <td class="c">{{ $i + 1 }}</td>
-                            <td>{{ $line->name }}</td>
-                            <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
-                            <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
-                            <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+                    @if ($useAggregateInvoiceRows)
+                        <tr class="subsection">
+                            <td colspan="5">Техническое обслуживание и ремонт автомобилей</td>
                         </tr>
-                    @endforeach
+                        @php $rowNum = 0; @endphp
+                        @if (bccomp($agg['goods'], '0', 2) === 1)
+                            @php $rowNum++; @endphp
+                            <tr>
+                                <td class="c">{{ $rowNum }}</td>
+                                <td>Оплата за запасные части</td>
+                                <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
+                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
+                            </tr>
+                        @endif
+                        @if (bccomp($agg['services'], '0', 2) === 1)
+                            @php $rowNum++; @endphp
+                            <tr>
+                                <td class="c">{{ $rowNum }}</td>
+                                <td>Оплата за услуги ремонта</td>
+                                <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
+                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
+                            </tr>
+                        @endif
+                    @else
+                        @foreach ($saleLines as $i => $line)
+                            <tr>
+                                <td class="c">{{ $i + 1 }}</td>
+                                <td>{{ $line->name }}</td>
+                                <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
+                                <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
+                                <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+                            </tr>
+                        @endforeach
+                    @endif
                 </tbody>
             </table>
             <div class="totals-wrap" style="margin-top:6px;">
@@ -318,9 +367,5 @@
         Всего наименований {{ $linesCount }}, на сумму {{ InvoiceNakladnayaFormatter::formatMoney((float) $totalSum) }}
     </div>
     <div class="amount-words">{{ $amountWords }}</div>
-
-    <p class="notice">
-        Счёт действителен до оплаты. НДС / НСП уточняйте по договору и учётной политике.
-    </p>
 </body>
 </html>

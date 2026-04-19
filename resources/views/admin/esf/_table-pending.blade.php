@@ -1,3 +1,6 @@
+@php
+    $esfFilter = $esfFilter ?? ['date_from' => '', 'date_to' => ''];
+@endphp
 <table class="w-full min-w-[900px] border-collapse border border-slate-300 text-sm">
     <thead>
         <tr class="bg-slate-100">
@@ -129,12 +132,26 @@
                         </a>
                         <form method="POST" action="{{ route('admin.esf.submitted', $sale) }}">
                             @csrf
+                            <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
+                            <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
                             <button
                                 type="submit"
                                 class="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
                                 onclick="return confirm('Отметить, что ЭСФ уже записана в налоговой? Повторная выгрузка будет недоступна, пока не снять отметку.');"
                             >
                                 Записано в ЭСФ
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ route('admin.esf.unqueue', $sale) }}">
+                            @csrf
+                            <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
+                            <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
+                            <button
+                                type="submit"
+                                class="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                                onclick="return confirm('Убрать документ из очереди на ЭСФ? Отметку «нужна ЭСФ» можно будет выставить снова из списка выше.');"
+                            >
+                                Убрать из очереди
                             </button>
                         </form>
                         <a href="{{ route('admin.legal-entity-sales.edit', $sale) }}" class="text-center text-[11px] text-emerald-700 underline">Документ</a>

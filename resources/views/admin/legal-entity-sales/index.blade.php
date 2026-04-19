@@ -28,42 +28,56 @@
                 }"
             >
                 <div class="rounded-xl border border-slate-200/90 bg-white px-4 py-4 shadow-sm ring-1 ring-slate-900/5 sm:px-6">
-                    <div class="flex w-full min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-                            <h2 class="text-lg font-semibold tracking-tight text-slate-900">Реализация покупателям (юрлица)</h2>
-                            @if ($selectedWarehouseId !== 0)
-                                <a
-                                    href="{{ route('admin.legal-entity-sales.create', ['warehouse_id' => $selectedWarehouseId]) }}"
-                                    class="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
-                                >
-                                    <span class="text-sm leading-none text-slate-500">+</span>
-                                    Создать
-                                </a>
-                            @else
-                                <span class="text-xs text-slate-500">Выберите склад, чтобы создать документ.</span>
-                            @endif
-                        </div>
-
-                        <form
-                            method="GET"
-                            action="{{ route('admin.legal-entity-sales.index') }}"
-                            class="flex w-full min-w-0 shrink-0 lg:w-auto lg:max-w-md lg:justify-end"
-                        >
-                            <div class="flex w-full min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/90 px-3 py-1.5 sm:inline-flex sm:w-auto sm:py-2">
-                                <label for="les_warehouse" class="shrink-0 text-xs font-medium text-slate-600">Склад</label>
-                                <select
-                                    id="les_warehouse"
-                                    name="warehouse_id"
-                                    class="min-w-0 flex-1 cursor-pointer rounded-md border border-slate-200 bg-white py-1.5 pl-2.5 pr-8 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/25 sm:min-w-[14rem] sm:flex-initial"
-                                    onchange="this.form.submit()"
-                                >
-                                    @foreach ($warehouses as $w)
-                                        <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
-                                    @endforeach
-                                </select>
+                    <form
+                        id="les-index-filter-form"
+                        data-journal-filter-form
+                        method="GET"
+                        action="{{ route('admin.legal-entity-sales.index') }}"
+                        class="space-y-4"
+                    >
+                        <input type="hidden" name="good_id" value="{{ ($filterGoodId ?? 0) > 0 ? (int) $filterGoodId : '' }}">
+                        <div class="flex w-full min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                                <h2 class="text-lg font-semibold tracking-tight text-slate-900">Реализация покупателям (юрлица)</h2>
+                                @if ($selectedWarehouseId !== 0)
+                                    <a
+                                        href="{{ route('admin.legal-entity-sales.create', ['warehouse_id' => $selectedWarehouseId]) }}"
+                                        class="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+                                    >
+                                        <span class="text-sm leading-none text-slate-500">+</span>
+                                        Создать
+                                    </a>
+                                @else
+                                    <span class="text-xs text-slate-500">Выберите склад, чтобы создать документ.</span>
+                                @endif
                             </div>
-                        </form>
-                    </div>
+
+                            <div class="flex w-full min-w-0 shrink-0 lg:w-auto lg:max-w-md lg:justify-end">
+                                <div class="flex w-full min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/90 px-3 py-1.5 sm:inline-flex sm:w-auto sm:py-2">
+                                    <label for="les_warehouse" class="shrink-0 text-xs font-medium text-slate-600">Склад</label>
+                                    <select
+                                        id="les_warehouse"
+                                        name="warehouse_id"
+                                        class="min-w-0 flex-1 cursor-pointer rounded-md border border-slate-200 bg-white py-1.5 pl-2.5 pr-8 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/25 sm:min-w-[14rem] sm:flex-initial"
+                                        onchange="this.form.submit()"
+                                    >
+                                        @foreach ($warehouses as $w)
+                                            <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
+                                        @endforeach
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        @include('admin.partials.journal-good-filter', [
+                            'formSelector' => '#les-index-filter-form',
+                            'goodsSearchUrl' => route('admin.goods.search'),
+                            'warehouseId' => $selectedWarehouseId,
+                            'filterGoodId' => (int) ($filterGoodId ?? 0),
+                            'filterGoodSummary' => $filterGoodSummary ?? '',
+                            'returnsUrl' => route('admin.customer-returns.index'),
+                            'boxed' => false,
+                        ])
+                    </form>
                 </div>
 
                 <div class="mt-10 overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-900/5">
@@ -125,7 +139,6 @@
                                         <th scope="col" class="border border-slate-300 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Дата</th>
                                         <th scope="col" class="border border-slate-300 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Склад</th>
                                         <th scope="col" class="border border-slate-300 px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Покупатель</th>
-                                        <th scope="col" class="border border-slate-300 px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700">ЭСФ</th>
                                         <th scope="col" class="border border-slate-300 px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Счёт на оплату отправлен">Счёт</th>
                                         <th scope="col" class="border border-slate-300 px-3 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-700">Строк</th>
                                         <th scope="col" class="border border-slate-300 px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700"> </th>
@@ -153,13 +166,6 @@
                                             <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-slate-900">{{ $r->document_date->format('d.m.Y') }}</td>
                                             <td class="border border-slate-300 px-3 py-2.5 text-slate-900">{{ $r->warehouse->name }}</td>
                                             <td class="border border-slate-300 px-3 py-2.5 text-slate-800">{{ $r->buyer_name !== '' ? $r->buyer_name : '—' }}</td>
-                                            <td class="border border-slate-300 px-2 py-2.5 text-center text-xs text-slate-700">
-                                                @if ($r->issue_esf)
-                                                    <span class="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-900">да</span>
-                                                @else
-                                                    —
-                                                @endif
-                                            </td>
                                             <td class="border border-slate-300 px-2 py-2.5 text-center text-xs text-slate-700">
                                                 @if ($r->payment_invoice_sent)
                                                     <span class="rounded bg-sky-100 px-1.5 py-0.5 font-medium text-sky-900">отпр.</span>

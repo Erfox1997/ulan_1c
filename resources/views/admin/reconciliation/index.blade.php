@@ -17,54 +17,13 @@
     ];
     $isList = $counterparty === null;
     $isBuyers = $mode === 'buyers';
-    $totalPeriodPurchases = '0';
-    $totalPaid = '0';
-    $totalDebt = '0';
-    $totalOpeningCard = '0';
-    if ($isList && $summaryRows->isNotEmpty()) {
-        foreach ($summaryRows as $sr) {
-            $totalPeriodPurchases = bcadd($totalPeriodPurchases, (string) $sr['period_purchases'], 2);
-            $totalPaid = bcadd($totalPaid, (string) $sr['paid'], 2);
-            $totalDebt = bcadd($totalDebt, (string) $sr['debt'], 2);
-            $totalOpeningCard = bcadd($totalOpeningCard, (string) ($sr['opening_debt_card'] ?? '0'), 2);
-        }
-    }
-
-    $buyerDocs = collect();
-    $buyerPaymentsList = collect();
-    $supplierDocs = collect();
-    $supplierPaymentsList = collect();
+    $exportQuery = [
+        'mode' => $mode,
+        'date_from' => $from->format('Y-m-d'),
+        'date_to' => $to->format('Y-m-d'),
+    ];
     if ($counterparty !== null) {
-        $buyerDocs = $buyerRows->whereIn('kind', ['sale', 'return'])->values();
-        $openingBuyerCard = number_format((float) ($counterparty->opening_debt_as_buyer ?? 0), 2, '.', '');
-        $buyerDocs = collect([
-            [
-                'sort' => $from->format('Y-m-d').'-0-0',
-                'date' => $from,
-                'kind' => 'opening_card',
-                'title' => 'Начальные долги',
-                'detail' => '',
-                'debit' => $openingBuyerCard,
-                'credit' => null,
-            ],
-        ])->merge($buyerDocs);
-
-        $buyerPaymentsList = $buyerRows->where('kind', 'payment');
-        $supplierDocs = $supplierRows->whereIn('kind', ['purchase', 'purchase_return'])->values();
-        $openingSupplierCard = number_format((float) ($counterparty->opening_debt_as_supplier ?? 0), 2, '.', '');
-        $supplierDocs = collect([
-            [
-                'sort' => $from->format('Y-m-d').'-0-0',
-                'date' => $from,
-                'kind' => 'opening_card',
-                'title' => 'Начальные долги',
-                'detail' => '',
-                'debit' => null,
-                'credit' => $openingSupplierCard,
-            ],
-        ])->merge($supplierDocs);
-
-        $supplierPaymentsList = $supplierRows->where('kind', 'payment');
+        $exportQuery['counterparty_id'] = $counterparty->id;
     }
 @endphp
 <x-admin-layout pageTitle="Сверка с контрагентами" main-class="px-3 py-5 sm:px-5 lg:px-8 max-w-[1600px] mx-auto w-full">
@@ -216,6 +175,18 @@
                 color: #1f2937;
                 letter-spacing: 0.01em;
             }
+            .rec-1c-subhead.rec-1c-subhead-row {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+            }
+            .rec-1c-subhead a.rec-1c-btn,
+            .rec-1c-toolbar a.rec-1c-btn {
+                text-decoration: none;
+                color: inherit;
+            }
             .rec-1c-body { padding: 12px 14px; }
             .rec-1c-table-wrap {
                 border-radius: 6px;
@@ -330,6 +301,33 @@
             }
             .rec-1c-scope .text-neutral-600 { color: #6b7280 !important; }
             .rec-1c-scope .font-medium { font-weight: 600; }
+            .rec-summary-debt {
+                margin-top: 14px;
+                padding: 12px 14px;
+                border: 1px solid #c5cad3;
+                border-radius: 6px;
+                background: linear-gradient(180deg, #fafbfc 0%, #f3f4f6 100%);
+                font-size: 12.5px;
+                line-height: 1.5;
+            }
+            .rec-summary-debt .rec-summary-title {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: #4b5563;
+                margin-bottom: 8px;
+            }
+            .rec-summary-debt .rec-summary-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px 24px;
+            }
+            .rec-summary-debt .rec-summary-note {
+                margin-top: 8px;
+                font-size: 11px;
+                color: #6b7280;
+            }
         </style>
 
         <div class="rec-1c-scope space-y-3">
@@ -376,6 +374,16 @@
                         <div class="pb-0.5">
                             <button type="submit" class="rec-1c-btn">Показать</button>
                         </div>
+                        <div class="pb-0.5 flex flex-wrap items-center gap-2">
+                            <a
+                                href="{{ route('admin.reconciliation.export-excel', $exportQuery) }}"
+                                class="rec-1c-btn"
+                            >Скачать Excel</a>
+                            <a
+                                href="{{ route('admin.reconciliation.export-pdf', $exportQuery) }}"
+                                class="rec-1c-btn"
+                            >Скачать PDF</a>
+                        </div>
                     </form>
                 @endif
             </div>
@@ -400,12 +408,24 @@
                 </div>
             @elseif ($isList)
                 <div class="rec-1c-panel">
-                    <div class="rec-1c-subhead">
-                        @if ($isBuyers)
-                            Покупатели
-                        @else
-                            Поставщики
-                        @endif
+                    <div class="rec-1c-subhead rec-1c-subhead-row">
+                        <span>
+                            @if ($isBuyers)
+                                Покупатели
+                            @else
+                                Поставщики
+                            @endif
+                        </span>
+                        <span class="flex flex-wrap items-center gap-2">
+                            <a
+                                href="{{ route('admin.reconciliation.export-excel', $exportQuery) }}"
+                                class="rec-1c-btn"
+                            >Скачать Excel</a>
+                            <a
+                                href="{{ route('admin.reconciliation.export-pdf', $exportQuery) }}"
+                                class="rec-1c-btn"
+                            >Скачать PDF</a>
+                        </span>
                     </div>
                     <div class="rec-1c-body">
                         <div class="overflow-x-auto -mx-0.5">
@@ -546,6 +566,26 @@
                                     </div>
                                 </div>
                             @endif
+                            <div class="rec-summary-debt">
+                                <div class="rec-summary-title">Итог</div>
+                                <div class="rec-summary-grid">
+                                    <span>
+                                        Сальдо на {{ $from->format('d.m.Y') }}:
+                                        <span class="font-medium tabular-nums">{{ $fmtSigned($buyerOpening) }}</span>
+                                    </span>
+                                    <span>
+                                        Долг нам на {{ $to->format('d.m.Y') }}:
+                                        @if (bccomp($buyerClosing, '0', 2) !== 0)
+                                            <span class="rec-debt-amt">{{ $fmtSigned($buyerClosing) }}</span>
+                                        @else
+                                            <span class="tabular-nums font-semibold text-slate-700">{{ $fmtSigned($buyerClosing) }}</span>
+                                        @endif
+                                    </span>
+                                </div>
+                                <p class="rec-summary-note">
+                                    «Долг нам» — остаток на {{ $to->format('d.m.Y') }} по данным сверки (все строки таблицы учтены).
+                                </p>
+                            </div>
                         </div>
                     </div>
                 @else
@@ -618,6 +658,26 @@
                                     </div>
                                 </div>
                             @endif
+                            <div class="rec-summary-debt">
+                                <div class="rec-summary-title">Итог</div>
+                                <div class="rec-summary-grid">
+                                    <span>
+                                        Сальдо на {{ $from->format('d.m.Y') }}:
+                                        <span class="font-medium tabular-nums">{{ $fmtSigned($supplierOpening) }}</span>
+                                    </span>
+                                    <span>
+                                        Мы должны на {{ $to->format('d.m.Y') }}:
+                                        @if (bccomp($supplierClosing, '0', 2) !== 0)
+                                            <span class="rec-debt-amt">{{ $fmtSigned($supplierClosing) }}</span>
+                                        @else
+                                            <span class="tabular-nums font-semibold text-slate-700">{{ $fmtSigned($supplierClosing) }}</span>
+                                        @endif
+                                    </span>
+                                </div>
+                                <p class="rec-summary-note">
+                                    «Мы должны» — остаток на {{ $to->format('d.m.Y') }} по данным сверки.
+                                </p>
+                            </div>
                         </div>
                     </div>
                 @endif

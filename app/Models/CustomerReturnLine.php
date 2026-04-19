@@ -9,6 +9,7 @@ class CustomerReturnLine extends Model
 {
     protected $fillable = [
         'customer_return_id',
+        'source_retail_sale_line_id',
         'good_id',
         'article_code',
         'name',

@@ -76,22 +76,9 @@
                             var check = (10 - (sum % 10)) % 10;
                             return base + check;
                         };
-                        window.obGenArticle = function () {
-                            var d = new Date();
-                            var ymd =
-                                String(d.getFullYear()).slice(2) +
-                                String(d.getMonth() + 1).padStart(2, '0') +
-                                String(d.getDate()).padStart(2, '0');
-                            var buf = new Uint8Array(4);
-                            crypto.getRandomValues(buf);
-                            var hex = '';
-                            for (var k = 0; k < buf.length; k++) {
-                                hex += buf[k].toString(16).padStart(2, '0');
-                            }
-                            return 'G' + ymd + '-' + hex.slice(0, 6).toUpperCase();
-                        };
                     })();
                 </script>
+                @include('admin.partials.article-code-reserve-script')
                 <script>
                     window.__purchaseReceiptInit = {
                         lines: @json($linesForForm),

@@ -6,19 +6,24 @@ use App\Http\Controllers\Concerns\RequiresOpenCashShift;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\FulfillServiceOrderLegalRequest;
 use App\Http\Requests\FulfillServiceOrderRetailRequest;
-use App\Http\Requests\StoreServiceOrderRequest;
+use App\Http\Requests\StoreServiceOrderHeaderRequest;
+use App\Http\Requests\StoreServiceOrderLinesRequest;
 use App\Models\Counterparty;
+use App\Models\Employee;
 use App\Models\Good;
 use App\Models\LegalEntitySale;
 use App\Models\OpeningStockBalance;
 use App\Models\LegalEntitySaleLine;
+use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
 use App\Models\RetailSale;
 use App\Models\RetailSaleLine;
+use App\Models\RetailSalePayment;
 use App\Models\ServiceOrder;
 use App\Models\ServiceOrderLine;
 use App\Models\Warehouse;
 use App\Services\OpeningBalanceService;
+use App\Support\InvoiceNakladnayaFormatter;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -61,86 +66,87 @@ class ServiceOrderController extends Controller
             ->limit(12)
             ->get();
 
+        $masters = Employee::query()
+            ->where('branch_id', $branchId)
+            ->masters()
+            ->orderBy('full_name')
+            ->get(['id', 'full_name']);
+
         return view('admin.service-sales.sell', [
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $selectedWarehouseId,
-            'goodsSearchUrl' => route('admin.goods.search'),
+            'counterpartySearchUrl' => route('admin.counterparties.search'),
+            'counterpartyQuickUrl' => route('admin.counterparties.quick-store'),
+            'customerVehiclesIndexUrl' => route('admin.customer-vehicles.index'),
+            'customerVehiclesStoreUrl' => route('admin.customer-vehicles.store'),
+            'masters' => $masters,
             'defaultDocumentDate' => now()->toDateString(),
             'recentPending' => $recentPending,
         ]);
     }
 
-    public function storeRequest(StoreServiceOrderRequest $request): RedirectResponse
+    public function storeHeader(StoreServiceOrderHeaderRequest $request): RedirectResponse
     {
         $branchId = (int) auth()->user()->branch_id;
         $warehouseId = (int) $request->validated('warehouse_id');
         $notes = $request->validated('notes');
         $notes = $notes !== null && trim((string) $notes) !== '' ? trim((string) $notes) : null;
-        $documentDate = (string) ($request->validated('document_date') ?: now()->toDateString());
-        $recipientKind = (string) $request->validated('recipient_kind');
-        $lines = $request->input('lines', []);
-
-        $cartLines = $this->hydrateLinesFromRetailInput($branchId, $lines);
-        if ($cartLines === []) {
-            return redirect()
-                ->back()
-                ->withInput()
-                ->withErrors(['lines' => 'Не удалось разобрать позиции заявки.']);
-        }
-
-        $total = $this->cartTotal($cartLines);
-        if (bccomp($total, '0', 2) !== 1) {
-            return redirect()
-                ->back()
-                ->withInput()
-                ->withErrors(['lines' => 'Укажите цены — сумма заявки должна быть больше нуля.']);
-        }
+        $documentDate = (string) $request->validated('document_date');
+        $counterpartyId = (int) $request->validated('counterparty_id');
+        $customerVehicleId = (int) $request->validated('customer_vehicle_id');
+        $mileageKm = $this->openingBalanceService->parseDecimal($request->validated('mileage_km'));
+        $leadMasterId = (int) $request->validated('lead_master_employee_id');
+        $deadlineDate = (string) $request->validated('deadline_date');
+        $contactName = trim((string) $request->validated('contact_name'));
 
         try {
-            DB::transaction(function () use ($branchId, $warehouseId, $documentDate, $notes, $cartLines, $total, $recipientKind) {
-                $order = ServiceOrder::query()->create([
+            $order = DB::transaction(function () use (
+                $branchId,
+                $warehouseId,
+                $documentDate,
+                $notes,
+                $counterpartyId,
+                $contactName,
+                $customerVehicleId,
+                $mileageKm,
+                $leadMasterId,
+                $deadlineDate
+            ) {
+                return ServiceOrder::query()->create([
                     'branch_id' => $branchId,
                     'warehouse_id' => $warehouseId,
-                    'recipient_kind' => $recipientKind,
+                    'counterparty_id' => $counterpartyId,
+                    'contact_name' => $contactName,
+                    'customer_vehicle_id' => $customerVehicleId,
+                    'mileage_km' => $mileageKm,
+                    'lead_master_employee_id' => $leadMasterId,
+                    'deadline_date' => $deadlineDate,
                     'user_id' => auth()->id(),
                     'status' => ServiceOrder::STATUS_AWAITING_FULFILLMENT,
                     'document_date' => $documentDate,
-                    'total_amount' => $total,
+                    'total_amount' => '0.00',
                     'organization_bank_account_id' => null,
                     'notes' => $notes,
                 ]);
-
-                foreach ($cartLines as $line) {
-                    ServiceOrderLine::query()->create([
-                        'service_order_id' => $order->id,
-                        'good_id' => $line['good_id'],
-                        'article_code' => $line['article_code'],
-                        'name' => $line['name'],
-                        'unit' => $line['unit'],
-                        'quantity' => $line['quantity'],
-                        'unit_price' => $line['unit_price'],
-                        'line_sum' => $line['line_sum'],
-                    ]);
-                }
             });
         } catch (\Throwable) {
             return redirect()
                 ->back()
                 ->withInput()
-                ->withErrors(['lines' => 'Не удалось сохранить заявку.']);
+                ->withErrors(['header' => 'Не удалось создать заявку.']);
         }
 
         return redirect()
-            ->route('admin.service-sales.sell', array_filter(['warehouse_id' => $warehouseId], static fn ($v) => (int) $v > 0))
-            ->with('status', 'Заявка отправлена. Оформление — на отдельной странице «Оформление заявок».');
+            ->route('admin.service-sales.sell.lines', $order)
+            ->with('status', 'Укажите запчасти и услуги.');
     }
 
-    public function editRequest(Request $request, ServiceOrder $serviceOrder): View|RedirectResponse
+    public function sellLines(Request $request, ServiceOrder $serviceOrder): View|RedirectResponse
     {
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
-                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+                ->withErrors(['fulfill' => 'Заявка недоступна для редактирования позиций.']);
         }
 
         $branchId = (int) auth()->user()->branch_id;
@@ -151,15 +157,16 @@ class ServiceOrderController extends Controller
             ->orderBy('name')
             ->get();
 
-        $serviceOrder->load(['lines.good']);
-
-        $queryWarehouseId = (int) $request->integer('warehouse_id');
         $warehouseId = (int) $serviceOrder->warehouse_id;
+        $queryWarehouseId = (int) $request->integer('warehouse_id');
         if ($queryWarehouseId > 0 && $warehouses->contains('id', $queryWarehouseId)) {
             $warehouseId = $queryWarehouseId;
         } elseif ($warehouseId === 0 || ! $warehouses->contains('id', $warehouseId)) {
             $warehouseId = (int) ($warehouses->firstWhere('is_default')?->id ?? $warehouses->first()?->id ?? 0);
         }
+
+        $serviceOrder->load(['lines.good']);
+        $serviceOrder->loadMissing(['counterparty', 'customerVehicle']);
 
         $initialCart = [];
         foreach ($serviceOrder->lines as $line) {
@@ -180,33 +187,34 @@ class ServiceOrderController extends Controller
                 'unit_price' => $this->formatDecimalStringForInput($line->unit_price, 2),
                 'is_service' => (bool) ($good?->is_service ?? false),
                 'stock_quantity' => $stockQty,
+                'performer_employee_id' => $line->performer_employee_id !== null ? (string) $line->performer_employee_id : '',
             ];
         }
 
-        return view('admin.service-sales.edit-request', [
+        return view('admin.service-sales.sell-lines', [
             'serviceOrder' => $serviceOrder,
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $warehouseId,
             'goodsSearchUrl' => route('admin.goods.search'),
+            'masters' => Employee::query()
+                ->where('branch_id', $branchId)
+                ->masters()
+                ->orderBy('full_name')
+                ->get(['id', 'full_name']),
             'initialCart' => $initialCart,
-            'defaultDocumentDate' => $serviceOrder->document_date?->toDateString() ?? now()->toDateString(),
         ]);
     }
 
-    public function updateRequest(StoreServiceOrderRequest $request, ServiceOrder $serviceOrder): RedirectResponse
+    public function storeLines(StoreServiceOrderLinesRequest $request, ServiceOrder $serviceOrder): RedirectResponse
     {
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
-                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+                ->withErrors(['fulfill' => 'Заявка недоступна.']);
         }
 
         $branchId = (int) auth()->user()->branch_id;
-        $warehouseId = (int) $request->validated('warehouse_id');
-        $notes = $request->validated('notes');
-        $notes = $notes !== null && trim((string) $notes) !== '' ? trim((string) $notes) : null;
-        $documentDate = (string) ($request->validated('document_date') ?: now()->toDateString());
-        $recipientKind = (string) $request->validated('recipient_kind');
+        $warehouseId = (int) $serviceOrder->warehouse_id;
         $lines = $request->input('lines', []);
 
         $cartLines = $this->hydrateLinesFromRetailInput($branchId, $lines);
@@ -226,21 +234,13 @@ class ServiceOrderController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($serviceOrder, $warehouseId, $documentDate, $notes, $cartLines, $total, $recipientKind) {
-                $serviceOrder->update([
-                    'warehouse_id' => $warehouseId,
-                    'recipient_kind' => $recipientKind,
-                    'document_date' => $documentDate,
-                    'total_amount' => $total,
-                    'notes' => $notes,
-                ]);
-
+            DB::transaction(function () use ($serviceOrder, $cartLines, $total) {
                 $serviceOrder->lines()->delete();
-
                 foreach ($cartLines as $line) {
                     ServiceOrderLine::query()->create([
                         'service_order_id' => $serviceOrder->id,
                         'good_id' => $line['good_id'],
+                        'performer_employee_id' => $line['performer_employee_id'],
                         'article_code' => $line['article_code'],
                         'name' => $line['name'],
                         'unit' => $line['unit'],
@@ -249,17 +249,116 @@ class ServiceOrderController extends Controller
                         'line_sum' => $line['line_sum'],
                     ]);
                 }
+                $serviceOrder->update(['total_amount' => $total]);
             });
         } catch (\Throwable) {
             return redirect()
                 ->back()
                 ->withInput()
-                ->withErrors(['lines' => 'Не удалось сохранить изменения заявки.']);
+                ->withErrors(['lines' => 'Не удалось сохранить позиции.']);
         }
 
         return redirect()
-            ->route('admin.service-sales.sell', array_filter(['warehouse_id' => $warehouseId], static fn ($v) => (int) $v > 0))
-            ->with('status', 'Заявка №'.$serviceOrder->id.' обновлена.');
+            ->route('admin.service-sales.sell')
+            ->with('status', 'Заявка №'.$serviceOrder->id.' сохранена.');
+    }
+
+    public function editRequest(Request $request, ServiceOrder $serviceOrder): View|RedirectResponse
+    {
+        if (! $serviceOrder->isAwaitingFulfillment()) {
+            return redirect()
+                ->route('admin.service-sales.requests')
+                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        $warehouses = Warehouse::query()
+            ->where('branch_id', $branchId)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
+
+        $serviceOrder->loadMissing(['counterparty', 'customerVehicle']);
+
+        $queryWarehouseId = (int) $request->integer('warehouse_id');
+        $warehouseId = (int) $serviceOrder->warehouse_id;
+        if ($queryWarehouseId > 0 && $warehouses->contains('id', $queryWarehouseId)) {
+            $warehouseId = $queryWarehouseId;
+        } elseif ($warehouseId === 0 || ! $warehouses->contains('id', $warehouseId)) {
+            $warehouseId = (int) ($warehouses->firstWhere('is_default')?->id ?? $warehouses->first()?->id ?? 0);
+        }
+
+        $masters = Employee::query()
+            ->where('branch_id', $branchId)
+            ->masters()
+            ->orderBy('full_name')
+            ->get(['id', 'full_name']);
+
+        $initialCounterparty = null;
+        if ($serviceOrder->counterparty_id) {
+            $cp = $serviceOrder->counterparty;
+            $initialCounterparty = [
+                'id' => (int) $serviceOrder->counterparty_id,
+                'label' => $cp ? (string) ($cp->full_name ?: $cp->name) : '',
+            ];
+        }
+
+        return view('admin.service-sales.edit-request', [
+            'serviceOrder' => $serviceOrder,
+            'warehouses' => $warehouses,
+            'selectedWarehouseId' => $warehouseId,
+            'counterpartySearchUrl' => route('admin.counterparties.search'),
+            'customerVehiclesIndexUrl' => route('admin.customer-vehicles.index'),
+            'customerVehiclesStoreUrl' => route('admin.customer-vehicles.store'),
+            'counterpartyQuickUrl' => route('admin.counterparties.quick-store'),
+            'masters' => $masters,
+            'initialCounterparty' => $initialCounterparty,
+            'defaultDocumentDate' => $serviceOrder->document_date?->toDateString() ?? now()->toDateString(),
+        ]);
+    }
+
+    public function updateHeader(StoreServiceOrderHeaderRequest $request, ServiceOrder $serviceOrder): RedirectResponse
+    {
+        if (! $serviceOrder->isAwaitingFulfillment()) {
+            return redirect()
+                ->route('admin.service-sales.requests')
+                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+        }
+
+        $notes = $request->validated('notes');
+        $notes = $notes !== null && trim((string) $notes) !== '' ? trim((string) $notes) : null;
+        $documentDate = (string) $request->validated('document_date');
+        $counterpartyId = (int) $request->validated('counterparty_id');
+        $customerVehicleId = (int) $request->validated('customer_vehicle_id');
+        $mileageKm = $this->openingBalanceService->parseDecimal($request->validated('mileage_km'));
+        $leadMasterId = (int) $request->validated('lead_master_employee_id');
+        $deadlineDate = (string) $request->validated('deadline_date');
+        $warehouseId = (int) $request->validated('warehouse_id');
+        $contactName = trim((string) $request->validated('contact_name'));
+
+        try {
+            $serviceOrder->update([
+                'warehouse_id' => $warehouseId,
+                'counterparty_id' => $counterpartyId,
+                'contact_name' => $contactName,
+                'customer_vehicle_id' => $customerVehicleId,
+                'mileage_km' => $mileageKm,
+                'lead_master_employee_id' => $leadMasterId,
+                'deadline_date' => $deadlineDate,
+                'document_date' => $documentDate,
+                'notes' => $notes,
+            ]);
+        } catch (\Throwable) {
+            return redirect()
+                ->back()
+                ->withInput()
+                ->withErrors(['header' => 'Не удалось сохранить изменения.']);
+        }
+
+        return redirect()
+            ->route('admin.service-sales.sell.lines', $serviceOrder)
+            ->with('status', 'Шапка заявки сохранена. Проверьте позиции.');
     }
 
     public function requestsIndex(Request $request): View
@@ -296,6 +395,89 @@ class ServiceOrderController extends Controller
             'orders' => $orders,
             'statusFilter' => $status,
         ]);
+    }
+
+    public function printWorkOrder(ServiceOrder $serviceOrder): View
+    {
+        $branchId = (int) auth()->user()->branch_id;
+
+        $serviceOrder->load([
+            'lines.good',
+            'counterparty',
+            'customerVehicle',
+            'leadMasterEmployee',
+            'warehouse',
+            'branch',
+        ]);
+
+        $organization = Organization::query()
+            ->where('branch_id', $branchId)
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->first();
+
+        $materialRows = [];
+        $serviceRows = [];
+        $totalMaterials = '0.00';
+        $totalServices = '0.00';
+
+        foreach ($serviceOrder->lines as $line) {
+            $sum = $this->serviceOrderLineSum($line);
+            $isService = (bool) ($line->good?->is_service);
+            $row = [
+                'name' => (string) $line->name,
+                'quantity' => $line->quantity,
+                'unit' => (string) ($line->unit ?? 'шт.'),
+                'unit_price' => $line->unit_price,
+                'line_sum' => $sum,
+            ];
+            if ($isService) {
+                $serviceRows[] = $row;
+                $totalServices = bcadd($totalServices, $sum, 2);
+            } else {
+                $materialRows[] = $row;
+                $totalMaterials = bcadd($totalMaterials, $sum, 2);
+            }
+        }
+
+        $grandTotal = bcadd($totalMaterials, $totalServices, 2);
+
+        $docDate = $serviceOrder->document_date ?? $serviceOrder->created_at ?? now();
+
+        return view('admin.service-sales.work-order-print', [
+            'serviceOrder' => $serviceOrder,
+            'organization' => $organization,
+            'branch' => $serviceOrder->branch,
+            'documentTitle' => InvoiceNakladnayaFormatter::serviceWorkOrderTitle($docDate, (int) $serviceOrder->id),
+            'materialRows' => $materialRows,
+            'serviceRows' => $serviceRows,
+            'totalMaterials' => $totalMaterials,
+            'totalServices' => $totalServices,
+            'grandTotal' => $grandTotal,
+            'amountWordsMaterials' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalMaterials),
+            'amountWordsServices' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalServices),
+            'amountWordsGrand' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $grandTotal),
+            'forPdf' => false,
+        ]);
+    }
+
+    /**
+     * Сумма строки заявки (с учётом line_sum в БД).
+     */
+    private function serviceOrderLineSum(ServiceOrderLine $line): string
+    {
+        if ($line->line_sum !== null && trim((string) $line->line_sum) !== '') {
+            return number_format((float) $line->line_sum, 2, '.', '');
+        }
+
+        $q = (float) $line->quantity;
+        $p = (float) $line->unit_price;
+        if (! is_finite($q) || ! is_finite($p)) {
+            return '0.00';
+        }
+
+        return number_format(round($q * $p, 2), 2, '.', '');
     }
 
     public function destroy(ServiceOrder $serviceOrder): RedirectResponse
@@ -360,7 +542,7 @@ class ServiceOrderController extends Controller
             ?? $paymentAccounts->firstWhere('account_type', OrganizationBankAccount::TYPE_CASH)?->id
             ?? $paymentAccounts->first()?->id;
 
-        $serviceOrder->load(['lines', 'warehouse']);
+        $serviceOrder->load(['lines', 'warehouse', 'counterparty']);
 
         $legalCounterpartyPrefill = null;
         $oldCid = request()->old('counterparty_id');
@@ -372,6 +554,18 @@ class ServiceOrderController extends Controller
             if ($cp !== null) {
                 $legalCounterpartyPrefill = [
                     'id' => $cp->id,
+                    'label' => (string) ($cp->full_name ?: $cp->name),
+                ];
+            }
+        } elseif ($serviceOrder->counterparty_id) {
+            $cp = $serviceOrder->counterparty;
+            if ($cp !== null && in_array($cp->legal_form, [
+                Counterparty::LEGAL_IP,
+                Counterparty::LEGAL_OSOO,
+                Counterparty::LEGAL_OTHER,
+            ], true)) {
+                $legalCounterpartyPrefill = [
+                    'id' => (int) $cp->id,
                     'label' => (string) ($cp->full_name ?: $cp->name),
                 ];
             }
@@ -460,10 +654,12 @@ class ServiceOrderController extends Controller
                 ->withErrors(['fulfill' => 'Эта заявка уже оформлена.']);
         }
 
-        if ($serviceOrder->recipient_kind === ServiceOrder::RECIPIENT_LEGAL) {
+        $serviceOrder->loadMissing('counterparty');
+        $lf = $serviceOrder->counterparty?->legal_form;
+        if ($lf !== null && $lf !== Counterparty::LEGAL_INDIVIDUAL) {
             return redirect()
                 ->back()
-                ->withErrors(['fulfill' => 'Эта заявка для юрлица.']);
+                ->withErrors(['fulfill' => 'Для этого покупателя используйте оформление «реализация юрлицу».']);
         }
 
         $branchId = (int) auth()->user()->branch_id;
@@ -489,10 +685,16 @@ class ServiceOrderController extends Controller
                     'document_date' => $documentDate,
                     'user_id' => auth()->id(),
                     'total_amount' => '0.00',
+                    'debt_amount' => '0.00',
                 ]);
 
                 $total = $this->appendRetailLines($sale, $branchId, $warehouseId, $lines);
                 $sale->update(['total_amount' => $total]);
+                RetailSalePayment::query()->create([
+                    'retail_sale_id' => $sale->id,
+                    'organization_bank_account_id' => $accountId,
+                    'amount' => $total,
+                ]);
 
                 $serviceOrder->update([
                     'retail_sale_id' => $sale->id,
@@ -521,10 +723,12 @@ class ServiceOrderController extends Controller
                 ->withErrors(['fulfill' => 'Эта заявка уже оформлена.']);
         }
 
-        if ($serviceOrder->recipient_kind === ServiceOrder::RECIPIENT_PHYSICAL) {
+        $serviceOrder->loadMissing('counterparty');
+        $lf = $serviceOrder->counterparty?->legal_form;
+        if ($lf === Counterparty::LEGAL_INDIVIDUAL) {
             return redirect()
                 ->back()
-                ->withErrors(['fulfill' => 'Эта заявка для физлица.']);
+                ->withErrors(['fulfill' => 'Для физлица используйте розничную продажу.']);
         }
 
         $branchId = (int) auth()->user()->branch_id;
@@ -546,7 +750,6 @@ class ServiceOrderController extends Controller
         $buyerPin = preg_replace('/\D+/', '', (string) ($counterparty->inn ?? ''));
 
         $documentDate = (string) $request->validated('document_date');
-        $issueEsf = $request->boolean('issue_esf');
 
         $serviceOrder->load('lines');
         $lines = $this->validatedFulfillLinesInput($request, $serviceOrder);
@@ -560,7 +763,6 @@ class ServiceOrderController extends Controller
                 $buyerPin,
                 $counterpartyId,
                 $documentDate,
-                $issueEsf,
                 $lines
             ) {
                 $sale = LegalEntitySale::query()->create([
@@ -570,7 +772,7 @@ class ServiceOrderController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
-                    'issue_esf' => $issueEsf,
+                    'issue_esf' => false,
                 ]);
 
                 $this->appendLegalLines($sale, $branchId, $warehouseId, $lines);
@@ -595,7 +797,7 @@ class ServiceOrderController extends Controller
 
     /**
      * @param  list<mixed>  $lines
-     * @return list<array{good_id: int, article_code: string, name: string, unit: string, quantity: string, unit_price: ?string, line_sum: ?string}>
+     * @return list<array{good_id: int, article_code: string, name: string, unit: string, quantity: string, unit_price: ?string, line_sum: ?string, performer_employee_id: ?int}>
      */
     private function hydrateLinesFromRetailInput(int $branchId, array $lines): array
     {
@@ -632,6 +834,12 @@ class ServiceOrderController extends Controller
                 $lineSum = bcmul((string) $qty, (string) $price, 2);
             }
 
+            $performerRaw = $line['performer_employee_id'] ?? null;
+            $performerId = null;
+            if ($good->is_service && $performerRaw !== null && $performerRaw !== '') {
+                $performerId = (int) $performerRaw;
+            }
+
             $out[] = [
                 'good_id' => (int) $good->id,
                 'article_code' => (string) $good->article_code,
@@ -640,6 +848,7 @@ class ServiceOrderController extends Controller
                 'quantity' => (string) $qty,
                 'unit_price' => $price,
                 'line_sum' => $lineSum,
+                'performer_employee_id' => $performerId,
             ];
         }
 

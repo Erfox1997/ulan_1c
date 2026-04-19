@@ -114,6 +114,20 @@ class StoreLegalEntitySaleRequest extends FormRequest
                         );
                     }
                 }
+
+                if ($price !== null && $price !== '' && is_numeric(str_replace([' ', ','], ['', '.'], (string) $price))) {
+                    $priceNum = (float) str_replace([' ', ','], ['', '.'], (string) $price);
+                    $minRaw = $good->min_sale_price;
+                    if ($minRaw !== null && (string) $minRaw !== '') {
+                        $minNum = (float) (string) $minRaw;
+                        if ($minNum > 0 && $priceNum + 1e-9 < $minNum) {
+                            $v->errors()->add(
+                                "lines.{$i}.unit_price",
+                                'Цена продажи не может быть ниже минимальной для «'.$code.'» (мин. '.$good->min_sale_price.').'
+                            );
+                        }
+                    }
+                }
             }
 
             $dupArticles = array_keys(array_filter($articleCounts, fn (int $c): bool => $c > 1));

@@ -40,9 +40,22 @@ class LegalEntitySaleController extends Controller
             $selectedWarehouseId = (int) ($defaultId ?? 0);
         }
 
+        $filterGoodId = (int) request()->integer('good_id');
+        $filterGood = null;
+        if ($filterGoodId > 0) {
+            $filterGood = Good::query()
+                ->where('branch_id', $branchId)
+                ->whereKey($filterGoodId)
+                ->first(['id', 'article_code', 'name']);
+            if ($filterGood === null) {
+                $filterGoodId = 0;
+            }
+        }
+
         $recentSales = LegalEntitySale::query()
             ->where('branch_id', $branchId)
             ->when($selectedWarehouseId > 0, fn ($q) => $q->where('warehouse_id', $selectedWarehouseId))
+            ->when($filterGoodId > 0, fn ($q) => $q->whereHas('lines', fn ($lq) => $lq->where('good_id', $filterGoodId)))
             ->with(['warehouse', 'lines'])
             ->orderByDesc('document_date')
             ->orderByDesc('id')
@@ -56,12 +69,21 @@ class LegalEntitySaleController extends Controller
             ->orderBy('name')
             ->get();
 
+        $filterGoodSummary = $filterGood instanceof Good
+            ? trim(
+                (($c = trim((string) ($filterGood->article_code ?? ''))) !== '' ? $c.' · ' : '')
+                .trim((string) ($filterGood->name ?? ''))
+            )
+            : '';
+
         return view('admin.legal-entity-sales.index', [
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $selectedWarehouseId,
             'recentSales' => $recentSales,
             'organizations' => $organizations,
             'defaultPrintOrganizationId' => $organizations->first()?->id,
+            'filterGoodId' => $filterGoodId,
+            'filterGoodSummary' => $filterGoodSummary,
         ]);
     }
 
@@ -308,11 +330,10 @@ class LegalEntitySaleController extends Controller
         $counterpartyId = $request->validated('counterparty_id');
         $counterpartyId = $counterpartyId !== null && $counterpartyId !== '' ? (int) $counterpartyId : null;
         $documentDate = (string) $request->validated('document_date');
-        $issueEsf = $request->boolean('issue_esf');
         $lines = $request->input('lines', []);
 
         try {
-            DB::transaction(function () use ($legalEntitySale, $branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $issueEsf, $lines) {
+            DB::transaction(function () use ($legalEntitySale, $branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $lines) {
                 $sale = LegalEntitySale::query()
                     ->whereKey($legalEntitySale->id)
                     ->lockForUpdate()
@@ -323,6 +344,7 @@ class LegalEntitySaleController extends Controller
                 }
 
                 $wId = (int) $sale->warehouse_id;
+                $issueEsf = (bool) $sale->issue_esf;
 
                 $oldLines = $sale->lines()->orderBy('id')->get();
                 foreach ($oldLines as $oldLine) {

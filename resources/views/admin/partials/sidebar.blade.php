@@ -40,12 +40,24 @@
             @endif
 
             @php
-                $groupOpen = collect($item['children'] ?? [])->contains(function ($c) use ($currentKey) {
+                $childRouteMatches = static function (array $c): bool {
                     if (isset($c['route_is'])) {
-                        return request()->routeIs($c['route_is']);
+                        $match = request()->routeIs($c['route_is']);
+                        if ($match && isset($c['route_is_not'])) {
+                            $match = ! request()->routeIs($c['route_is_not']);
+                        }
+
+                        return $match;
                     }
                     if (isset($c['route'])) {
                         return request()->routeIs($c['route']);
+                    }
+
+                    return false;
+                };
+                $groupOpen = collect($item['children'] ?? [])->contains(function ($c) use ($currentKey, $childRouteMatches) {
+                    if (isset($c['route_is']) || isset($c['route'])) {
+                        return $childRouteMatches($c);
                     }
 
                     return ($c['key'] ?? '') === $currentKey;
@@ -84,7 +96,7 @@
                                 ? route($child['route'])
                                 : route('admin.placeholder', ['key' => $child['key']]);
                             $childActive = isset($child['route_is'])
-                                ? request()->routeIs($child['route_is'])
+                                ? (request()->routeIs($child['route_is']) && (! isset($child['route_is_not']) || ! request()->routeIs($child['route_is_not'])))
                                 : (isset($child['route'])
                                     ? request()->routeIs($child['route'])
                                     : (($child['key'] ?? '') === $currentKey));
@@ -93,13 +105,22 @@
                             <a
                                 href="{{ $childHref }}"
                                 @class([
-                                    'block rounded-lg py-2.5 pl-3 pr-2 text-[14px] leading-[1.45] transition-colors duration-150',
+                                    'flex items-center justify-between gap-2 rounded-lg py-2.5 pl-3 pr-2 text-[14px] leading-[1.45] transition-colors duration-150',
                                     'bg-emerald-500/[0.14] font-semibold text-white shadow-[inset_3px_0_0_0_rgb(52,211,153)] ring-1 ring-emerald-500/20' => $childActive,
                                     'text-slate-300 hover:bg-white/[0.06] hover:text-white' => ! $childActive,
                                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950',
                                 ])
+                                @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
+                                    title="Товаров с неполной характеристикой: {{ $goodsCharacteristicsIncompleteCount }}"
+                                @endif
                             >
-                                {{ $child['label'] }}
+                                <span class="min-w-0">{{ $child['label'] }}</span>
+                                @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
+                                    <span
+                                        class="shrink-0 rounded-md bg-red-500/30 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-red-100 ring-1 ring-red-400/45"
+                                        aria-hidden="true"
+                                    >+{{ $goodsCharacteristicsIncompleteCount }}</span>
+                                @endif
                             </a>
                         </li>
                     @endforeach

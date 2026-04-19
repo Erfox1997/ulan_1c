@@ -16,10 +16,23 @@
                 </p>
             </div>
         @else
+            @php
+                $obDeletedGoodIdsInitial = [];
+                $oldObDel = old('deleted_good_ids');
+                if (is_array($oldObDel)) {
+                    foreach ($oldObDel as $gid) {
+                        if ($gid === null || $gid === '') {
+                            continue;
+                        }
+                        $obDeletedGoodIdsInitial[] = (int) $gid;
+                    }
+                }
+            @endphp
             <div
                 class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
             >
                 <form
+                    id="ob-warehouse-form"
                     method="GET"
                     action="{{ route('admin.opening-balances.index') }}"
                     class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5"
@@ -95,22 +108,9 @@
                     var check = (10 - (sum % 10)) % 10;
                     return base + check;
                 };
-                window.obGenArticle = function () {
-                    var d = new Date();
-                    var ymd =
-                        String(d.getFullYear()).slice(2) +
-                        String(d.getMonth() + 1).padStart(2, '0') +
-                        String(d.getDate()).padStart(2, '0');
-                    var buf = new Uint8Array(4);
-                    crypto.getRandomValues(buf);
-                    var hex = '';
-                    for (var k = 0; k < buf.length; k++) {
-                        hex += buf[k].toString(16).padStart(2, '0');
-                    }
-                    return 'G' + ymd + '-' + hex.slice(0, 6).toUpperCase();
-                };
             })();
         </script>
+        @include('admin.partials.article-code-reserve-script')
         <style>
             .ob-1c-scope {
                 font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
@@ -266,28 +266,43 @@
             }
         </style>
         <form
+            id="ob-store-form"
             method="POST"
             action="{{ route('admin.opening-balances.store') }}"
             class="space-y-6"
             x-data="{
                 lines: {{ \Illuminate\Support\Js::from($linesForForm) }},
+                deleted_good_ids: {{ \Illuminate\Support\Js::from($obDeletedGoodIdsInitial) }},
                 selectedRow: 0,
                 moreOpen: false,
                 addRow() {
                     this.lines.push({
+                        good_id: null,
                         article_code: '',
                         name: '',
                         barcode: '',
                         category: '',
                         quantity: '',
                         unit_cost: '',
+                        wholesale_price: '',
                         sale_price: '',
+                        min_sale_price: '',
+                        oem: '',
+                        factory_number: '',
+                        min_stock: '',
                         unit: 'шт.',
                     });
                     this.selectedRow = this.lines.length - 1;
                 },
                 removeSelectedRow() {
                     if (this.lines.length <= 1) return;
+                    const row = this.lines[this.selectedRow];
+                    if (row && row.good_id != null && row.good_id !== '') {
+                        const id = parseInt(row.good_id, 10);
+                        if (!Number.isNaN(id) && id > 0) {
+                            this.deleted_good_ids.push(id);
+                        }
+                    }
                     this.lines.splice(this.selectedRow, 1);
                     this.selectedRow = Math.min(this.selectedRow, this.lines.length - 1);
                     this.moreOpen = false;
@@ -324,21 +339,26 @@
                     });
                     if (n === 0) window.alert('Нет строк с пустым штрихкодом.');
                 },
-                genArticlesEmptyOnly() {
-                    const used = new Set(this.lines.map((r) => (r.article_code || '').trim()).filter(Boolean));
-                    let n = 0;
-                    this.lines.forEach((row) => {
-                        if ((row.article_code || '').trim() !== '') return;
-                        let code = '';
-                        for (let k = 0; k < 60; k++) {
-                            code = window.obGenArticle();
-                            if (!used.has(code)) break;
-                        }
-                        row.article_code = code;
-                        used.add(code);
-                        n++;
-                    });
-                    if (n === 0) window.alert('Нет строк с пустым артикулом.');
+                async genArticlesEmptyOnly() {
+                    const emptyRows = this.lines.filter((r) => (r.article_code || '').trim() === '');
+                    if (emptyRows.length === 0) {
+                        window.alert('Нет строк с пустым артикулом.');
+                        return;
+                    }
+                    if (typeof window.reserveBranchArticleCodes !== 'function') {
+                        window.alert('Обновите страницу и попробуйте снова.');
+                        return;
+                    }
+                    try {
+                        const codes = await window.reserveBranchArticleCodes(emptyRows.length);
+                        let idx = 0;
+                        this.lines.forEach((row) => {
+                            if ((row.article_code || '').trim() !== '') return;
+                            row.article_code = codes[idx++];
+                        });
+                    } catch (e) {
+                        window.alert(e && e.message ? e.message : 'Не удалось получить артикулы с сервера.');
+                    }
                 },
                 focusExcelImport() {
                     const el = document.getElementById('opening_balance_file');
@@ -352,6 +372,14 @@
         >
             @csrf
             <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
+            <input
+                type="hidden"
+                name="page"
+                value="{{ $openingBalancesPaginator !== null ? $openingBalancesPaginator->currentPage() : max(1, (int) old('page', 1)) }}"
+            />
+            <template x-for="gid in deleted_good_ids" :key="gid">
+                <input type="hidden" name="deleted_good_ids[]" :value="gid" />
+            </template>
             <div
                 class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
             >
@@ -362,7 +390,19 @@
                         >
                             <p class="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-teal-700/90">Ввод остатков</p>
                             <h2 class="text-[15px] font-bold leading-tight text-slate-800">Ручной ввод</h2>
+                            @if ($openingBalancesPaginator !== null && $openingBalancesPaginator->total() > 0)
+                                <p class="mt-1.5 text-[11px] text-slate-600">
+                                    Страница {{ $openingBalancesPaginator->currentPage() }} из {{ $openingBalancesPaginator->lastPage() }},
+                                    всего позиций: {{ $openingBalancesPaginator->total() }} (по {{ $openingBalancesPaginator->perPage() }} на странице).
+                                </p>
+                            @endif
                         </div>
+
+                @if ($openingBalancesPaginator !== null && $openingBalancesPaginator->lastPage() > 1)
+                    <div class="border-b border-emerald-100/80 bg-slate-50/90 px-3 py-2 text-[11px] text-slate-700">
+                        {{ $openingBalancesPaginator->links() }}
+                    </div>
+                @endif
 
                 <div class="ob-1c-toolbar">
                     <button type="button" class="ob-tb-btn" @click="addRow()">Добавить</button>
@@ -423,17 +463,25 @@
                                 <th>Ед. изм.</th>
                                 <th>Количество *</th>
                                 <th>Цена (закуп.)</th>
+                                <th>Оптовая цена</th>
                                 <th>Цена (продаж.)</th>
+                                <th>Мин. цена (продаж.)</th>
+                                <th>ОЭМ</th>
+                                <th>Заводской №</th>
+                                <th>Мин. остаток</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <template x-for="(row, index) in lines" :key="index">
+                            <template x-for="(row, index) in lines" :key="(row.good_id || 'n') + '-' + index">
                                 <tr
                                     class="cursor-pointer"
                                     :class="{ 'ob-row-active': selectedRow === index }"
                                     @click="selectedRow = index"
                                 >
-                                    <td class="ob-num" x-text="index + 1"></td>
+                                    <td class="ob-num">
+                                        <input type="hidden" :name="`lines[${index}][good_id]`" :value="row.good_id ?? ''" />
+                                        <span x-text="index + 1"></span>
+                                    </td>
                                     <td class="min-w-[10rem]">
                                         <input type="text" :name="`lines[${index}][name]`" x-model="row.name" class="ob-inp" autocomplete="off" />
                                     </td>
@@ -456,13 +504,34 @@
                                         <input type="text" :name="`lines[${index}][unit_cost]`" x-model="row.unit_cost" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                     </td>
                                     <td class="min-w-[4.5rem] ob-numr">
+                                        <input type="text" :name="`lines[${index}][wholesale_price]`" x-model="row.wholesale_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
+                                    </td>
+                                    <td class="min-w-[4.5rem] ob-numr">
                                         <input type="text" :name="`lines[${index}][sale_price]`" x-model="row.sale_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
+                                    </td>
+                                    <td class="min-w-[4.5rem] ob-numr">
+                                        <input type="text" :name="`lines[${index}][min_sale_price]`" x-model="row.min_sale_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
+                                    </td>
+                                    <td class="min-w-[6rem]">
+                                        <input type="text" :name="`lines[${index}][oem]`" x-model="row.oem" class="ob-inp" autocomplete="off" />
+                                    </td>
+                                    <td class="min-w-[6rem]">
+                                        <input type="text" :name="`lines[${index}][factory_number]`" x-model="row.factory_number" class="ob-inp" autocomplete="off" />
+                                    </td>
+                                    <td class="min-w-[4.5rem] ob-numr">
+                                        <input type="text" :name="`lines[${index}][min_stock]`" x-model="row.min_stock" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                     </td>
                                 </tr>
                             </template>
                         </tbody>
                     </table>
                 </div>
+
+                @if ($openingBalancesPaginator !== null && $openingBalancesPaginator->lastPage() > 1)
+                    <div class="border-t border-slate-200/90 bg-slate-50/90 px-3 py-2 text-[11px] text-slate-700">
+                        {{ $openingBalancesPaginator->links() }}
+                    </div>
+                @endif
 
                 <div class="ob-1c-foot">
                     <button type="submit" class="ob-tb-btn ob-btn-submit">Записать</button>
@@ -471,51 +540,6 @@
                 </div>
             </div>
         </form>
-
-        @if ($balances->isNotEmpty())
-            <div
-                class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
-            >
-                <div class="overflow-hidden rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90">
-                    <div class="border-b border-emerald-100/80 bg-gradient-to-r from-emerald-50/95 via-white to-sky-50/60 px-5 py-3.5 sm:px-6">
-                        <p class="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-teal-700/90">На выбранном складе</p>
-                        <h2 class="text-[15px] font-bold leading-tight text-slate-800">Текущие сохранённые остатки</h2>
-                    </div>
-                    <div class="cp-table-wrap bg-gradient-to-b from-slate-50/30 via-white to-emerald-50/20 p-3 sm:p-4">
-                        <table class="cp-table cp-directory-table text-[13px]">
-                            <thead>
-                                <tr>
-                                    <th class="text-center">N</th>
-                                    <th>Наименование</th>
-                                    <th>Штрихкод</th>
-                                    <th>Категория</th>
-                                    <th>Артикул</th>
-                                    <th>Ед.</th>
-                                    <th class="text-right">Кол-во</th>
-                                    <th class="text-right">Закуп.</th>
-                                    <th class="text-right">Продаж.</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach ($balances as $i => $b)
-                                    <tr>
-                                        <td class="text-center tabular-nums text-slate-600">{{ $i + 1 }}</td>
-                                        <td class="font-medium text-slate-900">{{ $b->good->name }}</td>
-                                        <td class="whitespace-nowrap font-mono text-xs text-slate-800">{{ $b->good->barcode ?? '—' }}</td>
-                                        <td class="text-slate-800">{{ $b->good->category ?? '—' }}</td>
-                                        <td class="whitespace-nowrap font-mono text-xs text-slate-900">{{ $b->good->article_code }}</td>
-                                        <td class="whitespace-nowrap text-slate-700">{{ $b->good->unit }}</td>
-                                        <td class="text-right tabular-nums text-slate-900">{{ $b->quantity }}</td>
-                                        <td class="text-right tabular-nums text-slate-800">{{ $b->unit_cost ?? '—' }}</td>
-                                        <td class="text-right tabular-nums text-slate-800">{{ $b->good->sale_price ?? '—' }}</td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        @endif
         @endif
     </div>
 </x-admin-layout>

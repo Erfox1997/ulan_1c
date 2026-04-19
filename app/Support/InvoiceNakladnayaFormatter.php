@@ -130,6 +130,16 @@ class InvoiceNakladnayaFormatter
     }
 
     /**
+     * «Заказ-наряд №000123 от 01.04.2025г.» (номер — с ведущими нулями до 6 знаков).
+     */
+    public static function serviceWorkOrderTitle(CarbonInterface $date, int $documentNumber): string
+    {
+        $num = str_pad((string) $documentNumber, 6, '0', STR_PAD_LEFT);
+
+        return sprintf('Заказ-наряд №%s от %sг.', $num, $date->format('d.m.Y'));
+    }
+
+    /**
      * Количество с единицей (как в накладных: «1 000 шт» или «1,5 шт»).
      */
     public static function formatQuantityWithUnit(string|float|null $quantity, ?string $unit): string
