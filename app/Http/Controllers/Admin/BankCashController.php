@@ -20,8 +20,12 @@ class BankCashController extends Controller
 {
     use RequiresOpenCashShift;
 
-    public function incomeClientIndex(): View
+    public function incomeClientIndex(): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movements = CashMovement::query()
@@ -38,8 +42,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function incomeClientForm(CashLedgerService $ledger): View
+    public function incomeClientForm(CashLedgerService $ledger): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         return view('admin.bank.income-client.create', [
@@ -54,8 +62,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function editIncomeClient(CashLedgerService $ledger, int $cashMovement): View
+    public function editIncomeClient(CashLedgerService $ledger, int $cashMovement): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movement = CashMovement::query()
@@ -124,8 +136,12 @@ class BankCashController extends Controller
             ->with('status', 'Операция №'.$movement->id.' обновлена.');
     }
 
-    public function expenseSupplierIndex(): View
+    public function expenseSupplierIndex(): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movements = CashMovement::query()
@@ -142,8 +158,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function expenseSupplierForm(CashLedgerService $ledger): View
+    public function expenseSupplierForm(CashLedgerService $ledger): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         return view('admin.bank.expense-supplier.create', [
@@ -158,8 +178,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function editExpenseSupplier(CashLedgerService $ledger, int $cashMovement): View
+    public function editExpenseSupplier(CashLedgerService $ledger, int $cashMovement): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movement = CashMovement::query()
@@ -254,8 +278,12 @@ class BankCashController extends Controller
             ->with('status', 'Операция №'.$movement->id.' обновлена.');
     }
 
-    public function expenseOtherIndex(): View
+    public function expenseOtherIndex(): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movements = CashMovement::query()
@@ -272,8 +300,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function expenseOtherForm(CashLedgerService $ledger): View
+    public function expenseOtherForm(CashLedgerService $ledger): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         return view('admin.bank.expense-other.create', [
@@ -282,8 +314,12 @@ class BankCashController extends Controller
         ]);
     }
 
-    public function editExpenseOther(CashLedgerService $ledger, int $cashMovement): View
+    public function editExpenseOther(CashLedgerService $ledger, int $cashMovement): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $movement = CashMovement::query()

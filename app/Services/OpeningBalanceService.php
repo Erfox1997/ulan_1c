@@ -58,7 +58,6 @@ class OpeningBalanceService
         $category = $category === '' ? null : $category;
         $salePrice = $this->parseOptionalMoney($line['sale_price'] ?? null);
         $wholesalePrice = $this->parseOptionalMoney($line['wholesale_price'] ?? null);
-        $minSalePrice = $this->parseOptionalMoney($line['min_sale_price'] ?? null);
         $oemRaw = trim((string) ($line['oem'] ?? ''));
         $oem = $oemRaw === '' ? null : $oemRaw;
         $factoryRaw = trim((string) ($line['factory_number'] ?? ''));
@@ -74,7 +73,6 @@ class OpeningBalanceService
                 'category' => $category,
                 'sale_price' => $salePrice,
                 'wholesale_price' => $wholesalePrice,
-                'min_sale_price' => $minSalePrice,
                 'oem' => $oem,
                 'factory_number' => $factoryNumber,
                 'min_stock' => $minStock,
@@ -499,7 +497,6 @@ class OpeningBalanceService
             $purchaseRaw = $this->importCellRaw($row, $columnMap['purchase'] ?? null);
             $wholesaleRaw = $this->importCellRaw($row, $columnMap['wholesale'] ?? null);
             $saleRaw = $this->importCellRaw($row, $columnMap['sale'] ?? null);
-            $minSaleRaw = $this->importCellRaw($row, $columnMap['min_sale'] ?? null);
             $oemCell = $this->importCell($row, $columnMap['oem'] ?? null);
             $factoryCell = $this->importCell($row, $columnMap['factory_number'] ?? null);
             $minStockRaw = $this->importCellRaw($row, $columnMap['min_stock'] ?? null);
@@ -539,7 +536,6 @@ class OpeningBalanceService
                 'wholesale_price' => $this->parseOptionalMoney($wholesaleRaw),
                 'sale_price' => $this->parseOptionalMoney($saleRaw),
                 'unit' => $unit !== '' ? $unit : 'шт.',
-                'min_sale_price' => $this->parseOptionalMoney($minSaleRaw),
                 'oem' => $oemCell,
                 'factory_number' => $factoryCell,
                 'min_stock' => $this->parseOptionalNonNegativeDecimal($minStockRaw),
@@ -657,7 +653,7 @@ class OpeningBalanceService
             return 'min_stock';
         }
         if ((str_contains($h, 'мин') || str_contains($h, 'миним')) && (str_contains($h, 'продаж') || str_contains($h, 'розниц'))) {
-            return 'min_sale';
+            return null;
         }
         if (str_contains($h, 'категор')) {
             return 'category';

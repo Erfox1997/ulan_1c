@@ -73,7 +73,6 @@ class OpeningBalanceController extends Controller
                         'unit_cost' => isset($line['unit_cost']) ? (string) $line['unit_cost'] : '',
                         'wholesale_price' => isset($line['wholesale_price']) ? (string) $line['wholesale_price'] : '',
                         'sale_price' => isset($line['sale_price']) ? (string) $line['sale_price'] : '',
-                        'min_sale_price' => isset($line['min_sale_price']) ? (string) $line['min_sale_price'] : '',
                         'oem' => (string) ($line['oem'] ?? ''),
                         'factory_number' => (string) ($line['factory_number'] ?? ''),
                         'min_stock' => isset($line['min_stock']) ? (string) $line['min_stock'] : '',
@@ -96,7 +95,6 @@ class OpeningBalanceController extends Controller
                     'unit_cost' => $b->unit_cost !== null ? (string) $b->unit_cost : '',
                     'wholesale_price' => $b->good->wholesale_price !== null ? (string) $b->good->wholesale_price : '',
                     'sale_price' => $b->good->sale_price !== null ? (string) $b->good->sale_price : '',
-                    'min_sale_price' => $b->good->min_sale_price !== null ? (string) $b->good->min_sale_price : '',
                     'oem' => (string) ($b->good->oem ?? ''),
                     'factory_number' => (string) ($b->good->factory_number ?? ''),
                     'min_stock' => $b->good->min_stock !== null ? (string) $b->good->min_stock : '',
@@ -151,7 +149,6 @@ class OpeningBalanceController extends Controller
                 'unit_cost' => $line['unit_cost'] ?? null,
                 'wholesale_price' => $line['wholesale_price'] ?? null,
                 'sale_price' => $line['sale_price'] ?? null,
-                'min_sale_price' => $line['min_sale_price'] ?? null,
                 'oem' => $line['oem'] ?? null,
                 'factory_number' => $line['factory_number'] ?? null,
                 'min_stock' => $line['min_stock'] ?? null,
@@ -214,12 +211,12 @@ class OpeningBalanceController extends Controller
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->fromArray([
-            ['Наименование', 'Штрихкод', 'Категория', 'Артикул', 'Количество', 'Ед. изм.', 'Закупочная цена', 'Оптовая цена', 'Продажная цена', 'Мин. цена продажи', 'ОЭМ', 'Заводской номер', 'Мин. остаток'],
-            ['Фильтр масляный', '', 'Расходники', 'ART-001', '24', 'шт.', '350', '480', '520', '500', 'OEM-001', 'SN-123', '2'],
-            ['Свеча зажигания', '', 'Запчасти', 'ART-002', '100', 'шт.', '', '', '180', '', '', '', '5'],
+            ['Наименование', 'Штрихкод', 'Категория', 'Артикул', 'Количество', 'Ед. изм.', 'Закупочная цена', 'Оптовая цена', 'Продажная цена', 'ОЭМ', 'Заводской номер', 'Мин. остаток'],
+            ['Фильтр масляный', '', 'Расходники', 'ART-001', '24', 'шт.', '350', '480', '520', 'OEM-001', 'SN-123', '2'],
+            ['Свеча зажигания', '', 'Запчасти', 'ART-002', '100', 'шт.', '', '', '180', '', '', '5'],
         ], null, 'A1', true);
 
-        foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'] as $col) {
+        foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'] as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 
@@ -248,7 +245,6 @@ class OpeningBalanceController extends Controller
             'unit_cost' => '',
             'wholesale_price' => '',
             'sale_price' => '',
-            'min_sale_price' => '',
             'oem' => '',
             'factory_number' => '',
             'min_stock' => '',

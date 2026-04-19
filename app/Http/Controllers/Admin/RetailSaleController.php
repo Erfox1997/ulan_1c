@@ -37,8 +37,12 @@ class RetailSaleController extends Controller
         private readonly OpeningBalanceService $openingBalanceService
     ) {}
 
-    public function index(): View
+    public function index(): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $warehouses = Warehouse::query()
@@ -119,6 +123,10 @@ class RetailSaleController extends Controller
 
     public function saveCheckoutDraft(StoreRetailCheckoutDraftRequest $request): RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $request->session()->put('retail_checkout_draft', [
             'warehouse_id' => (int) $request->validated('warehouse_id'),
             'document_date' => (string) $request->validated('document_date'),
@@ -130,6 +138,10 @@ class RetailSaleController extends Controller
 
     public function checkout(Request $request): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $draft = $request->session()->get('retail_checkout_draft');
         if (! is_array($draft) || ! is_array($draft['lines'] ?? null)) {
             return redirect()

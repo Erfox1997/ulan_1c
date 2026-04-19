@@ -46,7 +46,6 @@ class GoodSearchController extends Controller
                     'goods.category',
                     'goods.sale_price',
                     'goods.wholesale_price',
-                    'goods.min_sale_price',
                     'goods.is_service',
                     'osb.unit_cost as opening_unit_cost',
                     'osb.quantity as stock_quantity',
@@ -61,7 +60,6 @@ class GoodSearchController extends Controller
                     'goods.category',
                     'goods.sale_price',
                     'goods.wholesale_price',
-                    'goods.min_sale_price',
                     'goods.is_service',
                 ]);
             }
@@ -100,7 +98,6 @@ class GoodSearchController extends Controller
                     'goods.category',
                     'goods.sale_price',
                     'goods.wholesale_price',
-                    'goods.min_sale_price',
                     'goods.is_service',
                     'osb.unit_cost as opening_unit_cost',
                     'osb.quantity as stock_quantity',
@@ -166,7 +163,6 @@ class GoodSearchController extends Controller
                 'goods.category',
                 'goods.sale_price',
                 'goods.wholesale_price',
-                'goods.min_sale_price',
                 'goods.is_service',
                 'osb.unit_cost as opening_unit_cost',
                 'osb.quantity as stock_quantity',
@@ -181,7 +177,6 @@ class GoodSearchController extends Controller
                 'goods.category',
                 'goods.sale_price',
                 'goods.wholesale_price',
-                'goods.min_sale_price',
                 'goods.is_service',
             ]);
         }

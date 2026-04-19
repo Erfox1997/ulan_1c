@@ -286,7 +286,6 @@
                         unit_cost: '',
                         wholesale_price: '',
                         sale_price: '',
-                        min_sale_price: '',
                         oem: '',
                         factory_number: '',
                         min_stock: '',
@@ -465,7 +464,6 @@
                                 <th>Цена (закуп.)</th>
                                 <th>Оптовая цена</th>
                                 <th>Цена (продаж.)</th>
-                                <th>Мин. цена (продаж.)</th>
                                 <th>ОЭМ</th>
                                 <th>Заводской №</th>
                                 <th>Мин. остаток</th>
@@ -508,9 +506,6 @@
                                     </td>
                                     <td class="min-w-[4.5rem] ob-numr">
                                         <input type="text" :name="`lines[${index}][sale_price]`" x-model="row.sale_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
-                                    </td>
-                                    <td class="min-w-[4.5rem] ob-numr">
-                                        <input type="text" :name="`lines[${index}][min_sale_price]`" x-model="row.min_sale_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                     </td>
                                     <td class="min-w-[6rem]">
                                         <input type="text" :name="`lines[${index}][oem]`" x-model="row.oem" class="ob-inp" autocomplete="off" />

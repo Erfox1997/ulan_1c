@@ -265,6 +265,10 @@ class ServiceOrderController extends Controller
 
     public function editRequest(Request $request, ServiceOrder $serviceOrder): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
@@ -320,6 +324,10 @@ class ServiceOrderController extends Controller
 
     public function updateHeader(StoreServiceOrderHeaderRequest $request, ServiceOrder $serviceOrder): RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
@@ -361,8 +369,12 @@ class ServiceOrderController extends Controller
             ->with('status', 'Шапка заявки сохранена. Проверьте позиции.');
     }
 
-    public function requestsIndex(Request $request): View
+    public function requestsIndex(Request $request): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $status = $request->query('status');
@@ -397,8 +409,12 @@ class ServiceOrderController extends Controller
         ]);
     }
 
-    public function printWorkOrder(ServiceOrder $serviceOrder): View
+    public function printWorkOrder(ServiceOrder $serviceOrder): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $serviceOrder->load([
@@ -482,6 +498,10 @@ class ServiceOrderController extends Controller
 
     public function destroy(ServiceOrder $serviceOrder): RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
@@ -505,6 +525,10 @@ class ServiceOrderController extends Controller
 
     public function fulfillForm(ServiceOrder $serviceOrder): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')
@@ -717,6 +741,10 @@ class ServiceOrderController extends Controller
 
     public function fulfillLegal(FulfillServiceOrderLegalRequest $request, ServiceOrder $serviceOrder): RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         if (! $serviceOrder->isAwaitingFulfillment()) {
             return redirect()
                 ->route('admin.service-sales.requests')

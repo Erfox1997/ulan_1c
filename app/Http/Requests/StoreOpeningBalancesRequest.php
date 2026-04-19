@@ -34,7 +34,6 @@ class StoreOpeningBalancesRequest extends FormRequest
             'lines.*.unit_cost' => ['nullable'],
             'lines.*.wholesale_price' => ['nullable'],
             'lines.*.sale_price' => ['nullable'],
-            'lines.*.min_sale_price' => ['nullable'],
             'lines.*.oem' => ['nullable', 'string', 'max:120'],
             'lines.*.factory_number' => ['nullable', 'string', 'max:120'],
             'lines.*.min_stock' => ['nullable'],
@@ -100,11 +99,6 @@ class StoreOpeningBalancesRequest extends FormRequest
                 $sale = $line['sale_price'] ?? null;
                 if ($sale !== null && $sale !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $sale)) || (float) str_replace([' ', ','], ['', '.'], (string) $sale) < 0)) {
                     $v->errors()->add("lines.{$i}.sale_price", 'Продажная цена не может быть отрицательной.');
-                }
-
-                $minSale = $line['min_sale_price'] ?? null;
-                if ($minSale !== null && $minSale !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $minSale)) || (float) str_replace([' ', ','], ['', '.'], (string) $minSale) < 0)) {
-                    $v->errors()->add("lines.{$i}.min_sale_price", 'Минимальная цена продажи не может быть отрицательной.');
                 }
 
                 $minSt = $line['min_stock'] ?? null;

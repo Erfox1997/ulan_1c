@@ -714,7 +714,6 @@ document.addEventListener('alpine:init', () => {
             quantity: '',
             unit_price: '',
             wholesale_price: '',
-            min_sale_price: '',
         });
 
         const crInit =
@@ -761,7 +760,6 @@ document.addEventListener('alpine:init', () => {
             quantity: r.quantity ?? '',
             unit_price: r.unit_price ?? '',
             wholesale_price: r.wholesale_price ?? '',
-            min_sale_price: r.min_sale_price ?? '',
         }));
 
         const u = urls && typeof urls === 'object' ? urls : {};
@@ -923,8 +921,6 @@ document.addEventListener('alpine:init', () => {
                     item.wholesale_price != null && item.wholesale_price !== ''
                         ? String(item.wholesale_price)
                         : '';
-                row.min_sale_price =
-                    item.min_sale_price != null && item.min_sale_price !== '' ? String(item.min_sale_price) : '';
                 if (item.sale_price != null && item.sale_price !== '') {
                     row.unit_price = String(item.sale_price);
                 }
@@ -972,10 +968,6 @@ document.addEventListener('alpine:init', () => {
                                 row.wholesale_price =
                                     hit.wholesale_price != null && hit.wholesale_price !== ''
                                         ? String(hit.wholesale_price)
-                                        : '';
-                                row.min_sale_price =
-                                    hit.min_sale_price != null && hit.min_sale_price !== ''
-                                        ? String(hit.min_sale_price)
                                         : '';
                             }
                         } catch (e) {
