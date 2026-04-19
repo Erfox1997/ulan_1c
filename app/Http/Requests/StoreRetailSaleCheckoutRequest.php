@@ -16,6 +16,18 @@ class StoreRetailSaleCheckoutRequest extends FormRequest
         return $this->user()?->branch_id !== null;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $date = $this->input('document_date');
+        if ($date === null || $date === '') {
+            $draft = $this->session()->get('retail_checkout_draft');
+            $fromDraft = is_array($draft) ? trim((string) ($draft['document_date'] ?? '')) : '';
+            $this->merge([
+                'document_date' => $fromDraft !== '' ? $fromDraft : now()->toDateString(),
+            ]);
+        }
+    }
+
     public function rules(): array
     {
         return [

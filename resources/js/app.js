@@ -2726,9 +2726,13 @@ document.addEventListener('alpine:init', () => {
         };
         const debtorHintsUrl = typeof c.debtorHintsUrl === 'string' ? c.debtorHintsUrl : '';
         const counterpartySearchUrl = typeof c.counterpartySearchUrl === 'string' ? c.counterpartySearchUrl : '';
+        const documentDateInit =
+            typeof c.documentDate === 'string' && c.documentDate.trim() !== ''
+                ? c.documentDate
+                : new Date().toISOString().slice(0, 10);
         return {
             payments: [{ organization_bank_account_id: defaultId, amount: '' }],
-            documentDate: typeof c.documentDate === 'string' ? c.documentDate : '',
+            documentDate: documentDateInit,
             draftTotal: parseDraftTotal(),
             debtorName: typeof c.oldDebtorName === 'string' ? c.oldDebtorName : '',
             debtorPhone: typeof c.oldDebtorPhone === 'string' ? c.oldDebtorPhone : '',

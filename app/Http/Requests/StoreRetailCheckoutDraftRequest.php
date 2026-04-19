@@ -15,6 +15,14 @@ class StoreRetailCheckoutDraftRequest extends FormRequest
         return $this->user()?->branch_id !== null;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $date = $this->input('document_date');
+        if ($date === null || $date === '') {
+            $this->merge(['document_date' => now()->toDateString()]);
+        }
+    }
+
     public function rules(): array
     {
         $branchId = (int) $this->user()->branch_id;

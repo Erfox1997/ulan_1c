@@ -153,7 +153,8 @@
                     >
                         @csrf
                         <input type="hidden" name="warehouse_id" :value="warehouseId" />
-                        <input type="hidden" name="document_date" :value="defaultDocumentDate" />
+                        {{-- Дата из сервера: без Alpine поле часто уходит пустым (прод, медленный JS, сбой инициализации). --}}
+                        <input type="hidden" name="document_date" value="{{ $defaultDocumentDate }}" />
 
                         <div class="border-b border-emerald-900/20 px-4 py-4 text-white sm:px-6" style="background: linear-gradient(135deg, #047857 0%, #0d9488 45%, #0f766e 100%);">
                             <p class="text-sm font-bold tracking-tight">Чек</p>

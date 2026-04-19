@@ -181,7 +181,10 @@ class RetailSaleController extends Controller
             ?? $paymentAccounts->first()?->id;
 
         $warehouseId = (int) ($draft['warehouse_id'] ?? 0);
-        $documentDate = (string) ($draft['document_date'] ?? now()->toDateString());
+        $documentDate = trim((string) ($draft['document_date'] ?? ''));
+        if ($documentDate === '') {
+            $documentDate = now()->toDateString();
+        }
         $lines = is_array($draft['lines'] ?? null) ? $draft['lines'] : [];
         $draftTotal = $this->computeDraftLinesTotal($branchId, $warehouseId, $lines);
 
@@ -285,8 +288,12 @@ class RetailSaleController extends Controller
         return $total;
     }
 
-    public function debts(Request $request): View
+    public function debts(Request $request): View|RedirectResponse
     {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
         $branchId = (int) auth()->user()->branch_id;
 
         $limit = (int) $request->integer('limit') ?: 100;
