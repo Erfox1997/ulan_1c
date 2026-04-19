@@ -2487,19 +2487,26 @@ document.addEventListener('alpine:init', () => {
                 if (s == null || s === '') return NaN;
                 return parseFloat(String(s).replace(/\s/g, '').replace(',', '.'));
             },
+            rowIsRetailService(row) {
+                if (!row) return false;
+                const v = row.is_service;
+                return v === true || v === 1 || v === '1';
+            },
             /** Текст остатка в списке поиска (0, если записи на складе нет). */
             goodsRowStockDisplay(row) {
-                if (!row || row.is_service === true || row.is_service === 1) return '';
-                const raw = row.stock_quantity;
+                if (!row || this.rowIsRetailService(row)) return '';
+                const raw = row.stock_quantity ?? row.stockQty;
                 if (raw == null || String(raw).trim() === '') return '0';
-                return String(raw).trim();
+                const s = String(raw).trim();
+                if (s === 'undefined' || s === 'null') return '0';
+                return s;
             },
             /** Товар без остатка на выбранном складе (услуги не учитываем). */
             goodsRowOutOfStock(row) {
                 if (!row) return false;
-                if (row.is_service === true || row.is_service === 1) return false;
+                if (this.rowIsRetailService(row)) return false;
                 if (this.warehouseId <= 0) return false;
-                const raw = row.stock_quantity;
+                const raw = row.stock_quantity ?? row.stockQty;
                 if (raw == null || String(raw).trim() === '') return true;
                 const n = this.parseMoney(raw);
                 if (!Number.isFinite(n)) return true;
@@ -2508,8 +2515,8 @@ document.addEventListener('alpine:init', () => {
             /** Позиция в чеке: нет остатка или количество больше доступного. */
             cartLineStockDanger(line) {
                 if (!line) return false;
-                if (line.is_service === true || line.is_service === 1) return false;
-                const raw = line.stock_quantity;
+                if (this.rowIsRetailService(line)) return false;
+                const raw = line.stock_quantity ?? line.stockQty;
                 if (raw == null || String(raw).trim() === '') {
                     return this.warehouseId > 0;
                 }
@@ -2557,21 +2564,20 @@ document.addEventListener('alpine:init', () => {
                 if (!row || row.id == null) return;
                 const id = row.id;
                 const idx = this.cart.findIndex((c) => c.good_id === id);
-                const isService = row.is_service === true || row.is_service === 1;
+                const isService = this.rowIsRetailService(row);
+                const rawStock = row.stock_quantity ?? row.stockQty;
                 const stock =
                     isService
                         ? null
-                        : row.stock_quantity != null && row.stock_quantity !== ''
-                          ? this.parseMoney(row.stock_quantity)
+                        : rawStock != null && rawStock !== ''
+                          ? this.parseMoney(rawStock)
                           : null;
                 if (idx >= 0) {
                     let q = this.parseMoney(this.cart[idx].quantity);
                     if (!Number.isFinite(q)) q = 0;
                     q += 1;
                     const lineIsService =
-                        this.cart[idx].is_service === true ||
-                        this.cart[idx].is_service === 1 ||
-                        isService;
+                        this.rowIsRetailService(this.cart[idx]) || isService;
                     if (!lineIsService && stock != null && Number.isFinite(stock) && q > stock + 1e-9) q = stock;
                     this.cart[idx].quantity = String(q);
                 } else {
@@ -2583,7 +2589,7 @@ document.addEventListener('alpine:init', () => {
                         name: row.name || '',
                         quantity: '1',
                         unit_price: price,
-                        stock_quantity: isService ? null : row.stock_quantity,
+                        stock_quantity: isService ? null : rawStock,
                         is_service: isService,
                         performer_employee_id: isService ? '' : '',
                     });
@@ -2644,11 +2650,12 @@ document.addEventListener('alpine:init', () => {
                 if (!line) return;
                 let q = this.parseMoney(line.quantity);
                 if (!Number.isFinite(q)) q = 0;
+                const rawSq = line.stock_quantity ?? line.stockQty;
                 const stock =
-                    line.is_service === true || line.is_service === 1
+                    this.rowIsRetailService(line)
                         ? null
-                        : line.stock_quantity != null && line.stock_quantity !== ''
-                          ? this.parseMoney(line.stock_quantity)
+                        : rawSq != null && rawSq !== ''
+                          ? this.parseMoney(rawSq)
                           : null;
                 q += 1;
                 if (stock != null && Number.isFinite(stock) && q > stock + 1e-9) q = stock;

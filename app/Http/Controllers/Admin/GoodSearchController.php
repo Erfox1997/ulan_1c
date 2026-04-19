@@ -6,9 +6,37 @@ use App\Http\Controllers\Controller;
 use App\Models\Good;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class GoodSearchController extends Controller
 {
+    /**
+     * @param  Collection<int, Good>  $goods
+     * @return list<array<string, mixed>>
+     */
+    private function goodsSearchPayload(Collection $goods, int $warehouseId): array
+    {
+        return $goods
+            ->map(static function (Good $g) use ($warehouseId): array {
+                $row = $g->toArray();
+                $isService = filter_var($row['is_service'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+                if ($warehouseId > 0 && ! $isService) {
+                    $q = $g->getAttribute('stock_quantity');
+                    if ($q === null || $q === '') {
+                        $row['stock_quantity'] = '0';
+                    } else {
+                        $row['stock_quantity'] = is_numeric($q) ? (string) $q : trim((string) $q);
+                    }
+                }
+
+                return $row;
+            })
+            ->values()
+            ->all();
+    }
+
     public function __invoke(Request $request): JsonResponse
     {
         $branchId = auth()->user()->branch_id;
@@ -48,7 +76,7 @@ class GoodSearchController extends Controller
                     'goods.wholesale_price',
                     'goods.is_service',
                     'osb.unit_cost as opening_unit_cost',
-                    'osb.quantity as stock_quantity',
+                    DB::raw('COALESCE(osb.quantity, 0) as stock_quantity'),
                 ]);
             } else {
                 $single->select([
@@ -66,7 +94,13 @@ class GoodSearchController extends Controller
 
             $row = $single->first();
 
-            return response()->json($row ? [$row->toArray()] : []);
+            if ($row === null) {
+                return response()->json([]);
+            }
+
+            $collection = collect([$row]);
+
+            return response()->json($this->goodsSearchPayload($collection, $warehouseId));
         }
 
         $term = trim((string) $request->query('q', ''));
@@ -100,14 +134,14 @@ class GoodSearchController extends Controller
                     'goods.wholesale_price',
                     'goods.is_service',
                     'osb.unit_cost as opening_unit_cost',
-                    'osb.quantity as stock_quantity',
+                    DB::raw('COALESCE(osb.quantity, 0) as stock_quantity'),
                 ])
                 ->orderBy('goods.article_code')
                 ->orderBy('goods.name')
                 ->limit(25)
                 ->get();
             if ($exactMatches->isNotEmpty()) {
-                return response()->json($exactMatches->values()->all());
+                return response()->json($this->goodsSearchPayload($exactMatches, $warehouseId));
             }
         }
 
@@ -165,7 +199,7 @@ class GoodSearchController extends Controller
                 'goods.wholesale_price',
                 'goods.is_service',
                 'osb.unit_cost as opening_unit_cost',
-                'osb.quantity as stock_quantity',
+                DB::raw('COALESCE(osb.quantity, 0) as stock_quantity'),
             ]);
         } else {
             $query->select([
@@ -185,6 +219,10 @@ class GoodSearchController extends Controller
             ->orderBy('goods.name')
             ->limit(25)
             ->get();
+
+        if ($warehouseId > 0) {
+            return response()->json($this->goodsSearchPayload($goods, $warehouseId));
+        }
 
         return response()->json($goods);
     }
