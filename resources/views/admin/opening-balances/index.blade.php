@@ -425,6 +425,7 @@
                             <a
                                 href="{{ route('admin.opening-balances.sample') }}"
                                 class="block border-t border-slate-100 px-2.5 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50"
+                                data-no-nav-loading
                                 @click="moreOpen = false"
                             >Скачать образец Excel</a>
                         </div>

@@ -80,10 +80,11 @@ class StoreOpeningBalancesRequest extends FormRequest
                 }
 
                 $qty = $line['quantity'] ?? null;
-                if ($qty === null || $qty === '') {
-                    $v->errors()->add("lines.{$i}.quantity", 'Укажите количество для «'.$code.'».');
-                } elseif (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty)) || (float) str_replace([' ', ','], ['', '.'], (string) $qty) <= 0) {
-                    $v->errors()->add("lines.{$i}.quantity", 'Количество должно быть числом больше 0.');
+                $qtyNorm = $qty === null || $qty === '' ? null : str_replace([' ', ','], ['', '.'], (string) $qty);
+                if ($qtyNorm !== null && $qtyNorm !== '' && ! is_numeric($qtyNorm)) {
+                    $v->errors()->add("lines.{$i}.quantity", 'Количество должно быть числом.');
+                } elseif ($qtyNorm !== null && $qtyNorm !== '' && is_numeric($qtyNorm) && (float) $qtyNorm < 0) {
+                    $v->errors()->add("lines.{$i}.quantity", 'Количество не может быть отрицательным.');
                 }
 
                 $cost = $line['unit_cost'] ?? null;

@@ -45,8 +45,17 @@ class OpeningBalanceService
         }
 
         $name = trim((string) ($line['name'] ?? ''));
-        $quantity = $this->parseDecimal($line['quantity'] ?? 0);
-        if ($quantity === null || (float) $quantity <= 0) {
+        $rawQty = $line['quantity'] ?? null;
+        $quantity = $this->parseDecimal($rawQty);
+        if ($quantity === null) {
+            $empty = $rawQty === null || $rawQty === '' || (is_string($rawQty) && trim($rawQty) === '');
+            if ($empty) {
+                $quantity = '0';
+            } else {
+                return null;
+            }
+        }
+        if ((float) $quantity < 0) {
             return null;
         }
 
@@ -522,8 +531,18 @@ class OpeningBalanceService
             }
 
             $quantity = $this->parseDecimal($qtyRaw);
-            if ($quantity === null || (float) $quantity <= 0) {
-                $errors[] = 'Строка '.($r + 1).': количество должно быть числом больше 0.';
+            if ($quantity === null) {
+                $empty = $qtyRaw === null || $qtyRaw === '' || (is_string($qtyRaw) && trim($qtyRaw) === '');
+                if ($empty) {
+                    $quantity = '0';
+                } else {
+                    $errors[] = 'Строка '.($r + 1).': некорректное количество.';
+
+                    continue;
+                }
+            }
+            if ((float) $quantity < 0) {
+                $errors[] = 'Строка '.($r + 1).': количество не может быть отрицательным.';
 
                 continue;
             }

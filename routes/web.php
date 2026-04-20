@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\ArticleSequenceController;
 use App\Http\Controllers\Admin\BankCashController;
 use App\Http\Controllers\Admin\BranchRoleController;
 use App\Http\Controllers\Admin\CashShiftController;
@@ -7,12 +8,12 @@ use App\Http\Controllers\Admin\CategorySuggestController;
 use App\Http\Controllers\Admin\CounterpartyController;
 use App\Http\Controllers\Admin\CounterpartySearchController;
 use App\Http\Controllers\Admin\CustomerReturnController;
+use App\Http\Controllers\Admin\CustomerVehicleController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\EmployeeAdvanceController;
 use App\Http\Controllers\Admin\EmployeeController;
 use App\Http\Controllers\Admin\EmployeePenaltyController;
 use App\Http\Controllers\Admin\EsfController;
-use App\Http\Controllers\Admin\ArticleSequenceController;
 use App\Http\Controllers\Admin\GoodSearchController;
 use App\Http\Controllers\Admin\LegalEntitySaleController;
 use App\Http\Controllers\Admin\OpeningBalanceController;
@@ -20,14 +21,13 @@ use App\Http\Controllers\Admin\OrganizationController;
 use App\Http\Controllers\Admin\PaymentInvoiceController;
 use App\Http\Controllers\Admin\PayrollController;
 use App\Http\Controllers\Admin\PlaceholderController;
-use App\Http\Controllers\Admin\PurchaseRequestController;
 use App\Http\Controllers\Admin\PurchaseReceiptController;
+use App\Http\Controllers\Admin\PurchaseRequestController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\RetailSaleController;
 use App\Http\Controllers\Admin\SaleServiceController;
-use App\Http\Controllers\Admin\CustomerVehicleController;
 use App\Http\Controllers\Admin\ServiceOrderController;
 use App\Http\Controllers\Admin\StockInventoryController;
 use App\Http\Controllers\Admin\WarehouseController;
@@ -165,6 +165,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::post('/{serviceOrder}/fulfill-legal', [ServiceOrderController::class, 'fulfillLegal'])->name('requests.fulfill-legal');
         });
         Route::post('p/trade.sale-services', [SaleServiceController::class, 'store'])->name('sale-services.store');
+        Route::post('p/trade.sale-services/import', [SaleServiceController::class, 'import'])->name('sale-services.import');
+        Route::get('p/trade.sale-services/sample-import.xlsx', [SaleServiceController::class, 'sampleImport'])->name('sale-services.sample-import');
         Route::get('p/trade.sale-services/{service}/edit', [SaleServiceController::class, 'edit'])->whereNumber('service')->name('sale-services.edit');
         Route::put('p/trade.sale-services/{service}', [SaleServiceController::class, 'update'])->whereNumber('service')->name('sale-services.update');
         Route::delete('p/trade.sale-services/{service}', [SaleServiceController::class, 'destroy'])->whereNumber('service')->name('sale-services.destroy');

@@ -28,6 +28,19 @@
             </div>
         @endif
 
+        @if (session('import_errors'))
+            <div
+                class="rounded-2xl border border-amber-200/90 bg-gradient-to-r from-amber-50 to-white px-4 py-3 text-sm text-amber-950 shadow-sm ring-1 ring-amber-100/60"
+            >
+                <p class="font-semibold">Замечания при импорте:</p>
+                <ul class="mt-2 list-inside list-disc space-y-1">
+                    @foreach (session('import_errors') as $err)
+                        <li>{{ $err }}</li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+
         <div class="overflow-hidden rounded-2xl border border-sky-200/70 bg-white shadow-[0_8px_30px_-8px_rgba(14,165,233,0.15)] ring-1 ring-sky-100/60">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100/80 bg-gradient-to-r from-emerald-50/95 via-white to-sky-50/60 px-4 py-3.5 sm:px-5">
                 <div class="flex min-w-0 items-center gap-3">
@@ -41,11 +54,43 @@
                         <h2 class="truncate text-[14px] font-bold leading-tight text-slate-800">Продажа услуг</h2>
                     </div>
                 </div>
-                <a href="{{ route('admin.sale-services.create') }}" class="cp-btn cp-btn-primary shadow-md shadow-amber-400/20 ring-1 ring-amber-300/40">
-                    <span class="text-[14px] leading-none">+</span>
-                    Добавить услугу
-                </a>
+                <div class="flex flex-wrap items-center gap-2">
+                    <form
+                        method="POST"
+                        action="{{ route('admin.sale-services.import') }}"
+                        enctype="multipart/form-data"
+                        class="flex flex-wrap items-center gap-2"
+                    >
+                        @csrf
+                        <input
+                            type="file"
+                            name="file"
+                            id="sale_services_import_file"
+                            class="hidden"
+                            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                            onchange="if (this.files.length) this.form.requestSubmit()"
+                        />
+                        <button
+                            type="button"
+                            class="cp-btn border-emerald-200/90 bg-gradient-to-b from-white to-emerald-50/90 text-[11px] font-semibold text-slate-800 shadow-sm hover:to-emerald-50"
+                            onclick="document.getElementById('sale_services_import_file').click()"
+                        >
+                            Excel…
+                        </button>
+                    </form>
+                    <a
+                        href="{{ route('admin.sale-services.sample-import') }}"
+                        class="cp-btn border-sky-200 bg-gradient-to-b from-sky-50 to-white text-[11px] font-semibold text-sky-900 hover:from-sky-100"
+                    >
+                        Образец
+                    </a>
+                    <a href="{{ route('admin.sale-services.create') }}" class="cp-btn cp-btn-primary shadow-md shadow-amber-400/20 ring-1 ring-amber-300/40">
+                        <span class="text-[14px] leading-none">+</span>
+                        Добавить услугу
+                    </a>
+                </div>
             </div>
+            <x-input-error class="px-4 pt-3 sm:px-5" :messages="$errors->get('file')" />
             <div class="cp-table-wrap bg-gradient-to-b from-slate-50/40 to-white">
                 <table class="cp-table">
                     <thead>

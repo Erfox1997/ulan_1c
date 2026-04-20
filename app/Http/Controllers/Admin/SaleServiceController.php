@@ -3,13 +3,18 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ImportSaleServicesRequest;
 use App\Http\Requests\StoreSaleServiceRequest;
 use App\Http\Requests\UpdateSaleServiceRequest;
 use App\Models\Good;
 use App\Services\OpeningBalanceService;
+use App\Services\SaleServiceImportService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SaleServiceController extends Controller
 {
@@ -101,6 +106,55 @@ class SaleServiceController extends Controller
         return redirect()
             ->route('admin.sale-services.index')
             ->with('status', 'Услуга удалена.');
+    }
+
+    public function import(ImportSaleServicesRequest $request, SaleServiceImportService $importService): RedirectResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $path = $request->file('file')->getRealPath();
+        if ($path === false) {
+            return back()->withErrors(['file' => 'Не удалось прочитать файл.']);
+        }
+
+        $result = $importService->importFromFile($path, $branchId);
+
+        $message = 'Импортировано услуг: '.$result['imported'].'.';
+        if ($result['skipped'] > 0) {
+            $message .= ' Пропущено пустых строк: '.$result['skipped'].'.';
+        }
+
+        if ($result['errors'] !== []) {
+            session()->flash('import_errors', array_slice($result['errors'], 0, 40));
+        }
+
+        return redirect()
+            ->route('admin.sale-services.index')
+            ->with('status', $message);
+    }
+
+    public function sampleImport(): StreamedResponse
+    {
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->fromArray([
+            ['Наименование *', 'Единица', 'Цена, сом'],
+            ['Диагностика автомобиля', 'усл.', '1500'],
+            ['Замена масла', 'усл.', '800,50'],
+            ['Сход-развал', 'час', ''],
+        ], null, 'A1', true);
+
+        foreach (range('A', 'C') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+
+        $filename = 'obrazec_uslug.xlsx';
+
+        return response()->streamDownload(function () use ($spreadsheet) {
+            $writer = new Xlsx($spreadsheet);
+            $writer->save('php://output');
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ]);
     }
 
     private function serviceGoodOrAbort(int $id): Good

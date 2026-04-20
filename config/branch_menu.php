@@ -82,7 +82,7 @@ return [
         'label' => 'Зарплата и кадры',
         'icon' => 'users',
         'children' => [
-            
+
             ['label' => 'Сотрудники', 'route' => 'admin.settings.employees', 'route_is' => 'admin.settings.employees*'],
             ['label' => 'Зарплата', 'route' => 'admin.payroll', 'route_is' => ['admin.payroll', 'admin.payroll.show', 'admin.payroll.pay-slip', 'admin.payroll.revoke-payout']],
             ['label' => 'Авансы', 'route' => 'admin.payroll.advances.index', 'route_is' => 'admin.payroll.advances.*'],
@@ -96,7 +96,7 @@ return [
         'children' => [
             ['label' => 'Данные организации', 'route' => 'admin.organizations.index', 'route_is' => 'admin.organizations.*'],
             ['label' => 'Ответственные лица и доступы', 'route' => 'admin.settings.responsible', 'route_is' => 'admin.settings.responsible*'],
-             
+
             ['label' => 'Ввод начальных остатков', 'route' => 'admin.opening-balances.index', 'route_is' => 'admin.opening-balances.*'],
             ['label' => 'Справочники: склады', 'route' => 'admin.warehouses.index', 'route_is' => 'admin.warehouses.*'],
         ],
