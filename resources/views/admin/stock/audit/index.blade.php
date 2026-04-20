@@ -7,6 +7,13 @@
             <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">{{ session('error') }}</div>
         @endif
 
+        @php
+            $draftCount = $documents->where('is_draft', true)->count();
+        @endphp
+        <form id="stock-audit-merge-form" method="POST" action="{{ route('admin.stock.audit.merge-drafts') }}" class="hidden">
+            @csrf
+            <input type="hidden" name="warehouse_id" value="{{ (int) $selectedWarehouseId }}" />
+        </form>
         <div class="flex flex-wrap items-center justify-between gap-3">
             <form method="GET" action="{{ route('admin.stock.audit') }}" class="flex flex-wrap items-end gap-3">
                 <div>
@@ -22,12 +29,26 @@
                     </select>
                 </div>
             </form>
-            <a
-                href="{{ route('admin.stock.audit.create', ['warehouse_id' => $selectedWarehouseId]) }}"
-                class="inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-            >
-                Новая ревизия
-            </a>
+            <div class="flex flex-wrap items-center gap-2">
+                @if ($draftCount >= 2)
+                    <button
+                        type="submit"
+                        form="stock-audit-merge-form"
+                        id="stock-audit-merge-submit"
+                        class="inline-flex rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled
+                        onclick="return confirm('Объединить выбранные черновики в один? По каждому товару количества будут сложены. Исходные черновики будут удалены.')"
+                    >
+                        Объединить черновики
+                    </button>
+                @endif
+                <a
+                    href="{{ route('admin.stock.audit.create', ['warehouse_id' => $selectedWarehouseId]) }}"
+                    class="inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                >
+                    Новая ревизия
+                </a>
+            </div>
         </div>
 
         @if ($warehouses->isEmpty())
@@ -39,13 +60,16 @@
                 <div class="border-b border-slate-100 px-4 py-3 sm:px-5">
                     <h2 class="text-sm font-bold text-slate-900">Журнал ревизий</h2>
                     <p class="text-xs text-slate-500">
-                        Черновик можно открыть и продолжить. После проведения скачайте Excel: учёт, факт, разница и сумма по закупочной цене.
+                        Несколько человек могут вести свои черновики по одному складу; отметьте два и более черновика и нажмите «Объединить черновики» — позиции суммируются (например 5 + 3 = 8), получится один черновик для проведения ревизии. После проведения скачайте Excel: учёт, факт, разница и сумма по закупочной цене.
                     </p>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-left text-sm">
                         <thead class="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase text-slate-500">
                             <tr>
+                                @if ($draftCount >= 2)
+                                    <th class="w-10 px-2 py-2 text-center" title="Для объединения черновиков">✓</th>
+                                @endif
                                 <th class="px-4 py-2">Дата</th>
                                 <th class="px-4 py-2">Склад</th>
                                 <th class="px-4 py-2">Статус</th>
@@ -63,6 +87,19 @@
                                     class="transition-colors @if ($d->is_draft) cursor-pointer hover:bg-indigo-50/80 @else hover:bg-indigo-50/60 @endif"
                                     @if ($editUrl) onclick="window.location.href='{{ $editUrl }}'" @endif
                                 >
+                                    @if ($draftCount >= 2)
+                                        <td class="px-2 py-2.5 text-center" onclick="event.stopPropagation()">
+                                            @if ($d->is_draft)
+                                                <input
+                                                    type="checkbox"
+                                                    form="stock-audit-merge-form"
+                                                    name="draft_ids[]"
+                                                    value="{{ $d->id }}"
+                                                    class="stock-audit-merge-cb h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                                />
+                                            @endif
+                                        </td>
+                                    @endif
                                     <td class="whitespace-nowrap px-4 py-2.5 @if ($d->is_draft) font-medium text-indigo-800 @else text-slate-800 @endif">
                                         {{ $d->document_date->format('d.m.Y') }}
                                     </td>
@@ -107,7 +144,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="6" class="px-4 py-10 text-center text-sm text-slate-500">Документов пока нет.</td>
+                                    <td colspan="{{ $draftCount >= 2 ? 7 : 6 }}" class="px-4 py-10 text-center text-sm text-slate-500">Документов пока нет.</td>
                                 </tr>
                             @endforelse
                         </tbody>
@@ -116,4 +153,21 @@
             </div>
         @endif
     </div>
+    @if ($draftCount >= 2)
+        <script>
+            document.addEventListener('DOMContentLoaded', function () {
+                var btn = document.getElementById('stock-audit-merge-submit');
+                if (!btn) return;
+                // Чекбоксы с form="..." не входят в subtree <form> — querySelector по form их не видит.
+                function sync() {
+                    var n = document.querySelectorAll('input.stock-audit-merge-cb:checked').length;
+                    btn.disabled = n < 2;
+                }
+                document.querySelectorAll('input.stock-audit-merge-cb').forEach(function (el) {
+                    el.addEventListener('change', sync);
+                });
+                sync();
+            });
+        </script>
+    @endif
 </x-admin-layout>

@@ -16,11 +16,9 @@ class GoodsCharacteristicsService
         'category' => 'Категория',
         'article_code' => 'Артикул',
         'unit' => 'Ед. изм.',
-        'quantity' => 'Количество',
         'unit_cost' => 'Цена (закуп.)',
         'wholesale_price' => 'Оптовая цена',
         'sale_price' => 'Цена (продаж.)',
-        'min_sale_price' => 'Мин. цена (продаж.)',
         'oem' => 'ОЭМ',
         'factory_number' => 'Заводской №',
         'min_stock' => 'Мин. остаток',
@@ -83,7 +81,9 @@ class GoodsCharacteristicsService
 
         $good->wholesale_price = $this->openingBalanceService->parseOptionalMoney($line['wholesale_price'] ?? null);
         $good->sale_price = $this->openingBalanceService->parseOptionalMoney($line['sale_price'] ?? null);
-        $good->min_sale_price = $this->openingBalanceService->parseOptionalMoney($line['min_sale_price'] ?? null);
+        if (array_key_exists('min_sale_price', $line)) {
+            $good->min_sale_price = $this->openingBalanceService->parseOptionalMoney($line['min_sale_price']);
+        }
 
         $oemRaw = trim((string) ($line['oem'] ?? ''));
         $good->oem = $oemRaw === '' ? null : $oemRaw;
@@ -97,16 +97,16 @@ class GoodsCharacteristicsService
 
         $this->propagateMinStockToSameOemGoods($branchId, $good);
 
-        $qtyRaw = trim((string) ($line['quantity'] ?? ''));
-        $costRaw = $line['unit_cost'] ?? null;
-        $costIsEmpty = $costRaw === null || $costRaw === '';
-
         $balance = OpeningStockBalance::query()
             ->where('warehouse_id', $warehouseId)
             ->where('good_id', $good->id)
             ->first();
 
-        if ($qtyRaw === '') {
+        $costRaw = $line['unit_cost'] ?? null;
+        $costIsEmpty = $costRaw === null || $costRaw === '';
+
+        $qtyRaw = array_key_exists('quantity', $line) ? trim((string) ($line['quantity'] ?? '')) : null;
+        if ($qtyRaw === null || $qtyRaw === '') {
             if ($balance && ! $costIsEmpty) {
                 $balance->unit_cost = $this->openingBalanceService->parseOptionalMoney($costRaw);
                 $balance->save();
@@ -117,10 +117,10 @@ class GoodsCharacteristicsService
 
         $qty = $this->openingBalanceService->parseDecimal($qtyRaw);
         if ($qty === null || (float) $qty <= 0) {
-            OpeningStockBalance::query()
-                ->where('warehouse_id', $warehouseId)
-                ->where('good_id', $good->id)
-                ->delete();
+            if ($balance) {
+                $balance->quantity = '0';
+                $balance->save();
+            }
 
             return;
         }
@@ -173,7 +173,7 @@ class GoodsCharacteristicsService
 
     /**
      * Товары (не услуги) филиала с неполной характеристикой по выбранному фильтру (один ключ или «все»).
-     * Для полей «Количество» и «Цена (закуп.)» учитывается выбранный склад.
+     * Для поля «Цена (закуп.)» учитывается выбранный склад.
      */
     public function incompleteGoodsQuery(int $branchId, int $warehouseId, string $filter): Builder
     {
@@ -245,14 +245,9 @@ class GoodsCharacteristicsService
                 ->orWhere(fn (Builder $q) => $q->whereNull('unit')->orWhere('unit', ''))
                 ->orWhere(fn (Builder $q) => $q->whereNull('wholesale_price'))
                 ->orWhere(fn (Builder $q) => $q->whereNull('sale_price'))
-                ->orWhere(fn (Builder $q) => $q->whereNull('min_sale_price'))
                 ->orWhere(fn (Builder $q) => $q->whereNull('oem')->orWhere('oem', ''))
                 ->orWhere(fn (Builder $q) => $q->whereNull('factory_number')->orWhere('factory_number', ''))
                 ->orWhere(fn (Builder $q) => $q->whereNull('min_stock'))
-                ->orWhere(fn (Builder $q) => $q->whereDoesntHave(
-                    'openingStockBalances',
-                    fn (Builder $b) => $b->where('warehouse_id', $warehouseId)->where('quantity', '>', 0)
-                ))
                 ->orWhere(fn (Builder $q) => $q->where(function (Builder $inner) use ($warehouseId) {
                     $inner->whereDoesntHave(
                         'openingStockBalances',
@@ -274,14 +269,9 @@ class GoodsCharacteristicsService
             'unit' => $q->where(fn (Builder $q) => $q->whereNull('unit')->orWhere('unit', '')),
             'wholesale_price' => $q->whereNull('wholesale_price'),
             'sale_price' => $q->whereNull('sale_price'),
-            'min_sale_price' => $q->whereNull('min_sale_price'),
             'oem' => $q->where(fn (Builder $q) => $q->whereNull('oem')->orWhere('oem', '')),
             'factory_number' => $q->where(fn (Builder $q) => $q->whereNull('factory_number')->orWhere('factory_number', '')),
             'min_stock' => $q->whereNull('min_stock'),
-            'quantity' => $q->whereDoesntHave(
-                'openingStockBalances',
-                fn (Builder $b) => $b->where('warehouse_id', $warehouseId)->where('quantity', '>', 0)
-            ),
             'unit_cost' => $q->where(function (Builder $inner) use ($warehouseId) {
                 $inner->whereDoesntHave(
                     'openingStockBalances',

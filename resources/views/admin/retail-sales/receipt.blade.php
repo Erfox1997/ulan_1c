@@ -1,6 +1,13 @@
 @php
     /** @var \App\Models\RetailSale $sale */
     $fmt = static fn ($v) => number_format((float) $v, 2, ',', ' ');
+    $tz = config('app.timezone') ?: 'UTC';
+    $receiptAt = $sale->created_at
+        ? $sale->created_at->timezone($tz)->format('d.m.Y H:i')
+        : now()->timezone($tz)->format('d.m.Y H:i');
+    $storeTitle = trim((string) ($sale->branch?->name ?? '')) !== ''
+        ? trim((string) $sale->branch->name)
+        : config('app.name', 'Магазин');
     $backToPosUrl = route('admin.retail-sales.index', array_filter([
         'warehouse_id' => $sale->warehouse_id > 0 ? $sale->warehouse_id : null,
     ], static fn ($v) => (int) $v > 0));
@@ -14,38 +21,81 @@
     <title>Чек № {{ $sale->id }} — {{ config('app.name', 'Autoelement') }}</title>
     @vite(['resources/css/app.css'])
     <style>
+        /* Слип как на 58/80 мм термопринтере: узкая колонка, моноширинные суммы */
+        .receipt-slip {
+            max-width: 80mm;
+            margin-left: auto;
+            margin-right: auto;
+            font-family: ui-monospace, 'Cascadia Mono', 'Consolas', 'Roboto Mono', monospace;
+            font-size: 11.5px;
+            line-height: 1.4;
+            color: #0a0a0a;
+            background: #fff;
+        }
+        .receipt-slip .receipt-center {
+            text-align: center;
+        }
+        .receipt-slip .receipt-rule {
+            border: none;
+            border-top: 1px dashed #1a1a1a;
+            margin: 0.55rem 0;
+        }
+        .receipt-slip .receipt-rule-thick {
+            border-top-style: solid;
+            border-top-width: 1px;
+        }
+        .receipt-slip .receipt-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+            align-items: baseline;
+        }
+        .receipt-slip .receipt-grow {
+            flex: 1;
+            min-width: 0;
+        }
+        .receipt-slip .receipt-num {
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
         @media print {
             .no-print { display: none !important; }
-            .receipt-print-area {
+            .receipt-print-wrap {
                 box-shadow: none !important;
                 border: none !important;
                 border-radius: 0 !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                max-width: none !important;
             }
             body {
-                background: white !important;
+                background: #fff !important;
+            }
+            @page {
+                margin: 5mm;
+                size: auto;
             }
         }
     </style>
 </head>
-<body class="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-emerald-50/40 font-sans text-slate-900 antialiased">
-    {{-- Верхняя панель (не в печать) --}}
-    <header class="no-print sticky top-0 z-30 border-b border-white/60 bg-white/85 backdrop-blur-md shadow-sm shadow-slate-900/5">
+<body class="min-h-screen bg-slate-100 font-sans text-slate-900 antialiased">
+    <header class="no-print sticky top-0 z-30 border-b border-slate-200/90 bg-white/95 backdrop-blur shadow-sm">
         <div class="mx-auto flex max-w-3xl flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3.5">
             <div class="flex flex-wrap items-center gap-2 sm:gap-3">
                 <a
                     href="{{ route('admin.retail-sales.history') }}"
-                    class="group inline-flex items-center gap-2 rounded-xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-900/5 transition hover:border-emerald-300 hover:bg-emerald-50/90 hover:text-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 sm:px-4"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:border-emerald-300 hover:bg-emerald-50"
                 >
-                    <svg class="h-4 w-4 shrink-0 text-emerald-600 transition group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <svg class="h-4 w-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M15 19l-7-7 7-7"/>
                     </svg>
                     История продаж
                 </a>
                 <a
                     href="{{ $backToPosUrl }}"
-                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-sm font-bold tracking-tight text-white shadow-lg shadow-emerald-900/20 ring-1 ring-white/20 transition hover:from-emerald-500 hover:to-teal-500 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
+                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow hover:bg-emerald-700"
                 >
-                    <svg class="h-4 w-4 opacity-95" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
                     Новая продажа
@@ -54,7 +104,7 @@
             <button
                 type="button"
                 onclick="window.print()"
-                class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-2.5 text-sm font-bold text-emerald-900 shadow-sm transition hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 sm:w-auto sm:shrink-0"
+                class="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-900 shadow-sm hover:bg-slate-50 sm:w-auto"
             >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
@@ -66,108 +116,131 @@
 
     <main class="mx-auto max-w-lg px-3 pb-12 pt-6 sm:px-4 sm:pt-8">
         @if (session('status'))
-            <div class="no-print mb-5 rounded-2xl border border-emerald-200/90 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-inner ring-1 ring-emerald-900/5">
+            <div class="no-print mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                 {{ session('status') }}
             </div>
         @endif
 
-        <article class="receipt-print-area overflow-hidden rounded-2xl border border-emerald-900/10 bg-white shadow-xl shadow-emerald-950/10 ring-1 ring-emerald-900/[0.04]">
-            {{-- Шапка чека --}}
-            <div
-                class="relative px-5 py-6 text-white sm:px-7 sm:py-7"
-                style="background: linear-gradient(135deg, #047857 0%, #0d9488 48%, #0f766e 100%);"
-            >
-                <span class="inline-flex rounded-full bg-white/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-50/95 ring-1 ring-white/20">
-                    Розница
-                </span>
-                <h1 class="mt-3 text-2xl font-black tracking-tight sm:text-[1.65rem]">
-                    Товарный чек <span class="tabular-nums">№ {{ $sale->id }}</span>
-                </h1>
-                <p class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-emerald-50/95">
-                    <span class="inline-flex items-center gap-1.5">
-                        <svg class="h-4 w-4 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                        {{ $sale->document_date->format('d.m.Y') }}
-                    </span>
-                    <span class="text-emerald-200/80" aria-hidden="true">·</span>
-                    <span>{{ $sale->warehouse->name ?? 'Склад' }}</span>
-                </p>
-            </div>
-
-            {{-- Таблица позиций --}}
-            <div class="overflow-x-auto border-b border-slate-100">
-                <table class="w-full min-w-[18rem] text-left text-sm">
-                    <thead>
-                        <tr class="bg-slate-50/95 text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                            <th class="px-4 py-3 sm:px-5">Наименование</th>
-                            <th class="px-2 py-3 text-right tabular-nums sm:px-3">Кол-во</th>
-                            <th class="px-2 py-3 text-right tabular-nums sm:px-3">Цена</th>
-                            <th class="px-4 py-3 text-right tabular-nums sm:pr-5">Сумма</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100">
-                        @foreach ($sale->lines as $line)
-                            <tr class="bg-white transition-colors hover:bg-emerald-50/30">
-                                <td class="max-w-[12rem] px-4 py-3 font-medium leading-snug text-slate-900 sm:max-w-none sm:px-5">
-                                    {{ $line->name }}
-                                </td>
-                                <td class="whitespace-nowrap px-2 py-3 text-right tabular-nums text-slate-700 sm:px-3">
-                                    {{ rtrim(rtrim((string) $line->quantity, '0'), '.') }}
-                                </td>
-                                <td class="whitespace-nowrap px-2 py-3 text-right tabular-nums text-slate-600 sm:px-3">
-                                    {{ $line->unit_price !== null ? $fmt($line->unit_price) : '—' }}
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 sm:pr-5">
-                                    {{ $line->line_sum !== null ? $fmt($line->line_sum) : '—' }}
-                                </td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-            </div>
-
-            {{-- Итоги --}}
-            <div class="space-y-4 px-4 py-5 sm:px-6 sm:py-6">
-                <div class="flex flex-wrap items-end justify-between gap-2 border-b border-dashed border-emerald-200/80 pb-4">
-                    <span class="text-xs font-bold uppercase tracking-widest text-slate-500">Итого</span>
-                    <span class="text-2xl font-black tabular-nums tracking-tight text-emerald-950">{{ $fmt($sale->total_amount) }} <span class="text-base font-bold text-emerald-800">сом</span></span>
+        <div class="receipt-print-wrap rounded-lg border border-slate-300 bg-white p-4 shadow-md sm:p-5">
+            <article class="receipt-slip receipt-print-area">
+                <div class="receipt-center">
+                    <p class="text-[13px] font-bold uppercase leading-tight tracking-wide">{{ $storeTitle }}</p>
+                    @if (trim((string) ($sale->branch?->code ?? '')) !== '')
+                        <p class="mt-0.5 text-[10px] text-neutral-600">код филиала: {{ $sale->branch->code }}</p>
+                    @endif
+                    <p class="mt-1 text-[10px] uppercase tracking-[0.12em] text-neutral-500">товарный чек (розница)</p>
                 </div>
 
+                <hr class="receipt-rule">
+
+                <div class="space-y-0.5 text-[11px]">
+                    <div class="receipt-row">
+                        <span class="text-neutral-600">Чек №</span>
+                        <span class="receipt-num font-semibold">{{ $sale->id }}</span>
+                    </div>
+                    <div class="receipt-row">
+                        <span class="text-neutral-600">Дата / время</span>
+                        <span class="receipt-num">{{ $receiptAt }}</span>
+                    </div>
+                    <div class="receipt-row">
+                        <span class="text-neutral-600">Дата док.</span>
+                        <span class="receipt-num">{{ $sale->document_date->format('d.m.Y') }}</span>
+                    </div>
+                    @if ($sale->warehouse)
+                        <div class="receipt-row">
+                            <span class="text-neutral-600">Точка</span>
+                            <span class="receipt-grow text-right font-medium">{{ $sale->warehouse->name }}</span>
+                        </div>
+                    @endif
+                </div>
+
+                <hr class="receipt-rule">
+
+                <div class="space-y-3">
+                    @foreach ($sale->lines as $line)
+                        @php
+                            $qtyRaw = rtrim(rtrim((string) $line->quantity, '0'), '.');
+                            $unit = trim((string) ($line->unit ?? ''));
+                            $qtyLabel = $unit !== '' ? $qtyRaw.' '.$unit : $qtyRaw;
+                        @endphp
+                        <div>
+                            <p class="font-semibold leading-snug">{{ $line->name }}</p>
+                            @if (trim((string) ($line->article_code ?? '')) !== '')
+                                <p class="mt-0.5 text-[10px] text-neutral-500">арт. {{ $line->article_code }}</p>
+                            @endif
+                            <div class="receipt-row mt-1 text-[11px]">
+                                <span class="text-neutral-600">{{ $qtyLabel }} × {{ $line->unit_price !== null ? $fmt($line->unit_price) : '—' }}</span>
+                                <span class="receipt-num font-semibold">{{ $line->line_sum !== null ? $fmt($line->line_sum) : '—' }}</span>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+
+                <hr class="receipt-rule receipt-rule-thick">
+
+                <div class="receipt-row text-[12px] font-bold">
+                    <span>ИТОГО</span>
+                    <span class="receipt-num">{{ $fmt($sale->total_amount) }}</span>
+                </div>
+                <p class="receipt-center mt-0.5 text-[10px] text-neutral-600">сом (KGS)</p>
+
                 @if ($sale->payments->isNotEmpty())
-                    <div>
-                        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Оплата</p>
-                        <ul class="mt-2 space-y-2">
-                            @foreach ($sale->payments as $p)
-                                <li class="flex flex-wrap items-baseline justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm ring-1 ring-slate-900/5">
-                                    <span class="font-medium text-slate-800">{{ $p->organizationBankAccount?->labelWithoutAccountNumber() ?? 'Счёт' }}</span>
-                                    <span class="font-bold tabular-nums text-emerald-800">{{ $fmt($p->amount) }} сом</span>
-                                </li>
-                            @endforeach
-                        </ul>
+                    <hr class="receipt-rule">
+                    <p class="mb-1 text-[10px] font-bold uppercase tracking-wide text-neutral-600">Оплата</p>
+                    <div class="space-y-1.5">
+                        @foreach ($sale->payments as $p)
+                            @php
+                                $acc = $p->organizationBankAccount;
+                                $payLabel = $acc?->labelWithoutAccountNumber() ?? 'Оплата';
+                            @endphp
+                            <div>
+                                <div class="receipt-row text-[11px]">
+                                    <span class="receipt-grow pr-2 text-left leading-tight">{{ $payLabel }}</span>
+                                    <span class="receipt-num font-semibold">{{ $fmt($p->amount) }}</span>
+                                </div>
+                            </div>
+                        @endforeach
                     </div>
                 @endif
 
                 @if ((float) $sale->debt_amount > 0.004)
-                    <div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 ring-1 ring-rose-900/5">
-                        <p class="text-[11px] font-bold uppercase tracking-wide text-rose-800/90">Долг</p>
-                        <p class="mt-1 text-lg font-black tabular-nums text-rose-900">{{ $fmt($sale->debt_amount) }} сом</p>
+                    <hr class="receipt-rule">
+                    <div class="rounded border border-dashed border-neutral-800 px-2 py-2">
+                        <div class="receipt-row text-[11px] font-bold">
+                            <span>ДОЛГ</span>
+                            <span class="receipt-num">{{ $fmt($sale->debt_amount) }}</span>
+                        </div>
                         @if ($sale->debtor_name || $sale->debtor_phone)
-                            <p class="mt-2 text-sm text-rose-950/90">
+                            <p class="mt-1 text-[10px] leading-snug">
                                 <span class="font-semibold">{{ $sale->debtor_name }}</span>
-                                @if($sale->debtor_phone)<span class="text-rose-800/80"> · </span><span class="tabular-nums">{{ $sale->debtor_phone }}</span>@endif
+                                @if ($sale->debtor_phone)
+                                    <span class="text-neutral-600"> · </span><span class="receipt-num">{{ $sale->debtor_phone }}</span>
+                                @endif
                             </p>
                         @endif
                     </div>
                 @endif
 
-                <p class="flex items-center gap-2 text-xs text-slate-500">
-                    <svg class="h-3.5 w-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                    Кассир: <span class="font-semibold text-slate-700">{{ $sale->user?->name ?? '—' }}</span>
-                </p>
-            </div>
-        </article>
+                <hr class="receipt-rule">
 
-        <p class="no-print mt-8 max-w-md mx-auto text-center text-xs leading-relaxed text-slate-500">
-            После закрытия окна печати вы перейдёте к новой продаже. При печати скрываются верхняя панель и кнопки.
+                <div class="receipt-center space-y-1 text-[11px] font-semibold leading-snug">
+                    <p>Спасибо за покупку!</p>
+                    <p class="text-[10px] font-normal text-neutral-600">Сохраняйте чек до выхода из магазина</p>
+                </div>
+
+                <hr class="receipt-rule">
+
+                <div class="text-[10px] text-neutral-600">
+                    <div class="receipt-row">
+                        <span>Кассир</span>
+                        <span class="receipt-grow text-right font-medium text-neutral-900">{{ $sale->user?->name ?? '—' }}</span>
+                    </div>
+                </div>
+            </article>
+        </div>
+
+        <p class="no-print mt-6 text-center text-xs text-slate-500">
+            После закрытия окна печати вы перейдёте к новой продаже. При печати скрывается эта подсказка и панель сверху.
         </p>
     </main>
     <script>

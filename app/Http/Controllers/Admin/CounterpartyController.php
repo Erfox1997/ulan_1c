@@ -73,8 +73,6 @@ class CounterpartyController extends Controller
             abort(403);
         }
 
-        $kind = $request->input('kind', Counterparty::KIND_SUPPLIER);
-
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:500'],
             'legal_form' => ['required', 'string', Rule::in([
@@ -83,12 +81,7 @@ class CounterpartyController extends Controller
                 Counterparty::LEGAL_INDIVIDUAL,
                 Counterparty::LEGAL_OTHER,
             ])],
-            'phone' => [
-                Rule::requiredIf((string) $kind === Counterparty::KIND_BUYER),
-                'nullable',
-                'string',
-                'max:64',
-            ],
+            'phone' => ['nullable', 'string', 'max:64'],
             'kind' => ['sometimes', 'string', Rule::in([
                 Counterparty::KIND_SUPPLIER,
                 Counterparty::KIND_BUYER,

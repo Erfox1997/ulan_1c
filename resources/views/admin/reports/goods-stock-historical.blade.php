@@ -53,14 +53,14 @@
                             />
                         </div>
                         <div>
-                            <x-input-label for="r_gsh_q" value="Поиск" />
+                            <x-input-label for="r_gsh_q" value="Поиск товара" />
                             <div class="mt-2 flex flex-wrap items-center gap-2">
                                 <input
                                     id="r_gsh_q"
                                     type="search"
                                     name="q"
                                     value="{{ $searchQuery }}"
-                                    placeholder="Артикул, наименование, штрихкод…"
+                                    placeholder="Артикул, наименование, штрихкод, id…"
                                     autocomplete="off"
                                     class="min-w-[12rem] flex-1 rounded-xl border border-slate-200/90 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
                                 />

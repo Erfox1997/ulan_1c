@@ -39,32 +39,38 @@
                             }
                             return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
                         },
-                        toggle(bid) {
-                            const k = String(bid);
+                        selectableRows() {
+                            return this.rows.filter((r) => r.selectable);
+                        },
+                        toggle(rowKey) {
+                            const k = String(rowKey);
                             this.selected[k] = !this.selected[k];
                             this.syncPageSelectAll();
                         },
-                        isOn(bid) {
-                            return !!this.selected[String(bid)];
+                        isOn(rowKey) {
+                            return !!this.selected[String(rowKey)];
                         },
                         syncPageSelectAll() {
-                            if (!this.rows.length) {
+                            const sel = this.selectableRows();
+                            if (!sel.length) {
                                 this.pageSelectAll = false;
                                 return;
                             }
-                            this.pageSelectAll = this.rows.every((r) => this.selected[String(r.balance_id)]);
+                            this.pageSelectAll = sel.every((r) => this.selected[String(r.row_key)]);
                         },
                         togglePageAll(checked) {
                             this.rows.forEach((r) => {
-                                this.selected[String(r.balance_id)] = checked;
+                                if (r.selectable) {
+                                    this.selected[String(r.row_key)] = !!checked;
+                                }
                             });
-                            this.pageSelectAll = !!checked;
+                            this.pageSelectAll = !!checked && this.selectableRows().length > 0;
                         },
                         selectedCount() {
-                            return Object.keys(this.selected).filter((k) => this.selected[k]).length;
+                            return this.selectableRows().filter((r) => this.selected[String(r.row_key)]).length;
                         },
                         openPr() {
-                            const chosen = this.rows.filter((r) => this.selected[String(r.balance_id)]);
+                            const chosen = this.rows.filter((r) => r.selectable && this.selected[String(r.row_key)]);
                             if (!chosen.length) {
                                 return;
                             }
@@ -84,6 +90,7 @@
                 class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
             >
                 <form
+                    id="goods-stock-filter-form"
                     method="GET"
                     action="{{ route('admin.reports.goods-stock') }}"
                     class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5"
@@ -104,14 +111,14 @@
                             </select>
                         </div>
                         <div>
-                            <x-input-label for="r_gs_q" value="Поиск" />
+                            <x-input-label for="r_gs_q" value="Поиск товара" />
                             <div class="mt-2 flex flex-wrap items-center gap-2">
                                 <input
                                     id="r_gs_q"
                                     type="search"
                                     name="q"
                                     value="{{ $searchQuery }}"
-                                    placeholder="Артикул, наименование, штрихкод…"
+                                    placeholder="Артикул, наименование, штрихкод, категория, ОЭМ…"
                                     autocomplete="off"
                                     class="min-w-[12rem] flex-1 rounded-xl border border-slate-200/90 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
                                 />
@@ -123,7 +130,13 @@
                                 </button>
                                 @if ($searchQuery !== '')
                                     <a
-                                        href="{{ route('admin.reports.goods-stock', array_filter(['warehouse_id' => $selectedWarehouseId, 'page' => 1, 'oem_min_low' => $oemMinLowOnly ? 1 : null])) }}"
+                                        href="{{ route('admin.reports.goods-stock', array_filter([
+                                            'warehouse_id' => $selectedWarehouseId,
+                                            'page' => 1,
+                                            'min_stock_line' => $minStockFilter === 'line' ? 1 : null,
+                                            'min_stock_oem' => $minStockFilter === 'oem' ? 1 : null,
+                                            'qty_sort' => ($qtySort ?? '') !== '' ? $qtySort : null,
+                                        ])) }}"
                                         class="text-sm font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
                                     >Сбросить</a>
                                 @endif
@@ -131,24 +144,38 @@
                         </div>
                     </div>
                     <div class="mt-4 border-t border-slate-200/80 pt-4">
-                        <label class="inline-flex cursor-pointer items-start gap-2.5 text-sm text-slate-800">
-                            <input
-                                type="checkbox"
-                                name="oem_min_low"
-                                value="1"
-                                class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/30"
-                                @checked($oemMinLowOnly)
-                                onchange="this.form.querySelector('input[name=page]').value='1'; this.form.submit();"
-                            />
-                            <span>
-                                Только остатки по ОЭМ ниже минимума
-                                <span class="block text-[11px] font-normal text-slate-500">
-                                    Сумма количества по всем строкам с тем же ОЭМ сравнивается с мин. остатком; без ОЭМ — строка сама с собой.
-                                </span>
-                            </span>
-                        </label>
+                        <p class="text-sm font-medium text-slate-800">Минимальный остаток</p>
+                        <div class="mt-3 flex flex-col gap-2.5 text-sm text-slate-800">
+                            <label class="inline-flex cursor-pointer items-start gap-2.5">
+                                <input
+                                    id="cb_min_stock_line"
+                                    type="checkbox"
+                                    name="min_stock_line"
+                                    value="1"
+                                    class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/30"
+                                    @checked($minStockFilter === 'line')
+                                    onchange="if (this.checked) { document.getElementById('cb_min_stock_oem').checked = false; } document.getElementById('goods-stock-filter-form').querySelector('input[name=page]').value='1'; this.form.submit();"
+                                />
+                                <span>Только ниже минимума (без ОЭМ)</span>
+                            </label>
+                            <label class="inline-flex cursor-pointer items-start gap-2.5">
+                                <input
+                                    id="cb_min_stock_oem"
+                                    type="checkbox"
+                                    name="min_stock_oem"
+                                    value="1"
+                                    class="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/30"
+                                    @checked($minStockFilter === 'oem')
+                                    onchange="if (this.checked) { document.getElementById('cb_min_stock_line').checked = false; } document.getElementById('goods-stock-filter-form').querySelector('input[name=page]').value='1'; this.form.submit();"
+                                />
+                                <span>Только ниже минимума (с ОЭМ)</span>
+                            </label>
+                        </div>
                     </div>
                     <input type="hidden" name="page" value="1" />
+                    @if (($qtySort ?? '') !== '')
+                        <input type="hidden" name="qty_sort" value="{{ $qtySort }}" />
+                    @endif
                 </form>
             </div>
 
@@ -198,6 +225,38 @@
                             .ob-1c-scope .ob-1c-table td.ob-numr {
                                 text-align: right;
                             }
+                            /* Сортировка по количеству: без этого цвет th перебивает Tailwind и SVG почти не видны */
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th {
+                                min-width: 8.5rem;
+                                text-align: right;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th .ob-qty-sort-btns {
+                                display: inline-flex;
+                                flex-direction: column;
+                                gap: 1px;
+                                vertical-align: middle;
+                                margin-left: 4px;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th a.ob-qty-sort-btn {
+                                display: block;
+                                line-height: 0;
+                                padding: 1px 0;
+                                text-decoration: none;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th a.ob-qty-sort-btn svg {
+                                width: 12px;
+                                height: 8px;
+                                display: block;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th a.ob-qty-sort-btn svg path {
+                                fill: #64748b;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th a.ob-qty-sort-btn:hover svg path {
+                                fill: #0f766e;
+                            }
+                            .ob-1c-scope .ob-1c-table th.ob-qty-sort-th a.ob-qty-sort-btn--active svg path {
+                                fill: #0d9488;
+                            }
                         </style>
                         <div
                             class="flex flex-wrap items-start justify-between gap-3 border-b border-emerald-200/55 bg-gradient-to-r from-emerald-50/95 via-white to-sky-50/50 px-4 py-3 sm:px-5"
@@ -229,14 +288,37 @@
                         @endif
 
                         <div class="overflow-x-auto border-t border-slate-200/90">
+                            @php
+                                $goodsStockBase = [
+                                    'warehouse_id' => $selectedWarehouseId,
+                                    'q' => $searchQuery !== '' ? $searchQuery : null,
+                                    'min_stock_line' => $minStockFilter === 'line' ? 1 : null,
+                                    'min_stock_oem' => $minStockFilter === 'oem' ? 1 : null,
+                                ];
+                                $gsFilterRoute = static function (array $more) use ($goodsStockBase): string {
+                                    return route('admin.reports.goods-stock', array_filter(
+                                        array_merge($goodsStockBase, $more),
+                                        static fn ($v) => $v !== null && $v !== '',
+                                    ));
+                                };
+                                $qtyAscHref = $gsFilterRoute([
+                                    'qty_sort' => ($qtySort ?? '') === 'asc' ? null : 'asc',
+                                    'page' => 1,
+                                ]);
+                                $qtyDescHref = $gsFilterRoute([
+                                    'qty_sort' => ($qtySort ?? '') === 'desc' ? null : 'desc',
+                                    'page' => 1,
+                                ]);
+                            @endphp
                             <table class="ob-1c-table">
                                 <thead>
                                     <tr>
                                         <th class="ob-num text-center">
                                             <input
                                                 type="checkbox"
-                                                class="h-3.5 w-3.5 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500/30"
-                                                title="Выделить все на странице"
+                                                class="h-3.5 w-3.5 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500/30 disabled:opacity-40"
+                                                title="Выделить все на странице (только строки с учётным остатком)"
+                                                :disabled="selectableRows().length === 0"
                                                 :checked="pageSelectAll"
                                                 @change="togglePageAll($event.target.checked)"
                                             />
@@ -244,9 +326,28 @@
                                         <th class="ob-num">N</th>
                                         <th>Наименование</th>
                                         <th>Ед. изм.</th>
-                                        <th>Количество</th>
+                                        <th class="ob-qty-sort-th text-right align-middle">
+                                            <span class="inline-flex w-full items-center justify-end gap-0.5">
+                                                <span>Количество</span>
+                                                <span class="ob-qty-sort-btns shrink-0" role="group" aria-label="Сортировка по количеству">
+                                                    <a
+                                                        href="{{ $qtyAscHref }}"
+                                                        class="ob-qty-sort-btn {{ ($qtySort ?? '') === 'asc' ? 'ob-qty-sort-btn--active' : '' }}"
+                                                        title="{{ ($qtySort ?? '') === 'asc' ? 'Сбросить сортировку' : 'По возрастанию' }}"
+                                                    >
+                                                        <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M6 0l6 8H0z"/></svg>
+                                                    </a>
+                                                    <a
+                                                        href="{{ $qtyDescHref }}"
+                                                        class="ob-qty-sort-btn {{ ($qtySort ?? '') === 'desc' ? 'ob-qty-sort-btn--active' : '' }}"
+                                                        title="{{ ($qtySort ?? '') === 'desc' ? 'Сбросить сортировку' : 'По убыванию' }}"
+                                                    >
+                                                        <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M6 8L0 0h12z"/></svg>
+                                                    </a>
+                                                </span>
+                                            </span>
+                                        </th>
                                         <th>ОЭМ</th>
-                                        <th>Заводской №</th>
                                         <th>Мин. остаток</th>
                                         <th class="whitespace-nowrap">Сумма (себест.)</th>
                                     </tr>
@@ -254,39 +355,56 @@
                                 <tbody>
                                     @forelse ($rowsPaginator as $i => $r)
                                         @php
-                                            $oemLow = ! empty($r['oem_group_low']);
-                                            $oemTip = $oemLow && isset($r['oem_group_sum'], $r['oem_group_min'])
-                                                ? 'По группе ОЭМ: сумма '.$fmtQty($r['oem_group_sum']).', мин. '.$fmtQty($r['oem_group_min'])
-                                                : null;
+                                            $isLow = match ($minStockFilter) {
+                                                'line' => ! empty($r['line_below_min']),
+                                                'oem' => ! empty($r['oem_group_low']),
+                                                default => ! empty($r['oem_group_low']),
+                                            };
+                                            $lowTip = null;
+                                            if ($isLow) {
+                                                if ($minStockFilter === 'line' && isset($r['min_stock'])) {
+                                                    $lowTip = 'Остаток '.$fmtQty($r['quantity']).', мин. '.$fmtQty($r['min_stock']);
+                                                } elseif (isset($r['oem_group_sum'], $r['oem_group_min']) && ($minStockFilter === 'oem' || $minStockFilter === '')) {
+                                                    $lowTip = 'По группе ОЭМ: сумма '.$fmtQty($r['oem_group_sum']).', мин. '.$fmtQty($r['oem_group_min']);
+                                                }
+                                            }
                                         @endphp
                                         <tr
-                                            class="{{ $oemLow ? 'bg-rose-50/90 ring-1 ring-inset ring-rose-100 hover:bg-rose-50' : 'hover:bg-emerald-50/40' }}"
-                                            @if ($oemTip) title="{{ e($oemTip) }}" @endif
+                                            class="{{ $isLow ? 'bg-rose-50/90 ring-1 ring-inset ring-rose-100 hover:bg-rose-50' : 'hover:bg-emerald-50/40' }}"
+                                            @if ($lowTip) title="{{ e($lowTip) }}" @endif
                                         >
                                             <td class="ob-cell text-center align-middle">
-                                                <input
-                                                    type="checkbox"
-                                                    class="h-3.5 w-3.5 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500/30"
-                                                    :checked="isOn({{ (int) ($r['opening_stock_balance_id'] ?? 0) }})"
-                                                    @change="toggle({{ (int) ($r['opening_stock_balance_id'] ?? 0) }})"
-                                                />
+                                                @if (! empty($r['has_balance_record']))
+                                                    <input
+                                                        type="checkbox"
+                                                        class="h-3.5 w-3.5 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500/30"
+                                                        :checked="isOn('{{ $r['row_key'] }}')"
+                                                        @change="toggle('{{ $r['row_key'] }}')"
+                                                    />
+                                                @else
+                                                    <input
+                                                        type="checkbox"
+                                                        disabled
+                                                        class="h-3.5 w-3.5 cursor-not-allowed rounded border-slate-200 text-slate-300 opacity-50"
+                                                        title="Нет строки остатка на этом складе в учёте — заявку на закупку оформить нельзя"
+                                                    />
+                                                @endif
                                             </td>
                                             <td class="ob-num ob-cell tabular-nums">
                                                 {{ $rowsPaginator->firstItem() + $i }}
                                             </td>
-                                            <td class="ob-cell min-w-[9rem] font-medium {{ $oemLow ? 'text-rose-950' : 'text-slate-900' }}">{{ $r['name'] }}</td>
-                                            <td class="ob-cell whitespace-nowrap {{ $oemLow ? 'text-rose-900/95' : 'text-slate-700' }}">{{ $r['unit'] }}</td>
-                                            <td class="ob-cell ob-numr tabular-nums font-semibold {{ $oemLow ? 'text-rose-800' : 'text-slate-900' }}">{{ $fmtQty($r['quantity']) }}</td>
-                                            <td class="ob-cell {{ $oemLow ? 'text-rose-900' : 'text-slate-800' }}">{{ $r['oem'] !== '' ? $r['oem'] : '—' }}</td>
-                                            <td class="ob-cell {{ $oemLow ? 'text-rose-900' : 'text-slate-800' }}">{{ $r['factory_number'] !== '' ? $r['factory_number'] : '—' }}</td>
-                                            <td class="ob-cell ob-numr tabular-nums {{ $oemLow ? 'text-rose-900' : 'text-slate-800' }}">
+                                            <td class="ob-cell min-w-[9rem] font-medium {{ $isLow ? 'text-rose-950' : 'text-slate-900' }}">{{ $r['name'] }}</td>
+                                            <td class="ob-cell whitespace-nowrap {{ $isLow ? 'text-rose-900/95' : 'text-slate-700' }}">{{ $r['unit'] }}</td>
+                                            <td class="ob-cell ob-numr tabular-nums font-semibold {{ $isLow ? 'text-rose-800' : 'text-slate-900' }}">{{ $fmtQty($r['quantity']) }}</td>
+                                            <td class="ob-cell {{ $isLow ? 'text-rose-900' : 'text-slate-800' }}">{{ $r['oem'] !== '' ? $r['oem'] : '—' }}</td>
+                                            <td class="ob-cell ob-numr tabular-nums {{ $isLow ? 'text-rose-900' : 'text-slate-800' }}">
                                                 {{ $r['min_stock'] !== null ? $fmtQty($r['min_stock']) : '—' }}
                                             </td>
-                                            <td class="ob-cell ob-numr tabular-nums {{ $oemLow ? 'text-rose-950' : 'text-slate-900' }}">{{ $fmtMoney($r['amount']) }}</td>
+                                            <td class="ob-cell ob-numr tabular-nums {{ $isLow ? 'text-rose-950' : 'text-slate-900' }}">{{ $fmtMoney($r['amount']) }}</td>
                                         </tr>
                                     @empty
                                         <tr>
-                                            <td colspan="9" class="px-4 py-12 text-center text-sm text-slate-500">
+                                            <td colspan="8" class="px-4 py-12 text-center text-sm text-slate-500">
                                                 Нет товарных остатков по данным учёта.
                                             </td>
                                         </tr>

@@ -90,6 +90,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('p/stock.audit/{stockAudit}/edit', [StockInventoryController::class, 'auditEdit'])->name('stock.audit.edit');
         Route::put('p/stock.audit/{stockAudit}', [StockInventoryController::class, 'auditUpdate'])->name('stock.audit.update');
         Route::delete('p/stock.audit/{stockAudit}', [StockInventoryController::class, 'auditDestroy'])->name('stock.audit.destroy');
+        Route::post('p/stock.audit/merge-drafts', [StockInventoryController::class, 'auditMergeDrafts'])->name('stock.audit.merge-drafts');
         Route::post('p/stock.audit', [StockInventoryController::class, 'auditStore'])->name('stock.audit.store');
         Route::get('p/stock.audit/{stockAudit}/export', [StockInventoryController::class, 'auditExport'])->name('stock.audit.export');
         Route::get('p/stock.audit/{stockAudit}/lines', [StockInventoryController::class, 'auditLinesJson'])->name('stock.audit.lines');
@@ -246,6 +247,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('gross-profit', [ReportController::class, 'grossProfit'])->name('gross-profit');
             Route::get('expenses-by-category', [ReportController::class, 'expensesByCategory'])->name('expenses-by-category');
             Route::get('turnover', [ReportController::class, 'turnover'])->name('turnover');
+            Route::get('shift', [ReportController::class, 'shiftReport'])->name('shift-report');
+            Route::get('shift/{cashShift}', [ReportController::class, 'shiftReportShow'])->name('shift-report.show');
             Route::get('goods-characteristics', [ReportController::class, 'goodsCharacteristics'])->name('goods-characteristics');
             Route::post('goods-characteristics', [ReportController::class, 'goodsCharacteristicsStore'])->name('goods-characteristics.store');
         });

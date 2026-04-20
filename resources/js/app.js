@@ -2737,8 +2737,17 @@ document.addEventListener('alpine:init', () => {
             typeof c.documentDate === 'string' && c.documentDate.trim() !== ''
                 ? c.documentDate
                 : new Date().toISOString().slice(0, 10);
+        const accounts = Array.isArray(c.accounts) ? c.accounts : [];
+        const payments =
+            accounts.length > 0
+                ? accounts.map((a) => ({
+                      organization_bank_account_id: String(a.id),
+                      amount: '',
+                  }))
+                : [{ organization_bank_account_id: defaultId, amount: '' }];
         return {
-            payments: [{ organization_bank_account_id: defaultId, amount: '' }],
+            accounts,
+            payments,
             documentDate: documentDateInit,
             draftTotal: parseDraftTotal(),
             debtorName: typeof c.oldDebtorName === 'string' ? c.oldDebtorName : '',
@@ -2748,21 +2757,28 @@ document.addEventListener('alpine:init', () => {
             debtorHintsOpen: false,
             debtorHintsLoading: false,
             init() {
-                if (this.payments.length === 1 && this.draftTotal > 0) {
+                if (this.draftTotal <= 0) {
+                    return;
+                }
+                if (defaultId !== '') {
+                    const row = this.payments.find(
+                        (p) => String(p.organization_bank_account_id) === String(defaultId),
+                    );
+                    if (row) {
+                        row.amount = this.draftTotal.toLocaleString('ru-RU', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                        });
+
+                        return;
+                    }
+                }
+                if (this.payments.length === 1) {
                     this.payments[0].amount = this.draftTotal.toLocaleString('ru-RU', {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                     });
                 }
-            },
-            addPaymentRow() {
-                this.payments.push({ organization_bank_account_id: defaultId, amount: '' });
-            },
-            removePaymentRow(i) {
-                if (this.payments.length <= 1) {
-                    return;
-                }
-                this.payments.splice(i, 1);
             },
             parseMoney(s) {
                 if (s == null || s === '') {
@@ -3400,6 +3416,8 @@ document.addEventListener('alpine:init', () => {
         rows: [],
         extraUnitCost: Boolean(config.extraUnitCost),
         allowManualNewGood: Boolean(config.allowManualNewGood),
+        selectedRow: null,
+        moreOpen: false,
         init() {
             const initial = Array.isArray(config.initialRows) ? config.initialRows : null;
             if (initial && initial.length > 0) {
@@ -3412,6 +3430,7 @@ document.addEventListener('alpine:init', () => {
                     unit: String(r.unit ?? 'шт.'),
                     qty: String(r.qty ?? ''),
                     unitCost: String(r.unit_cost ?? ''),
+                    sale_price: String(r.sale_price ?? ''),
                     stockQty: r.stock_qty != null && r.stock_qty !== '' ? r.stock_qty : null,
                     articleManual: String(r.article_manual ?? ''),
                     nameManual: String(r.name_manual ?? ''),
@@ -3420,6 +3439,7 @@ document.addEventListener('alpine:init', () => {
                     open: false,
                     loading: false,
                 }));
+                this.selectedRow = this.rows.length > 0 ? 0 : null;
                 return;
             }
             const raw = config.rowCount;
@@ -3430,6 +3450,7 @@ document.addEventListener('alpine:init', () => {
             for (let i = 0; i < n; i++) {
                 this.rows.push(this.emptyRow());
             }
+            this.selectedRow = this.rows.length > 0 ? 0 : null;
         },
         emptyRow() {
             return {
@@ -3440,6 +3461,7 @@ document.addEventListener('alpine:init', () => {
                 unit: '',
                 qty: '',
                 unitCost: '',
+                sale_price: '',
                 stockQty: null,
                 articleManual: '',
                 nameManual: '',
@@ -3454,12 +3476,46 @@ document.addEventListener('alpine:init', () => {
                 return;
             }
             this.rows.push(this.emptyRow());
+            this.selectedRow = this.rows.length - 1;
         },
         removeLine(i) {
             if (i < 0 || i >= this.rows.length) {
                 return;
             }
             this.rows.splice(i, 1);
+            if (this.rows.length === 0) {
+                this.selectedRow = null;
+            } else if (this.selectedRow !== null) {
+                if (i < this.selectedRow) {
+                    this.selectedRow--;
+                } else if (i === this.selectedRow) {
+                    this.selectedRow = Math.min(this.selectedRow, this.rows.length - 1);
+                }
+            }
+        },
+        moveUp() {
+            if (this.selectedRow === null || this.selectedRow <= 0) {
+                return;
+            }
+            const i = this.selectedRow;
+            const row = this.rows.splice(i, 1)[0];
+            this.rows.splice(i - 1, 0, row);
+            this.selectedRow = i - 1;
+        },
+        moveDown() {
+            if (this.selectedRow === null || this.selectedRow >= this.rows.length - 1) {
+                return;
+            }
+            const i = this.selectedRow;
+            const row = this.rows.splice(i, 1)[0];
+            this.rows.splice(i + 1, 0, row);
+            this.selectedRow = i + 1;
+        },
+        removeSelectedRow() {
+            if (this.selectedRow === null) {
+                return;
+            }
+            this.removeLine(this.selectedRow);
         },
         switchToManual(i) {
             const row = this.rows[i];
@@ -3468,6 +3524,8 @@ document.addEventListener('alpine:init', () => {
             row.name = '';
             row.article = '';
             row.unit = '';
+            row.unitCost = '';
+            row.sale_price = '';
             row.stockQty = null;
             row.results = [];
             row.open = false;
@@ -3517,6 +3575,21 @@ document.addEventListener('alpine:init', () => {
             row.article = g.article_code || '';
             row.unit = g.unit || 'шт.';
             row.stockQty = g.stock_quantity != null && g.stock_quantity !== '' ? g.stock_quantity : null;
+            const oCost = g.opening_unit_cost;
+            const wPrice = g.wholesale_price;
+            let unitCostStr = '';
+            if (oCost != null && String(oCost).trim() !== '') {
+                unitCostStr = String(oCost);
+            } else if (wPrice != null && String(wPrice).trim() !== '') {
+                unitCostStr = String(wPrice);
+            }
+            row.unitCost = unitCostStr;
+            const rawSp = g.sale_price;
+            if (rawSp != null && String(rawSp).trim() !== '') {
+                row.sale_price = String(rawSp);
+            } else {
+                row.sale_price = '';
+            }
             row.articleManual = '';
             row.nameManual = '';
             row.unitManual = 'шт.';
@@ -3532,6 +3605,7 @@ document.addEventListener('alpine:init', () => {
             row.unit = '';
             row.qty = '';
             row.unitCost = '';
+            row.sale_price = '';
             row.stockQty = null;
             row.articleManual = '';
             row.nameManual = '';
@@ -4042,10 +4116,11 @@ document.addEventListener('alpine:init', () => {
             }
             this.auditSubmitting = true;
             try {
+                // follow: при redirect:manual ответ на 302 часто opaqueredirect → status 0 (ложная ошибка).
                 const res = await fetch(this.formAction, {
                     method: 'POST',
                     credentials: 'same-origin',
-                    redirect: 'manual',
+                    redirect: 'follow',
                     headers: {
                         'Content-Type': 'application/json',
                         Accept: 'application/json',
@@ -4073,13 +4148,6 @@ document.addEventListener('alpine:init', () => {
                 }
                 if (res.status === 419) {
                     window.alert('Сессия устарела. Обновите страницу.');
-                    return;
-                }
-                if (res.status >= 300 && res.status < 400) {
-                    const loc = res.headers.get('Location');
-                    window.location.href = loc
-                        ? new URL(loc, window.location.origin).href
-                        : this.formAction;
                     return;
                 }
                 if (res.ok) {

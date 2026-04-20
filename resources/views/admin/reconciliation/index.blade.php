@@ -378,10 +378,12 @@
                             <a
                                 href="{{ route('admin.reconciliation.export-excel', $exportQuery) }}"
                                 class="rec-1c-btn"
+                                data-no-nav-loading
                             >Скачать Excel</a>
                             <a
                                 href="{{ route('admin.reconciliation.export-pdf', $exportQuery) }}"
                                 class="rec-1c-btn"
+                                data-no-nav-loading
                             >Скачать PDF</a>
                         </div>
                     </form>
@@ -420,10 +422,12 @@
                             <a
                                 href="{{ route('admin.reconciliation.export-excel', $exportQuery) }}"
                                 class="rec-1c-btn"
+                                data-no-nav-loading
                             >Скачать Excel</a>
                             <a
                                 href="{{ route('admin.reconciliation.export-pdf', $exportQuery) }}"
                                 class="rec-1c-btn"
+                                data-no-nav-loading
                             >Скачать PDF</a>
                         </span>
                     </div>

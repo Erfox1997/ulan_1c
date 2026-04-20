@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\CashMovement;
+use App\Models\CashShift;
 use App\Models\OrganizationBankAccount;
+use App\Models\RetailSale;
 use App\Models\RetailSalePayment;
 use App\Models\RetailSaleRefund;
 use Carbon\CarbonInterface;
@@ -477,6 +479,163 @@ class CashLedgerService
         }
 
         return $net;
+    }
+
+    /**
+     * Таблица для закрытия смены: по счетам — на начало, движение за интервал [opened_at, until], ожидается.
+     * Для открытой смены $until обычно now; для закрытой — время закрытия.
+     *
+     * @return array{has_per_account_opening: bool, rows: list<array{label: string, opening: ?float, movement: float, expected: ?float}>, totals: array{opening: float, movement: float, expected: float}}
+     */
+    public function shiftAccountClosingTable(CashShift $shift, int $branchId, ?CarbonInterface $untilOverride = null): array
+    {
+        $openedAt = $shift->opened_at;
+        $until = $untilOverride ?? ($shift->closed_at ?? Carbon::now());
+
+        $openingMap = [];
+        $hasPerAccountOpen = is_array($shift->opening_by_account) && $shift->opening_by_account !== [];
+        if ($hasPerAccountOpen) {
+            foreach ($shift->opening_by_account as $id => $amt) {
+                $openingMap[(int) $id] = (float) $amt;
+            }
+        }
+
+        $movementByAccount = $this->netCashChangeByAccountInShiftWindow(
+            $branchId,
+            $openedAt,
+            $until,
+            (int) $shift->user_id
+        );
+
+        $accountIds = collect(array_keys($openingMap))
+            ->merge(array_keys($movementByAccount))
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($accountIds === [] && $hasPerAccountOpen) {
+            $accountIds = array_keys($openingMap);
+        }
+
+        if ($accountIds === []) {
+            $accountIds = OrganizationBankAccount::query()
+                ->whereHas('organization', fn ($q) => $q->where('branch_id', $branchId))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+        }
+
+        $accounts = OrganizationBankAccount::query()
+            ->whereIn('id', $accountIds)
+            ->whereHas('organization', fn ($q) => $q->where('branch_id', $branchId))
+            ->with('organization:id,name,sort_order')
+            ->get()
+            ->sortBy(function (OrganizationBankAccount $a) {
+                $org = $a->organization;
+
+                return [
+                    $org?->sort_order ?? 0,
+                    $org?->name ?? '',
+                    $a->sort_order,
+                    $a->id,
+                ];
+            })
+            ->values();
+
+        $rows = [];
+        foreach ($accounts as $a) {
+            $id = (int) $a->id;
+            $opening = $hasPerAccountOpen ? ($openingMap[$id] ?? 0.0) : null;
+            $movement = (float) ($movementByAccount[$id] ?? 0.0);
+            $expected = $opening !== null ? $opening + $movement : null;
+            $rows[] = [
+                'label' => trim(($a->organization?->name ?? '—').' — '.$a->labelWithoutAccountNumber()),
+                'opening' => $opening,
+                'movement' => $movement,
+                'expected' => $expected,
+            ];
+        }
+
+        $totalMovement = (float) array_sum($movementByAccount);
+        $totalOpening = $hasPerAccountOpen
+            ? (float) array_sum($openingMap)
+            : (float) $shift->opening_cash;
+
+        return [
+            'has_per_account_opening' => $hasPerAccountOpen,
+            'rows' => $rows,
+            'totals' => [
+                'opening' => $totalOpening,
+                'movement' => $totalMovement,
+                'expected' => $totalOpening + $totalMovement,
+            ],
+        ];
+    }
+
+    /**
+     * Сводка по видам операций за интервал смены (тот же кассир и created_at, что и в netCashChangeByAccountInShiftWindow).
+     *
+     * @return array{retail_checks: int, retail_payments: float, refunds: float, income_client: float, expense_supplier: float, expense_other: float, transfer_volume: float}
+     */
+    public function shiftMoneyKindBreakdown(int $branchId, CarbonInterface $from, CarbonInterface $until, int $cashierUserId): array
+    {
+        $retailPayments = (float) (RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->where('rs.created_at', '>=', $from)
+            ->where('rs.created_at', '<=', $until)
+            ->where('rs.user_id', $cashierUserId)
+            ->sum('retail_sale_payments.amount'));
+
+        $retailChecks = (int) RetailSale::query()
+            ->where('branch_id', $branchId)
+            ->where('user_id', $cashierUserId)
+            ->where('created_at', '>=', $from)
+            ->where('created_at', '<=', $until)
+            ->count();
+
+        $refunds = (float) (RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->where('retail_sale_refunds.created_at', '>=', $from)
+            ->where('retail_sale_refunds.created_at', '<=', $until)
+            ->whereHas('retailSale', fn ($q) => $q->where('user_id', $cashierUserId))
+            ->sum('retail_sale_refunds.amount'));
+
+        $incomeClient = 0.0;
+        $expenseSupplier = 0.0;
+        $expenseOther = 0.0;
+        $transferVolume = 0.0;
+
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('created_at', '>=', $from)
+            ->where('created_at', '<=', $until)
+            ->where('user_id', $cashierUserId)
+            ->get();
+
+        foreach ($movements as $m) {
+            $amt = (float) $m->amount;
+            if ($m->kind === CashMovement::KIND_INCOME_CLIENT) {
+                $incomeClient += $amt;
+            } elseif ($m->kind === CashMovement::KIND_EXPENSE_SUPPLIER) {
+                $expenseSupplier += $amt;
+            } elseif ($m->kind === CashMovement::KIND_EXPENSE_OTHER) {
+                $expenseOther += $amt;
+            } elseif ($m->kind === CashMovement::KIND_TRANSFER) {
+                $transferVolume += $amt;
+            }
+        }
+
+        return [
+            'retail_checks' => $retailChecks,
+            'retail_payments' => round($retailPayments, 2),
+            'refunds' => round($refunds, 2),
+            'income_client' => round($incomeClient, 2),
+            'expense_supplier' => round($expenseSupplier, 2),
+            'expense_other' => round($expenseOther, 2),
+            'transfer_volume' => round($transferVolume, 2),
+        ];
     }
 
     /**

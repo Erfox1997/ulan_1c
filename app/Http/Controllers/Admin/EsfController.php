@@ -43,7 +43,7 @@ class EsfController extends Controller
         $availableQuery = LegalEntitySale::query()
             ->where('branch_id', $branchId)
             ->where('issue_esf', false)
-            ->with(['warehouse', 'lines']);
+            ->with(['warehouse', 'lines.good']);
 
         if ($dateFrom && $dateTo) {
             $availableQuery
@@ -66,7 +66,7 @@ class EsfController extends Controller
         $salesInEsfQueue = LegalEntitySale::query()
             ->where('branch_id', $branchId)
             ->where('issue_esf', true)
-            ->with(['warehouse', 'lines'])
+            ->with(['warehouse', 'lines.good'])
             ->orderByDesc('document_date')
             ->orderByDesc('id')
             ->get();
@@ -238,6 +238,7 @@ class EsfController extends Controller
             ],
             'payment_kind' => ['required', Rule::in(['cash', 'bank'])],
             'organization_bank_account_id' => ['nullable', 'integer'],
+            'esf_lines' => ['nullable', Rule::in(['goods', 'services'])],
         ]);
 
         /** @var Organization $seller */
@@ -298,7 +299,39 @@ class EsfController extends Controller
             }
         }
 
-        $legalEntitySale->load('lines');
+        $legalEntitySale->load('lines.good');
+
+        $profile = $legalEntitySale->esfGoodsServicesLinesProfile();
+        if (! $profile['has_goods'] && ! $profile['has_services']) {
+            return redirect()
+                ->route('admin.esf.index')
+                ->with(
+                    'error',
+                    'В документе нет строк с привязкой к номенклатуре — выгрузка ЭСФ невозможна. Откройте реализацию и проверьте позиции.'
+                );
+        }
+
+        $requested = $validated['esf_lines'] ?? null;
+        if ($profile['mixed']) {
+            if (! in_array($requested, ['goods', 'services'], true)) {
+                return redirect()
+                    ->route('admin.esf.index')
+                    ->with(
+                        'error',
+                        'В документе есть и товары, и услуги: скачайте два XML отдельно — «Товары» и «Услуги».'
+                    );
+            }
+            $linesKind = $requested;
+            $splitReceiptNoteAndCrm = true;
+        } else {
+            $linesKind = $profile['has_goods'] ? 'goods' : 'services';
+            $splitReceiptNoteAndCrm = false;
+            if ($requested !== null && $requested !== $linesKind) {
+                return redirect()
+                    ->route('admin.esf.index')
+                    ->with('error', 'Тип строк ЭСФ не совпадает с документом.');
+            }
+        }
 
         $randomExchange = (bool) config('esf.random_exchange_code_each_download', true);
         if ($randomExchange) {
@@ -311,18 +344,32 @@ class EsfController extends Controller
             $exchangeCode = (string) $legalEntitySale->esf_exchange_code;
         }
 
-        $xml = $this->esfXmlGenerator->build(
-            $legalEntitySale,
-            $seller,
-            $paymentKind,
-            $paymentAccount,
-            $exchangeCode
-        );
+        try {
+            $xml = $this->esfXmlGenerator->build(
+                $legalEntitySale,
+                $seller,
+                $paymentKind,
+                $paymentAccount,
+                $exchangeCode,
+                $linesKind,
+                $splitReceiptNoteAndCrm
+            );
+        } catch (\InvalidArgumentException $e) {
+            return redirect()
+                ->route('admin.esf.index')
+                ->with('error', $e->getMessage());
+        }
+
+        $fileSuffix = '';
+        if ($splitReceiptNoteAndCrm) {
+            $fileSuffix = $linesKind === 'goods' ? '_tovary' : '_uslugi';
+        }
 
         $fileName = sprintf(
-            'ESF_%d_%s.xml',
+            'ESF_%d_%s%s.xml',
             $legalEntitySale->id,
-            $legalEntitySale->document_date->format('Y-m-d')
+            $legalEntitySale->document_date->format('Y-m-d'),
+            $fileSuffix
         );
 
         return response($xml, 200, [

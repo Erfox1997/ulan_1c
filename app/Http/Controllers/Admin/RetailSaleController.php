@@ -25,6 +25,7 @@ use App\Support\InvoiceNakladnayaFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 use RuntimeException;
@@ -342,7 +343,7 @@ class RetailSaleController extends Controller
         $debtGroups = $sales
             ->groupBy(fn (RetailSale $s) => $this->debtorGroupKey($s))
             ->sortByDesc(function ($group) {
-                /** @var \Illuminate\Support\Collection<int, RetailSale> $group */
+                /** @var Collection<int, RetailSale> $group */
                 return $group->max(fn (RetailSale $s) => $s->document_date !== null ? $s->document_date->getTimestamp() : 0);
             });
 
@@ -542,7 +543,13 @@ class RetailSaleController extends Controller
             abort(403);
         }
 
-        $retailSale->load(['lines', 'payments.organizationBankAccount', 'warehouse', 'user']);
+        $retailSale->load([
+            'lines',
+            'branch',
+            'payments.organizationBankAccount.organization',
+            'warehouse',
+            'user',
+        ]);
 
         return view('admin.retail-sales.receipt', [
             'sale' => $retailSale,

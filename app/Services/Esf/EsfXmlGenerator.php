@@ -20,19 +20,34 @@ class EsfXmlGenerator
     /**
      * @param  'cash'|'bank'  $paymentKind
      * @param  string|null  $exchangeCode  Уникальный код обмена (ГНС); если null — новый UUID (лучше задавать из контроллера).
+     * @param  'all'|'goods'|'services'  $linesKind  Какие строки включить (товары: is_service=false, услуги: true).
+     * @param  bool  $splitReceiptNoteAndCrm  Если true — в note и ownedCrmReceiptCode добавляется пометка товары/услуги (документ со смешанными строками).
      */
     public function build(
         LegalEntitySale $sale,
         Organization $seller,
         string $paymentKind,
         ?OrganizationBankAccount $paymentAccount = null,
-        ?string $exchangeCode = null
+        ?string $exchangeCode = null,
+        string $linesKind = 'all',
+        bool $splitReceiptNoteAndCrm = false
     ): string {
         $cfg = config('esf');
         $encoding = $cfg['encoding'] ?? 'UTF-8';
         $tz = (string) ($cfg['timezone'] ?? 'Asia/Bishkek');
 
-        $sale->loadMissing('lines');
+        $sale->loadMissing('lines.good');
+
+        $lines = $sale->lines;
+        if ($linesKind === 'goods') {
+            $lines = $lines->filter(fn ($l) => $l->good && ! $l->good->is_service)->values();
+        } elseif ($linesKind === 'services') {
+            $lines = $lines->filter(fn ($l) => $l->good && $l->good->is_service)->values();
+        }
+
+        if ($lines->isEmpty()) {
+            throw new \InvalidArgumentException('Нет строк для выгрузки ЭСФ по выбранному виду (товары или услуги).');
+        }
 
         $dom = new DOMDocument('1.0', $encoding);
         if (property_exists($dom, 'xmlStandalone')) {
@@ -115,7 +130,7 @@ class EsfXmlGenerator
         $vatRate = (float) ($cfg['vat_rate_percent'] ?? 0);
         $totalCost = '0';
 
-        foreach ($sale->lines as $line) {
+        foreach ($lines as $line) {
             $good = $dom->createElement('good');
             $goods->appendChild($good);
 
@@ -154,13 +169,20 @@ class EsfXmlGenerator
         if ($note === '') {
             $note = sprintf((string) ($cfg['note_template'] ?? 'Реализация №%d'), (int) $sale->id);
         }
+        if ($splitReceiptNoteAndCrm) {
+            $note .= $linesKind === 'goods' ? ' (товары)' : ' (услуги)';
+        }
         $this->appendText($dom, $receipt, 'note', $note);
 
         $this->appendNil($dom, $receipt, 'openingBalances');
 
         $crmPrefix = trim((string) ($cfg['owned_crm_receipt_code_prefix'] ?? 'LES'));
         $crmPrefix = $crmPrefix !== '' ? $crmPrefix : 'LES';
-        $this->appendText($dom, $receipt, 'ownedCrmReceiptCode', $crmPrefix.'-'.$sale->id);
+        $crmSuffix = '';
+        if ($splitReceiptNoteAndCrm) {
+            $crmSuffix = $linesKind === 'goods' ? '-G' : '-S';
+        }
+        $this->appendText($dom, $receipt, 'ownedCrmReceiptCode', $crmPrefix.'-'.$sale->id.$crmSuffix);
 
         $this->appendNil($dom, $receipt, 'paidAmount');
 

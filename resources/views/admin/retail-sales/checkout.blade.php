@@ -64,29 +64,25 @@
             <div class="space-y-4 px-4 py-5 sm:px-6">
                 <div class="flex items-center justify-between gap-2">
                     <h2 class="text-sm font-bold text-slate-800">Оплаты по счетам / кассе</h2>
-                    <button type="button" class="text-sm font-semibold text-emerald-700 hover:underline" @click="addPaymentRow()">+ ещё счёт</button>
                 </div>
 
-                <template x-for="(row, idx) in payments" :key="idx">
+                <p x-show="accounts.length === 0" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    Для филиала не настроены счета и кассы — оформление оплаты недоступно.
+                </p>
+
+                <template x-for="(acc, idx) in accounts" :key="acc.id">
                     <div class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 sm:flex-row sm:items-end">
                         <div class="min-w-0 flex-1">
                             <label class="mb-1 block text-xs font-medium text-slate-600">Счёт / касса</label>
-                            <select
-                                :name="`payments[${idx}][organization_bank_account_id]`"
-                                x-model="row.organization_bank_account_id"
-                                class="w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm font-semibold text-slate-900"
-                            >
-                                @foreach ($paymentAccountsPayload as $acc)
-                                    <option value="{{ $acc['id'] }}">{{ $acc['label'] }} — {{ $acc['organization'] }}</option>
-                                @endforeach
-                            </select>
+                            <p class="text-sm font-semibold leading-snug text-slate-900" x-text="acc.label + ' — ' + acc.organization"></p>
+                            <input type="hidden" :name="`payments[${idx}][organization_bank_account_id]`" :value="acc.id" />
                         </div>
                         <div class="w-full sm:w-40">
                             <label class="mb-1 block text-xs font-medium text-slate-600">Сумма, сом</label>
                             <input
                                 type="text"
                                 :name="`payments[${idx}][amount]`"
-                                x-model="row.amount"
+                                x-model="payments[idx].amount"
                                 inputmode="decimal"
                                 autocomplete="off"
                                 @focus="$event.target.select()"
@@ -95,12 +91,6 @@
                                 placeholder="0,00"
                             />
                         </div>
-                        <button
-                            type="button"
-                            class="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 hover:bg-red-50 hover:text-red-600"
-                            x-show="payments.length > 1"
-                            @click="removePaymentRow(idx)"
-                        >Удалить</button>
                     </div>
                 </template>
 

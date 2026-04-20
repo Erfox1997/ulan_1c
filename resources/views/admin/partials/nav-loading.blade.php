@@ -74,6 +74,9 @@
         }
 
         function adminNavShouldShowForLink(anchor) {
+            if (anchor.hasAttribute('data-no-nav-loading')) {
+                return false;
+            }
             if (anchor.target === '_blank') {
                 return false;
             }

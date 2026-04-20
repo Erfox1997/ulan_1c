@@ -18,6 +18,8 @@
         @foreach ($sales as $sale)
             @php
                 $sum = $lineSum($sale);
+                $esfProfile = $sale->esfGoodsServicesLinesProfile();
+                $esfMixed = $esfProfile['mixed'];
             @endphp
             <tr
                 class="align-top hover:bg-slate-50/80"
@@ -27,6 +29,8 @@
                     accountId: '',
                     orgs: {{ \Illuminate\Support\Js::from($orgsPayload) }},
                     xmlBase: @js(route('admin.esf.xml', $sale)),
+                    esfMixed: @js($esfMixed),
+                    documentUrl: @js(route('admin.legal-entity-sales.edit', $sale)),
                     currentOrg() {
                         const id = String(this.orgId ?? '');
                         return this.orgs.find(o => String(o.id) === id) || this.orgs[0];
@@ -41,6 +45,32 @@
                         const p = new URLSearchParams();
                         p.set('organization_id', String(this.orgId));
                         p.set('payment_kind', this.paymentKind);
+                        if (this.paymentKind === 'bank' && this.accountId) {
+                            p.set('organization_bank_account_id', String(this.accountId));
+                        }
+                        if (this.paymentKind === 'cash' && this.accountId) {
+                            p.set('organization_bank_account_id', String(this.accountId));
+                        }
+                        return this.xmlBase + '?' + p.toString();
+                    },
+                    xmlHrefGoods() {
+                        const p = new URLSearchParams();
+                        p.set('organization_id', String(this.orgId));
+                        p.set('payment_kind', this.paymentKind);
+                        p.set('esf_lines', 'goods');
+                        if (this.paymentKind === 'bank' && this.accountId) {
+                            p.set('organization_bank_account_id', String(this.accountId));
+                        }
+                        if (this.paymentKind === 'cash' && this.accountId) {
+                            p.set('organization_bank_account_id', String(this.accountId));
+                        }
+                        return this.xmlBase + '?' + p.toString();
+                    },
+                    xmlHrefServices() {
+                        const p = new URLSearchParams();
+                        p.set('organization_id', String(this.orgId));
+                        p.set('payment_kind', this.paymentKind);
+                        p.set('esf_lines', 'services');
                         if (this.paymentKind === 'bank' && this.accountId) {
                             p.set('organization_bank_account_id', String(this.accountId));
                         }
@@ -70,6 +100,39 @@
                             this.accountId = b[0] ? String(b[0].id) : '';
                         } else {
                             this.accountId = '';
+                        }
+                    },
+                    onEsfAction(e) {
+                        const sel = e.target;
+                        const v = sel.value;
+                        sel.value = '';
+                        if (!v) return;
+                        if (v === 'xml' || v === 'xml_goods' || v === 'xml_services') {
+                            if (!this.canDownload()) {
+                                alert('Для выгрузки XML выберите организацию и для безнала — банковский счёт.');
+                                return;
+                            }
+                            let url = '';
+                            if (v === 'xml') url = this.xmlHref();
+                            else if (v === 'xml_goods') url = this.xmlHrefGoods();
+                            else url = this.xmlHrefServices();
+                            window.location.href = url;
+                            return;
+                        }
+                        if (v === 'submitted') {
+                            if (confirm('Отметить, что ЭСФ уже записана в налоговой? Повторная выгрузка будет недоступна, пока не снять отметку.')) {
+                                this.$refs.formEsfSubmitted.submit();
+                            }
+                            return;
+                        }
+                        if (v === 'unqueue') {
+                            if (confirm('Убрать документ из очереди на ЭСФ? Отметку «нужна ЭСФ» можно будет выставить снова из списка выше.')) {
+                                this.$refs.formEsfUnqueue.submit();
+                            }
+                            return;
+                        }
+                        if (v === 'document') {
+                            window.location.href = this.documentUrl;
                         }
                     },
                 }"
@@ -121,41 +184,32 @@
                 </td>
                 <td class="border border-slate-300 px-2 py-2 text-center text-xs text-amber-800">не записано</td>
                 <td class="border border-slate-300 px-2 py-2">
-                    <div class="flex flex-col gap-2">
-                        <a
-                            x-bind:href="canDownload() ? xmlHref() : '#'"
-                            @click.prevent="if (canDownload()) window.location.href = xmlHref()"
-                            class="inline-flex justify-center rounded-md border px-2 py-1.5 text-xs font-semibold"
-                            :class="canDownload() ? 'border-emerald-600 bg-emerald-50 text-emerald-900 hover:bg-emerald-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'"
-                        >
-                            Скачать XML
-                        </a>
-                        <form method="POST" action="{{ route('admin.esf.submitted', $sale) }}">
-                            @csrf
-                            <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
-                            <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
-                            <button
-                                type="submit"
-                                class="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
-                                onclick="return confirm('Отметить, что ЭСФ уже записана в налоговой? Повторная выгрузка будет недоступна, пока не снять отметку.');"
-                            >
-                                Записано в ЭСФ
-                            </button>
-                        </form>
-                        <form method="POST" action="{{ route('admin.esf.unqueue', $sale) }}">
-                            @csrf
-                            <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
-                            <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
-                            <button
-                                type="submit"
-                                class="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
-                                onclick="return confirm('Убрать документ из очереди на ЭСФ? Отметку «нужна ЭСФ» можно будет выставить снова из списка выше.');"
-                            >
-                                Убрать из очереди
-                            </button>
-                        </form>
-                        <a href="{{ route('admin.legal-entity-sales.edit', $sale) }}" class="text-center text-[11px] text-emerald-700 underline">Документ</a>
-                    </div>
+                    <form x-ref="formEsfSubmitted" method="POST" action="{{ route('admin.esf.submitted', $sale) }}" class="hidden">
+                        @csrf
+                        <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
+                        <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
+                    </form>
+                    <form x-ref="formEsfUnqueue" method="POST" action="{{ route('admin.esf.unqueue', $sale) }}" class="hidden">
+                        @csrf
+                        <input type="hidden" name="date_from" value="{{ $esfFilter['date_from'] ?? '' }}" />
+                        <input type="hidden" name="date_to" value="{{ $esfFilter['date_to'] ?? '' }}" />
+                    </form>
+                    <select
+                        @change="onEsfAction($event)"
+                        class="w-full min-w-[10rem] max-w-[16rem] rounded border border-slate-300 bg-white py-1.5 pl-2 pr-6 text-xs text-slate-900"
+                        aria-label="Действия по ЭСФ"
+                    >
+                        <option value="">— действие —</option>
+                        @if (! $esfMixed)
+                            <option value="xml">Скачать XML</option>
+                        @else
+                            <option value="xml_goods">Скачать XML — товары</option>
+                            <option value="xml_services">Скачать XML — услуги</option>
+                        @endif
+                        <option value="submitted">Записано в ЭСФ</option>
+                        <option value="unqueue">Убрать из очереди</option>
+                        <option value="document">Документ</option>
+                    </select>
                 </td>
             </tr>
         @endforeach

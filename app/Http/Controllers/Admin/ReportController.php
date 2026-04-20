@@ -4,6 +4,12 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreGoodsCharacteristicsRequest;
+use App\Models\CashMovement;
+use App\Models\CashShift;
+use App\Models\OrganizationBankAccount;
+use App\Models\RetailSale;
+use App\Models\RetailSaleRefund;
+use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\BranchReportService;
 use App\Services\CashLedgerService;
@@ -20,7 +26,8 @@ class ReportController extends Controller
 {
     private const GOODS_STOCK_PER_PAGE = 100;
 
-    private const GOODS_CHARACTERISTICS_PER_PAGE = 100;
+    /** Ограничено из‑за PHP max_input_vars (часто 1000): полная строка формы даёт ~14 полей, иначе хвост страницы «обрезается» и валидация падает на lines.N. */
+    private const GOODS_CHARACTERISTICS_PER_PAGE = 50;
 
     private const GOODS_MOVEMENT_PER_PAGE = 75;
 
@@ -48,32 +55,49 @@ class ReportController extends Controller
         }
 
         $searchQuery = trim((string) $request->query('q', ''));
-        $oemMinLowOnly = $request->boolean('oem_min_low');
+
+        $minStockFilter = (string) $request->query('min_stock_filter', '');
+        if (in_array($minStockFilter, ['oem', 'line'], true)) {
+            // прямой URL / закладка
+        } elseif ($request->boolean('min_stock_oem')) {
+            $minStockFilter = 'oem';
+        } elseif ($request->boolean('min_stock_line')) {
+            $minStockFilter = 'line';
+        } elseif ($request->has('oem_min_low')) {
+            $minStockFilter = $request->boolean('oem_min_low') ? 'oem' : '';
+        } else {
+            $minStockFilter = '';
+        }
+        if (! in_array($minStockFilter, ['', 'oem', 'line'], true)) {
+            $minStockFilter = '';
+        }
+
+        $qtySort = (string) $request->query('qty_sort', '');
+        if (! in_array($qtySort, ['', 'asc', 'desc'], true)) {
+            $qtySort = '';
+        }
 
         $allRows = $this->reports->goodsStock($branchId, $warehouseId);
         $allRows = $this->reports->enrichGoodsStockWithOemGroupLow($allRows);
         if ($searchQuery !== '') {
-            $needle = mb_strtolower($searchQuery, 'UTF-8');
-            $allRows = $allRows->filter(function (array $r) use ($needle): bool {
-                $hay = mb_strtolower(
-                    ($r['article'] ?? '')
-                    . ' ' . ($r['name'] ?? '')
-                    . ' ' . ($r['barcode'] ?? '')
-                    . ' ' . ($r['category'] ?? '')
-                    . ' ' . ($r['oem'] ?? '')
-                    . ' ' . ($r['factory_number'] ?? '')
-                    . ' ' . ($r['warehouse'] ?? ''),
-                    'UTF-8'
-                );
-
-                return str_contains($hay, $needle);
-            })->values();
+            $allRows = $this->filterGoodsStockRowsBySearchQuery($allRows, $searchQuery);
         }
-        if ($oemMinLowOnly) {
+        if ($minStockFilter === 'oem') {
             $allRows = $allRows->filter(function (array $r): bool {
                 return (bool) ($r['oem_group_low'] ?? false);
             })->values();
+        } elseif ($minStockFilter === 'line') {
+            $allRows = $allRows->filter(function (array $r): bool {
+                return (bool) ($r['line_below_min'] ?? false);
+            })->values();
         }
+
+        if ($qtySort === 'asc') {
+            $allRows = $allRows->sortBy(fn (array $r): float => (float) ($r['quantity'] ?? 0))->values();
+        } elseif ($qtySort === 'desc') {
+            $allRows = $allRows->sortByDesc(fn (array $r): float => (float) ($r['quantity'] ?? 0))->values();
+        }
+
         $page = max(1, (int) $request->integer('page', 1));
         $total = $allRows->count();
         $lastPage = max(1, (int) ceil($total / self::GOODS_STOCK_PER_PAGE));
@@ -95,8 +119,12 @@ class ReportController extends Controller
         $rowsPaginator->withQueryString();
 
         $purchaseModalRows = $rowsPaginator->getCollection()->map(function (array $r): array {
+            $bid = (int) ($r['opening_stock_balance_id'] ?? 0);
+
             return [
-                'balance_id' => (int) ($r['opening_stock_balance_id'] ?? 0),
+                'row_key' => (string) ($r['row_key'] ?? ($bid > 0 ? 'b'.$bid : 'g'.(int) ($r['good_id'] ?? 0).'w'.(int) ($r['warehouse_id'] ?? 0))),
+                'balance_id' => $bid,
+                'selectable' => (bool) ($r['has_balance_record'] ?? ($bid > 0)),
                 'name' => (string) ($r['name'] ?? ''),
                 'unit' => (string) ($r['unit'] ?? ''),
                 'stock_qty' => (float) ($r['quantity'] ?? 0),
@@ -110,7 +138,8 @@ class ReportController extends Controller
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $warehouseId,
             'searchQuery' => $searchQuery,
-            'oemMinLowOnly' => $oemMinLowOnly,
+            'minStockFilter' => $minStockFilter,
+            'qtySort' => $qtySort,
             'rowsPaginator' => $rowsPaginator,
             'purchaseModalRows' => $purchaseModalRows,
         ]);
@@ -153,21 +182,7 @@ class ReportController extends Controller
         });
 
         if ($searchQuery !== '') {
-            $needle = mb_strtolower($searchQuery, 'UTF-8');
-            $allRows = $allRows->filter(function (array $r) use ($needle): bool {
-                $hay = mb_strtolower(
-                    ($r['article'] ?? '')
-                    . ' ' . ($r['name'] ?? '')
-                    . ' ' . ($r['barcode'] ?? '')
-                    . ' ' . ($r['category'] ?? '')
-                    . ' ' . ($r['oem'] ?? '')
-                    . ' ' . ($r['factory_number'] ?? '')
-                    . ' ' . ($r['warehouse'] ?? ''),
-                    'UTF-8'
-                );
-
-                return str_contains($hay, $needle);
-            })->values();
+            $allRows = $this->filterGoodsStockRowsBySearchQuery($allRows, $searchQuery);
         }
 
         $page = max(1, (int) $request->integer('page', 1));
@@ -315,10 +330,13 @@ class ReportController extends Controller
         $data = $this->reports->salesByGoods($branchId, $from, $to);
 
         return view('admin.reports.sales-by-goods', [
-            'pageTitle' => 'Продажи по товарам',
+            'pageTitle' => 'Продажи по товарам и услугам',
             'rows' => $data['rows'],
             'categoryRows' => $data['categoryRows'],
             'totalRevenue' => $data['totalRevenue'],
+            'serviceRows' => $data['serviceRows'],
+            'serviceCategoryRows' => $data['serviceCategoryRows'],
+            'totalServiceRevenue' => $data['totalServiceRevenue'],
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
         ]);
@@ -381,6 +399,132 @@ class ReportController extends Controller
             'rows' => $rows,
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
+        ]);
+    }
+
+    public function shiftReport(Request $request): View
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $cashierId = (int) $request->integer('user_id');
+
+        $users = User::query()
+            ->where('branch_id', $branchId)
+            ->orderBy('name')
+            ->get();
+
+        $shifts = CashShift::query()
+            ->where('branch_id', $branchId)
+            ->where('opened_at', '>=', $from->copy()->startOfDay())
+            ->where('opened_at', '<=', $to->copy()->endOfDay())
+            ->when($cashierId > 0, fn ($q) => $q->where('user_id', $cashierId))
+            ->with('user')
+            ->orderByDesc('opened_at')
+            ->paginate(20)
+            ->withQueryString();
+
+        $summaries = [];
+        foreach ($shifts as $shift) {
+            $until = $shift->closed_at ?? Carbon::now();
+            $net = $this->cashLedger->netCashChangeByAccountInShiftWindow(
+                $branchId,
+                $shift->opened_at,
+                $until,
+                (int) $shift->user_id
+            );
+            $summaries[$shift->id] = [
+                'opening_total' => $this->shiftOpeningTotal($shift),
+                'movement_total' => round((float) array_sum($net), 2),
+            ];
+        }
+
+        return view('admin.reports.shift-report', [
+            'pageTitle' => 'Сменный отчёт',
+            'shifts' => $shifts,
+            'summaries' => $summaries,
+            'users' => $users,
+            'selectedUserId' => $cashierId,
+            'filterFrom' => $from->format('Y-m-d'),
+            'filterTo' => $to->format('Y-m-d'),
+        ]);
+    }
+
+    public function shiftReportShow(CashShift $cashShift): View
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $until = $cashShift->closed_at ?? Carbon::now();
+
+        $closingTable = $this->cashLedger->shiftAccountClosingTable($cashShift, $branchId);
+        $kindBreakdown = $this->cashLedger->shiftMoneyKindBreakdown(
+            $branchId,
+            $cashShift->opened_at,
+            $until,
+            (int) $cashShift->user_id
+        );
+
+        $retailSales = RetailSale::query()
+            ->where('branch_id', $branchId)
+            ->where('user_id', $cashShift->user_id)
+            ->where('created_at', '>=', $cashShift->opened_at)
+            ->where('created_at', '<=', $until)
+            ->with(['payments.organizationBankAccount'])
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        $cashMovements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('user_id', $cashShift->user_id)
+            ->where('created_at', '>=', $cashShift->opened_at)
+            ->where('created_at', '<=', $until)
+            ->with(['ourAccount', 'fromAccount', 'toAccount', 'counterparty'])
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        $refunds = RetailSaleRefund::query()
+            ->where('created_at', '>=', $cashShift->opened_at)
+            ->where('created_at', '<=', $until)
+            ->whereHas('customerReturn', fn ($q) => $q->where('branch_id', $branchId))
+            ->whereHas('retailSale', fn ($q) => $q->where('user_id', $cashShift->user_id))
+            ->with(['customerReturn', 'retailSale', 'organizationBankAccount'])
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        $cashShift->load('user');
+
+        $closingFactRows = [];
+        if ($cashShift->closed_at !== null && is_array($cashShift->closing_by_account) && $cashShift->closing_by_account !== []) {
+            $accIds = array_map('intval', array_keys($cashShift->closing_by_account));
+            $accountsById = OrganizationBankAccount::query()
+                ->whereIn('id', $accIds)
+                ->whereHas('organization', fn ($q) => $q->where('branch_id', $branchId))
+                ->with('organization')
+                ->get()
+                ->keyBy('id');
+            foreach ($cashShift->closing_by_account as $id => $amt) {
+                $aid = (int) $id;
+                $acc = $accountsById->get($aid);
+                $closingFactRows[] = [
+                    'label' => $acc
+                        ? trim(($acc->organization?->name ?? '—').' — '.$acc->labelWithoutAccountNumber())
+                        : 'Счёт № '.$aid,
+                    'amount' => round((float) $amt, 2),
+                ];
+            }
+        }
+
+        return view('admin.reports.shift-report-show', [
+            'pageTitle' => 'Смена № '.$cashShift->id,
+            'shift' => $cashShift,
+            'until' => $until,
+            'closingTable' => $closingTable,
+            'kindBreakdown' => $kindBreakdown,
+            'retailSales' => $retailSales,
+            'cashMovements' => $cashMovements,
+            'refunds' => $refunds,
+            'closingFactRows' => $closingFactRows,
         ]);
     }
 
@@ -529,11 +673,9 @@ class ReportController extends Controller
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
                     'category' => (string) ($line['category'] ?? ''),
-                    'quantity' => (string) ($line['quantity'] ?? ''),
                     'unit_cost' => isset($line['unit_cost']) ? (string) $line['unit_cost'] : '',
                     'wholesale_price' => isset($line['wholesale_price']) ? (string) $line['wholesale_price'] : '',
                     'sale_price' => isset($line['sale_price']) ? (string) $line['sale_price'] : '',
-                    'min_sale_price' => isset($line['min_sale_price']) ? (string) $line['min_sale_price'] : '',
                     'oem' => (string) ($line['oem'] ?? ''),
                     'factory_number' => (string) ($line['factory_number'] ?? ''),
                     'min_stock' => isset($line['min_stock']) ? (string) $line['min_stock'] : '',
@@ -553,11 +695,9 @@ class ReportController extends Controller
                 'name' => $good->name,
                 'barcode' => (string) ($good->barcode ?? ''),
                 'category' => (string) ($good->category ?? ''),
-                'quantity' => $bal && $bal->quantity !== null ? (string) $bal->quantity : '',
                 'unit_cost' => $bal && $bal->unit_cost !== null ? (string) $bal->unit_cost : '',
                 'wholesale_price' => $good->wholesale_price !== null ? (string) $good->wholesale_price : '',
                 'sale_price' => $good->sale_price !== null ? (string) $good->sale_price : '',
-                'min_sale_price' => $good->min_sale_price !== null ? (string) $good->min_sale_price : '',
                 'oem' => (string) ($good->oem ?? ''),
                 'factory_number' => (string) ($good->factory_number ?? ''),
                 'min_stock' => $good->min_stock !== null ? (string) $good->min_stock : '',
@@ -604,6 +744,111 @@ class ReportController extends Controller
             'sold_total' => round((float) $rows->sum('sold_total'), 2),
             'writeoff' => round((float) $rows->sum('writeoff'), 2),
         ];
+    }
+
+    /**
+     * Поиск по остаткам: слова разделяются пробелами — должны найтись все (логика «И»).
+     * Учитываются id номенклатуры, артикул и штрихкод без пробелов.
+     *
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function filterGoodsStockRowsBySearchQuery(Collection $rows, string $searchQuery): Collection
+    {
+        $tokens = $this->parseGoodsStockSearchTokens($searchQuery);
+        if ($tokens === []) {
+            return $rows;
+        }
+
+        return $rows->filter(function (array $r) use ($tokens): bool {
+            $hay = $this->goodsStockRowSearchHaystack($r);
+            foreach ($tokens as $t) {
+                if (str_contains($hay, $t)) {
+                    continue;
+                }
+                $tCompact = $this->goodsStockSearchCompactToken($t);
+                if ($tCompact !== '' && str_contains($hay, $tCompact)) {
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
+        })->values();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseGoodsStockSearchTokens(string $searchQuery): array
+    {
+        $q = trim(preg_replace('/\s+/u', ' ', $searchQuery) ?? '');
+        if ($q === '') {
+            return [];
+        }
+        $parts = preg_split('/\s+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
+        $tokens = [];
+        foreach ($parts as $p) {
+            $t = mb_strtolower(trim((string) $p), 'UTF-8');
+            if ($t !== '') {
+                $tokens[] = $t;
+            }
+        }
+
+        return $tokens;
+    }
+
+    private function goodsStockRowSearchHaystack(array $r): string
+    {
+        $article = (string) ($r['article'] ?? '');
+        $barcode = (string) ($r['barcode'] ?? '');
+        $oem = (string) ($r['oem'] ?? '');
+        $factory = (string) ($r['factory_number'] ?? '');
+        $articleCompact = (string) (preg_replace('/\s+/u', '', $article) ?? '');
+        $barcodeCompact = (string) (preg_replace('/\s+/u', '', $barcode) ?? '');
+
+        $oemTrim = trim($oem);
+        $oemCompact = $this->goodsStockSearchCompactToken($oemTrim);
+        $factoryCompact = $this->goodsStockSearchCompactToken($factory);
+        $articleTokenCompact = $this->goodsStockSearchCompactToken($article);
+
+        return mb_strtolower(
+            $article
+            . ' ' . (string) ($r['name'] ?? '')
+            . ' ' . $barcode
+            . ' ' . (string) ($r['category'] ?? '')
+            . ' ' . $oem
+            . ' ' . $factory
+            . ' ' . (string) ($r['warehouse'] ?? '')
+            . ' ' . (string) ($r['good_id'] ?? '')
+            . ' ' . $articleCompact
+            . ' ' . $barcodeCompact
+            // Варианты без пробелов и дефисов — один и тот же ОЭМ в разных карточках часто пишут по-разному
+            . ' ' . $oemCompact
+            . ' ' . $factoryCompact
+            . ' ' . $articleTokenCompact,
+            'UTF-8'
+        );
+    }
+
+    /**
+     * Нормализация для сравнения артикула/ОЭМ/штрихкода: без пробелов и типичных разделителей.
+     */
+    private function goodsStockSearchCompactToken(string $value): string
+    {
+        $v = mb_strtolower(trim($value), 'UTF-8');
+
+        return (string) (preg_replace('/[\s\x{00A0}\-–—.,_\/\\\\]+/u', '', $v) ?? '');
+    }
+
+    private function shiftOpeningTotal(CashShift $shift): float
+    {
+        if (is_array($shift->opening_by_account) && $shift->opening_by_account !== []) {
+            return round((float) array_sum($shift->opening_by_account), 2);
+        }
+
+        return round((float) $shift->opening_cash, 2);
     }
 
     /**

@@ -166,15 +166,18 @@ class StockInventoryController extends Controller
     {
         $branchId = (int) auth()->user()->branch_id;
         $warehouses = $this->warehousesForBranch($branchId);
-        $warehouseId = (int) old('warehouse_id', $request->integer('warehouse_id'));
-        if ($warehouseId === 0 || ! $warehouses->contains('id', $warehouseId)) {
-            $warehouseId = (int) ($warehouses->firstWhere('is_default')?->id ?? $warehouses->first()?->id ?? 0);
+        $selectedWarehouseId = (int) old('warehouse_id', $request->integer('warehouse_id') ?: 0);
+        $defaultId = $warehouses->firstWhere('is_default')?->id ?? $warehouses->first()?->id;
+
+        if ($selectedWarehouseId === 0 || ! $warehouses->contains('id', $selectedWarehouseId)) {
+            $selectedWarehouseId = (int) ($defaultId ?? 0);
         }
 
         return view('admin.stock.incoming.create', [
             'pageTitle' => 'Оприходование излишков',
             'warehouses' => $warehouses,
-            'warehouseId' => $warehouseId,
+            'selectedWarehouseId' => $selectedWarehouseId,
+            'warehouseId' => $selectedWarehouseId,
             'defaultDocumentDate' => now()->toDateString(),
             'document' => null,
             'initialRows' => [],
@@ -199,6 +202,7 @@ class StockInventoryController extends Controller
         return view('admin.stock.incoming.create', [
             'pageTitle' => 'Редактирование оприходования',
             'warehouses' => $warehouses,
+            'selectedWarehouseId' => $warehouseId,
             'warehouseId' => $warehouseId,
             'defaultDocumentDate' => old('document_date', $stockSurplus->document_date->format('Y-m-d')),
             'document' => $stockSurplus,
@@ -220,6 +224,7 @@ class StockInventoryController extends Controller
             'lines.*.article_code' => ['nullable', 'string', 'max:100'],
             'lines.*.manual_name' => ['nullable', 'string', 'max:500'],
             'lines.*.unit' => ['nullable', 'string', 'max:30'],
+            'lines.*.sale_price' => ['nullable', 'string', 'max:50'],
         ]);
 
         $warehouseId = (int) $validated['warehouse_id'];
@@ -229,6 +234,10 @@ class StockInventoryController extends Controller
 
         if ($lines === []) {
             return back()->withInput()->withErrors(['lines' => 'Добавьте хотя бы одну строку: выберите товар из списка или укажите артикул и название для новой позиции.']);
+        }
+
+        if ($ucErr = $this->incomingUnitCostValidationError($lines)) {
+            return back()->withInput()->withErrors(['lines' => $ucErr]);
         }
 
         try {
@@ -258,7 +267,7 @@ class StockInventoryController extends Controller
                             'unit_price' => $unitCost,
                             'barcode' => $good->barcode,
                             'category' => $good->category,
-                            'sale_price' => $good->sale_price,
+                            'sale_price' => $line['sale_price'] ?? null,
                         ]);
 
                         StockSurplusLine::query()->create([
@@ -279,7 +288,7 @@ class StockInventoryController extends Controller
                         'unit_price' => $unitCost,
                         'barcode' => null,
                         'category' => null,
-                        'sale_price' => null,
+                        'sale_price' => $line['sale_price'] ?? null,
                     ]);
 
                     if ($good === null) {
@@ -321,6 +330,7 @@ class StockInventoryController extends Controller
             'lines.*.article_code' => ['nullable', 'string', 'max:100'],
             'lines.*.manual_name' => ['nullable', 'string', 'max:500'],
             'lines.*.unit' => ['nullable', 'string', 'max:30'],
+            'lines.*.sale_price' => ['nullable', 'string', 'max:50'],
         ]);
 
         $warehouseId = (int) $validated['warehouse_id'];
@@ -333,6 +343,13 @@ class StockInventoryController extends Controller
                 ->route('admin.stock.incoming.edit', $stockSurplus)
                 ->withInput()
                 ->withErrors(['lines' => 'Добавьте хотя бы одну строку: выберите товар из списка или укажите артикул и название для новой позиции.']);
+        }
+
+        if ($ucErr = $this->incomingUnitCostValidationError($lines)) {
+            return redirect()
+                ->route('admin.stock.incoming.edit', $stockSurplus)
+                ->withInput()
+                ->withErrors(['lines' => $ucErr]);
         }
 
         try {
@@ -384,7 +401,7 @@ class StockInventoryController extends Controller
                             'unit_price' => $unitCost,
                             'barcode' => $good->barcode,
                             'category' => $good->category,
-                            'sale_price' => $good->sale_price,
+                            'sale_price' => $line['sale_price'] ?? null,
                         ]);
 
                         StockSurplusLine::query()->create([
@@ -405,7 +422,7 @@ class StockInventoryController extends Controller
                         'unit_price' => $unitCost,
                         'barcode' => null,
                         'category' => null,
-                        'sale_price' => null,
+                        'sale_price' => $line['sale_price'] ?? null,
                     ]);
 
                     if ($good === null) {
@@ -868,8 +885,11 @@ class StockInventoryController extends Controller
             }
 
             return redirect()
-                ->route('admin.stock.audit.edit', $doc)
-                ->with('status', 'Черновик сохранён. Продолжите ревизию позже или проведите, когда закончите.');
+                ->route('admin.stock.audit', ['warehouse_id' => $warehouseId])
+                ->with(
+                    'status',
+                    'Черновик № '.$doc->id.' сохранён. Откройте его в журнале при необходимости или нажмите «Новая ревизия», чтобы начать следующий.'
+                );
         }
 
         try {
@@ -976,8 +996,11 @@ class StockInventoryController extends Controller
             }
 
             return redirect()
-                ->route('admin.stock.audit.edit', $stockAudit)
-                ->with('status', 'Черновик сохранён.');
+                ->route('admin.stock.audit', ['warehouse_id' => $warehouseId])
+                ->with(
+                    'status',
+                    'Черновик № '.$stockAudit->id.' сохранён. Откройте его в журнале при необходимости или нажмите «Новая ревизия», чтобы начать следующий.'
+                );
         }
 
         try {
@@ -1095,6 +1118,117 @@ class StockInventoryController extends Controller
     }
 
     /**
+     * Объединить несколько черновиков ревизии в один: по каждому товару количества суммируются (как общий факт по складу).
+     */
+    public function auditMergeDrafts(Request $request): RedirectResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $validated = $request->validate([
+            'draft_ids' => ['required', 'array', 'min:2'],
+            'draft_ids.*' => ['integer', 'distinct'],
+            'warehouse_id' => ['nullable', 'integer'],
+        ]);
+
+        $ids = array_values(array_unique(array_map('intval', $validated['draft_ids'])));
+        $backToJournal = function () use ($request) {
+            $wid = (int) $request->input('warehouse_id', 0);
+
+            return redirect()->route('admin.stock.audit', $wid > 0 ? ['warehouse_id' => $wid] : []);
+        };
+
+        $docs = StockAudit::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('id', $ids)
+            ->where('is_draft', true)
+            ->with('lines')
+            ->orderBy('id')
+            ->get();
+
+        if ($docs->count() !== count($ids)) {
+            return $backToJournal()
+                ->with('error', 'Не удалось объединить: выберите только существующие черновики ревизии.');
+        }
+
+        $warehouseIds = $docs->pluck('warehouse_id')->unique()->values();
+        if ($warehouseIds->count() !== 1) {
+            return $backToJournal()
+                ->with('error', 'Объединять можно только черновики по одному складу.');
+        }
+
+        $warehouseId = (int) $warehouseIds->first();
+
+        $sums = [];
+        foreach ($docs as $doc) {
+            foreach ($doc->lines as $line) {
+                $gid = (int) $line->good_id;
+                if (! isset($sums[$gid])) {
+                    $sums[$gid] = 0.0;
+                }
+                $sums[$gid] += (float) $line->quantity_counted;
+            }
+        }
+
+        if ($sums === []) {
+            return redirect()
+                ->route('admin.stock.audit', ['warehouse_id' => $warehouseId])
+                ->with('error', 'В выбранных черновиках нет строк с количеством — нечего объединять.');
+        }
+
+        $mergedLines = [];
+        foreach ($sums as $gid => $sum) {
+            if ($sum < 0) {
+                return redirect()
+                    ->route('admin.stock.audit', ['warehouse_id' => $warehouseId])
+                    ->with('error', 'Суммарное количество не может быть отрицательным.');
+            }
+            $this->assertGoodInBranch((int) $gid, $branchId);
+            $mergedLines[] = [
+                'good_id' => (int) $gid,
+                'quantity_counted' => (string) round($sum, 4),
+            ];
+        }
+
+        $maxDate = $docs->max('document_date');
+        $sourceLabel = 'Объединение черновиков № '.implode(', ', $ids).'.';
+
+        try {
+            $newDoc = DB::transaction(function () use ($branchId, $warehouseId, $maxDate, $sourceLabel, $mergedLines, $docs) {
+                foreach ($docs as $d) {
+                    $d->delete();
+                }
+
+                $doc = StockAudit::query()->create([
+                    'branch_id' => $branchId,
+                    'warehouse_id' => $warehouseId,
+                    'document_date' => $maxDate,
+                    'note' => $sourceLabel,
+                    'is_draft' => true,
+                ]);
+
+                foreach ($mergedLines as $line) {
+                    StockAuditLine::query()->create([
+                        'stock_audit_id' => $doc->id,
+                        'good_id' => $line['good_id'],
+                        'quantity_book' => null,
+                        'unit_cost_snapshot' => null,
+                        'quantity_counted' => $line['quantity_counted'],
+                    ]);
+                }
+
+                return $doc;
+            });
+        } catch (RuntimeException $e) {
+            return redirect()
+                ->route('admin.stock.audit', ['warehouse_id' => $warehouseId])
+                ->with('error', $e->getMessage());
+        }
+
+        return redirect()
+            ->route('admin.stock.audit.edit', $newDoc)
+            ->with('status', 'Черновики объединены: по каждой позиции количества сложены. Проверьте и проведите ревизию один раз.');
+    }
+
+    /**
      * Строки формы перемещения после ошибки валидации (товары только из справочника).
      *
      * @return list<array<string, mixed>>
@@ -1165,6 +1299,7 @@ class StockInventoryController extends Controller
                         'unit' => $good->unit ?? 'шт.',
                         'qty' => (string) ($line['quantity'] ?? ''),
                         'unit_cost' => isset($line['unit_cost']) ? trim((string) $line['unit_cost']) : '',
+                        'sale_price' => isset($line['sale_price']) ? trim((string) $line['sale_price']) : ($good->sale_price !== null ? (string) $good->sale_price : ''),
                         'stock_qty' => null,
                         'article_manual' => '',
                         'name_manual' => '',
@@ -1187,6 +1322,7 @@ class StockInventoryController extends Controller
                     'unit' => '',
                     'qty' => (string) ($line['quantity'] ?? ''),
                     'unit_cost' => isset($line['unit_cost']) ? trim((string) $line['unit_cost']) : '',
+                    'sale_price' => isset($line['sale_price']) ? trim((string) $line['sale_price']) : '',
                     'stock_qty' => null,
                     'article_manual' => $article,
                     'name_manual' => $manualName,
@@ -1212,6 +1348,7 @@ class StockInventoryController extends Controller
                 'unit' => $g?->unit ?? 'шт.',
                 'qty' => (string) $line->quantity,
                 'unit_cost' => $line->unit_cost !== null ? (string) $line->unit_cost : '',
+                'sale_price' => $g?->sale_price !== null ? (string) $g->sale_price : '',
                 'stock_qty' => null,
                 'article_manual' => '',
                 'name_manual' => '',
@@ -1361,9 +1498,18 @@ class StockInventoryController extends Controller
             }
             $uc = $line['unit_cost'] ?? null;
             $gid = isset($line['good_id']) ? (int) $line['good_id'] : 0;
+            $saleRaw = $line['sale_price'] ?? null;
+            if ($saleRaw !== null && is_string($saleRaw) && trim($saleRaw) === '') {
+                $saleRaw = null;
+            }
 
             if ($gid > 0) {
-                $out[] = ['good_id' => $gid, 'quantity' => $qty, 'unit_cost' => $uc];
+                $out[] = [
+                    'good_id' => $gid,
+                    'quantity' => $qty,
+                    'unit_cost' => $uc,
+                    'sale_price' => $saleRaw,
+                ];
 
                 continue;
             }
@@ -1385,10 +1531,30 @@ class StockInventoryController extends Controller
                 'unit' => $unit,
                 'quantity' => $qty,
                 'unit_cost' => $uc,
+                'sale_price' => $saleRaw,
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lines
+     */
+    private function incomingUnitCostValidationError(array $lines): ?string
+    {
+        foreach ($lines as $line) {
+            $raw = $line['unit_cost'] ?? null;
+            if ($raw === null || (is_string($raw) && trim($raw) === '')) {
+                return 'Укажите закупочную цену по каждой строке с количеством.';
+            }
+            $parsed = $this->openingBalanceService->parseOptionalMoney($raw);
+            if ($parsed === null) {
+                return 'Проверьте закупочную цену: введите число (например 1250 или 1250,50).';
+            }
+        }
+
+        return null;
     }
 
     /**

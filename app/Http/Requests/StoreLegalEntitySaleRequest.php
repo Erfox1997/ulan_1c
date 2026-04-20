@@ -100,7 +100,7 @@ class StoreLegalEntitySaleRequest extends FormRequest
                     continue;
                 }
 
-                if ($warehouseId > 0 && $qty !== null && $qty !== '' && is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty))) {
+                if (! $good->is_service && $warehouseId > 0 && $qty !== null && $qty !== '' && is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty))) {
                     $qNum = (float) str_replace([' ', ','], ['', '.'], (string) $qty);
                     $balance = OpeningStockBalance::query()
                         ->where('warehouse_id', $warehouseId)

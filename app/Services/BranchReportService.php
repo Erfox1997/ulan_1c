@@ -33,6 +33,11 @@ class BranchReportService
      * Остатки товаров: по складу или сводно по филиалу.
      *
      * @return Collection<int, array{
+     *     row_key: string,
+     *     has_balance_record: bool,
+     *     opening_stock_balance_id: int,
+     *     good_id: int,
+     *     warehouse_id: int,
      *     article: string,
      *     name: string,
      *     unit: string,
@@ -58,46 +63,77 @@ class BranchReportService
             ->get()
             ->keyBy('id');
 
-        $q = OpeningStockBalance::query()
-            ->where('branch_id', $branchId)
-            ->with('good')
-            ->whereHas('good', fn ($g) => $g->where('is_service', false));
-
-        if ($warehouseId > 0) {
-            $q->where('warehouse_id', $warehouseId);
+        if ($warehouses->isEmpty()) {
+            return collect();
         }
 
-        return $q->orderBy('warehouse_id')->orderBy('id')->get()->map(function (OpeningStockBalance $b) use ($warehouses) {
-            $qty = (float) $b->quantity;
-            $cost = $b->unit_cost !== null ? (float) $b->unit_cost : null;
-            $amount = $cost !== null ? round($qty * $cost, 2) : null;
-            $g = $b->good;
+        $warehouseIds = $warehouseId > 0
+            ? ($warehouses->has($warehouseId) ? collect([(int) $warehouseId]) : collect())
+            : $warehouses->keys()->map(fn ($id) => (int) $id);
 
-            return [
-                'opening_stock_balance_id' => (int) $b->id,
-                'good_id' => (int) $b->good_id,
-                'warehouse_id' => (int) $b->warehouse_id,
-                'article' => (string) ($g?->article_code ?? ''),
-                'name' => (string) ($g?->name ?? ''),
-                'unit' => (string) ($g?->unit ?? 'шт.'),
-                'barcode' => (string) ($g?->barcode ?? ''),
-                'category' => (string) ($g?->category ?? ''),
-                'sale_price' => $g?->sale_price !== null ? (float) $g->sale_price : null,
-                'min_sale_price' => $g?->min_sale_price !== null ? (float) $g->min_sale_price : null,
-                'oem' => (string) ($g?->oem ?? ''),
-                'factory_number' => (string) ($g?->factory_number ?? ''),
-                'min_stock' => $g?->min_stock !== null ? (float) $g->min_stock : null,
-                'warehouse' => $warehouses->get($b->warehouse_id)?->name ?? '—',
-                'quantity' => $qty,
-                'unit_cost' => $cost,
-                'amount' => $amount,
-            ];
+        if ($warehouseIds->isEmpty()) {
+            return collect();
+        }
+
+        $goods = Good::query()
+            ->where('branch_id', $branchId)
+            ->where('is_service', false)
+            ->orderBy('name')
+            ->orderBy('id')
+            ->get();
+
+        $balancesByKey = OpeningStockBalance::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('warehouse_id', $warehouseIds->all())
+            ->get()
+            ->keyBy(fn (OpeningStockBalance $b) => $b->good_id.'_'.$b->warehouse_id);
+
+        $rows = collect();
+        foreach ($warehouseIds as $wid) {
+            foreach ($goods as $g) {
+                $k = $g->id.'_'.$wid;
+                $b = $balancesByKey->get($k);
+                $qty = $b !== null ? (float) $b->quantity : 0.0;
+                $cost = $b !== null && $b->unit_cost !== null ? (float) $b->unit_cost : null;
+                $amount = $cost !== null ? round($qty * $cost, 2) : null;
+
+                $rows->push([
+                    'row_key' => $b !== null ? 'b'.(int) $b->id : 'g'.(int) $g->id.'w'.(int) $wid,
+                    'has_balance_record' => $b !== null,
+                    'opening_stock_balance_id' => $b !== null ? (int) $b->id : 0,
+                    'good_id' => (int) $g->id,
+                    'warehouse_id' => (int) $wid,
+                    'article' => (string) ($g->article_code ?? ''),
+                    'name' => (string) ($g->name ?? ''),
+                    'unit' => (string) ($g->unit ?? 'шт.'),
+                    'barcode' => (string) ($g->barcode ?? ''),
+                    'category' => (string) ($g->category ?? ''),
+                    'sale_price' => $g->sale_price !== null ? (float) $g->sale_price : null,
+                    'min_sale_price' => $g->min_sale_price !== null ? (float) $g->min_sale_price : null,
+                    'oem' => (string) ($g->oem ?? ''),
+                    'factory_number' => (string) ($g->factory_number ?? ''),
+                    'min_stock' => $g->min_stock !== null ? (float) $g->min_stock : null,
+                    'warehouse' => $warehouses->get($wid)?->name ?? '—',
+                    'quantity' => $qty,
+                    'unit_cost' => $cost,
+                    'amount' => $amount,
+                ]);
+            }
+        }
+
+        return $rows->sort(function (array $a, array $b): int {
+            if ($a['warehouse_id'] !== $b['warehouse_id']) {
+                return $a['warehouse_id'] <=> $b['warehouse_id'];
+            }
+
+            return strcmp((string) $a['name'], (string) $b['name']);
         })->values();
     }
 
     /**
      * Помечает строки отчёта «Остатки»: для группы с одинаковым непустым ОЭМ суммируется количество по всем строкам;
-     * без ОЭМ каждая строка — отдельная «группа». oem_group_low = true, если сумма < мин. остатка (минимум порога по группе).
+     * без ОЭМ каждая строка — отдельная «группа». oem_group_low = true, если сумма ≤ мин. остатка (минимум порога по группе).
+     * line_below_min = true, если по самой строке количество ≤ min_stock (без группировки по ОЭМ).
      *
      * @param  Collection<int, array<string, mixed>>  $rows
      * @return Collection<int, array<string, mixed>>
@@ -135,7 +171,11 @@ class BranchReportService
             $min = $minByKey[$key] ?? null;
             $r['oem_group_sum'] = $sum;
             $r['oem_group_min'] = $min;
-            $r['oem_group_low'] = $min !== null && $sum < $min;
+            $r['oem_group_low'] = $min !== null && $sum <= $min;
+
+            $qty = (float) ($r['quantity'] ?? 0);
+            $rowMin = $r['min_stock'] ?? null;
+            $r['line_below_min'] = $rowMin !== null && $qty <= (float) $rowMin;
 
             return $r;
         })->values();
@@ -551,12 +591,15 @@ class BranchReportService
     }
 
     /**
-     * Продажи по товарам (количество, выручка, доля в % и сводка по категориям).
+     * Продажи по товарам и услугам (количество, выручка, доля в % и сводка по категориям для каждого блока).
      *
      * @return array{
      *     rows: Collection<int, array{good_id: int, article: string, name: string, unit: string, category: string, quantity: float, revenue: float, revenue_share_pct: float}>,
      *     categoryRows: Collection<int, array{category: string, revenue: float, revenue_share_pct: float}>,
-     *     totalRevenue: float
+     *     totalRevenue: float,
+     *     serviceRows: Collection<int, array{good_id: int, article: string, name: string, unit: string, category: string, quantity: float, revenue: float, revenue_share_pct: float}>,
+     *     serviceCategoryRows: Collection<int, array{category: string, revenue: float, revenue_share_pct: float}>,
+     *     totalServiceRevenue: float
      * }
      */
     public function salesByGoods(int $branchId, CarbonInterface $from, CarbonInterface $to): array
@@ -564,6 +607,28 @@ class BranchReportService
         $fromStr = $from->format('Y-m-d');
         $toStr = $to->format('Y-m-d');
 
+        $goods = $this->salesByNomenclatureKind($branchId, $fromStr, $toStr, false);
+        $services = $this->salesByNomenclatureKind($branchId, $fromStr, $toStr, true);
+
+        return [
+            'rows' => $goods['rows'],
+            'categoryRows' => $goods['categoryRows'],
+            'totalRevenue' => $goods['totalRevenue'],
+            'serviceRows' => $services['rows'],
+            'serviceCategoryRows' => $services['categoryRows'],
+            'totalServiceRevenue' => $services['totalRevenue'],
+        ];
+    }
+
+    /**
+     * @return array{
+     *     rows: Collection<int, array{good_id: int, article: string, name: string, unit: string, category: string, quantity: float, revenue: float, revenue_share_pct: float}>,
+     *     categoryRows: Collection<int, array{category: string, revenue: float, revenue_share_pct: float}>,
+     *     totalRevenue: float
+     * }
+     */
+    private function salesByNomenclatureKind(int $branchId, string $fromStr, string $toStr, bool $isService): array
+    {
         $retail = RetailSaleLine::query()
             ->select([
                 'good_id',
@@ -573,7 +638,7 @@ class BranchReportService
             ->whereHas('retailSale', fn ($q) => $q->where('branch_id', $branchId)
                 ->whereDate('document_date', '>=', $fromStr)
                 ->whereDate('document_date', '<=', $toStr))
-            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
             ->groupBy('good_id');
 
         $legal = LegalEntitySaleLine::query()
@@ -585,7 +650,7 @@ class BranchReportService
             ->whereHas('legalEntitySale', fn ($q) => $q->where('branch_id', $branchId)
                 ->whereDate('document_date', '>=', $fromStr)
                 ->whereDate('document_date', '<=', $toStr))
-            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
             ->groupBy('good_id');
 
         /** @var array<int, array{good_id: int, quantity: float, revenue: float}> $merged */

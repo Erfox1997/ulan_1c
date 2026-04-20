@@ -51,6 +51,37 @@ class LegalEntitySale extends Model
         return $this->hasMany(LegalEntitySaleLine::class);
     }
 
+    /**
+     * Для ЭСФ: в одном документе товары и услуги выгружаются отдельными файлами (по признаку номенклатуры is_service).
+     *
+     * @return array{has_goods: bool, has_services: bool, mixed: bool}
+     */
+    public function esfGoodsServicesLinesProfile(): array
+    {
+        $this->loadMissing('lines.good');
+
+        $hasGoods = false;
+        $hasServices = false;
+
+        foreach ($this->lines as $line) {
+            $g = $line->good;
+            if ($g === null) {
+                continue;
+            }
+            if ($g->is_service) {
+                $hasServices = true;
+            } else {
+                $hasGoods = true;
+            }
+        }
+
+        return [
+            'has_goods' => $hasGoods,
+            'has_services' => $hasServices,
+            'mixed' => $hasGoods && $hasServices,
+        ];
+    }
+
     public function resolveRouteBinding($value, $field = null)
     {
         $field ??= $this->getRouteKeyName();

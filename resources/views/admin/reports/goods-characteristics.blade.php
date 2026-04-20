@@ -7,17 +7,15 @@
         'barcode',
         'category',
         'unit',
-        'quantity',
         'unit_cost',
         'wholesale_price',
         'sale_price',
-        'min_sale_price',
         'oem',
         'factory_number',
         'min_stock',
     ];
-    $gcNumericFields = ['quantity', 'unit_cost', 'wholesale_price', 'sale_price', 'min_sale_price', 'min_stock'];
-    $gcTableColspan = $gcShowAll ? 14 : 2 + count($missingKeys);
+    $gcNumericFields = ['unit_cost', 'wholesale_price', 'sale_price', 'min_stock'];
+    $gcTableColspan = $gcShowAll ? 12 : 2 + count($missingKeys);
 @endphp
 <x-admin-layout :pageTitle="$pageTitle" main-class="px-3 py-6 sm:px-6 lg:px-8">
     @include('admin.partials.cp-brush')
@@ -383,11 +381,9 @@
                                                     <th>Штрихкод</th>
                                                     <th>Категория</th>
                                                     <th>Ед. изм.</th>
-                                                    <th>Количество</th>
                                                     <th>Цена (закуп.)</th>
                                                     <th>Оптовая цена</th>
                                                     <th>Цена (продаж.)</th>
-                                                    <th>Мин. цена (продаж.)</th>
                                                     <th>ОЭМ</th>
                                                     <th>Заводской №</th>
                                                     <th>Мин. остаток</th>
@@ -454,16 +450,6 @@
                                                         <td class="ob-numr">
                                                             <input
                                                                 type="text"
-                                                                name="lines[{{ $idx }}][quantity]"
-                                                                value="{{ $line['quantity'] }}"
-                                                                class="ob-inp w-20 min-w-[4rem]"
-                                                                inputmode="decimal"
-                                                                autocomplete="off"
-                                                            />
-                                                        </td>
-                                                        <td class="ob-numr">
-                                                            <input
-                                                                type="text"
                                                                 name="lines[{{ $idx }}][unit_cost]"
                                                                 value="{{ $line['unit_cost'] }}"
                                                                 class="ob-inp w-24 min-w-[4.5rem]"
@@ -486,16 +472,6 @@
                                                                 type="text"
                                                                 name="lines[{{ $idx }}][sale_price]"
                                                                 value="{{ $line['sale_price'] }}"
-                                                                class="ob-inp w-24 min-w-[4.5rem]"
-                                                                inputmode="decimal"
-                                                                autocomplete="off"
-                                                            />
-                                                        </td>
-                                                        <td class="ob-numr">
-                                                            <input
-                                                                type="text"
-                                                                name="lines[{{ $idx }}][min_sale_price]"
-                                                                value="{{ $line['min_sale_price'] }}"
                                                                 class="ob-inp w-24 min-w-[4.5rem]"
                                                                 inputmode="decimal"
                                                                 autocomplete="off"

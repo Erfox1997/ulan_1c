@@ -221,7 +221,8 @@ class OpeningBalanceService
         $Qnew = $Q - $q;
 
         if ($Qnew <= 1e-9) {
-            $balance->delete();
+            $balance->quantity = '0';
+            $balance->save();
 
             return;
         }
@@ -279,7 +280,8 @@ class OpeningBalanceService
         $Qnew = $Q - $q;
 
         if ($Qnew <= 1e-9) {
-            $balance->delete();
+            $balance->quantity = '0';
+            $balance->save();
 
             return;
         }
@@ -732,7 +734,10 @@ class OpeningBalanceService
             return (string) $value;
         }
 
-        $s = str_replace([' ', ','], ['', '.'], trim((string) $value));
+        $s = trim((string) $value);
+        // ru-RU и toLocaleString часто дают неразрывный пробел (U+00A0) между разрядами — обычный str_replace(' ', …) его не убирает.
+        $s = preg_replace('/\s+/u', '', $s);
+        $s = str_replace(',', '.', $s);
         if ($s === '' || ! is_numeric($s)) {
             return null;
         }

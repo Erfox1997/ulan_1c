@@ -40,11 +40,9 @@ class StoreGoodsCharacteristicsRequest extends FormRequest
             'lines.*.name' => ['required', 'string', 'max:500'],
             'lines.*.barcode' => ['nullable', 'string', 'max:64'],
             'lines.*.category' => ['nullable', 'string', 'max:120'],
-            'lines.*.quantity' => ['nullable'],
             'lines.*.unit_cost' => ['nullable'],
             'lines.*.wholesale_price' => ['nullable'],
             'lines.*.sale_price' => ['nullable'],
-            'lines.*.min_sale_price' => ['nullable'],
             'lines.*.oem' => ['nullable', 'string', 'max:120'],
             'lines.*.factory_number' => ['nullable', 'string', 'max:120'],
             'lines.*.min_stock' => ['nullable'],
@@ -80,11 +78,6 @@ class StoreGoodsCharacteristicsRequest extends FormRequest
                     }
                 }
 
-                $qty = $line['quantity'] ?? null;
-                if ($qty !== null && $qty !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty)) || (float) str_replace([' ', ','], ['', '.'], (string) $qty) < 0)) {
-                    $v->errors()->add("lines.{$i}.quantity", 'Количество должно быть числом не меньше нуля.');
-                }
-
                 $cost = $line['unit_cost'] ?? null;
                 if ($cost !== null && $cost !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $cost)) || (float) str_replace([' ', ','], ['', '.'], (string) $cost) < 0)) {
                     $v->errors()->add("lines.{$i}.unit_cost", 'Закупочная цена не может быть отрицательной.');
@@ -98,11 +91,6 @@ class StoreGoodsCharacteristicsRequest extends FormRequest
                 $sale = $line['sale_price'] ?? null;
                 if ($sale !== null && $sale !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $sale)) || (float) str_replace([' ', ','], ['', '.'], (string) $sale) < 0)) {
                     $v->errors()->add("lines.{$i}.sale_price", 'Продажная цена не может быть отрицательной.');
-                }
-
-                $minSale = $line['min_sale_price'] ?? null;
-                if ($minSale !== null && $minSale !== '' && (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $minSale)) || (float) str_replace([' ', ','], ['', '.'], (string) $minSale) < 0)) {
-                    $v->errors()->add("lines.{$i}.min_sale_price", 'Минимальная цена продажи не может быть отрицательной.');
                 }
 
                 $minSt = $line['min_stock'] ?? null;
