@@ -1014,7 +1014,8 @@ class BranchReportService
         $fromStr = $from->format('Y-m-d');
         $toStr = $to->format('Y-m-d');
 
-        $catExpr = "COALESCE(NULLIF(TRIM(expense_category), ''), 'Без категории')";
+        $table = (new CashMovement)->getTable();
+        $catExpr = "COALESCE(NULLIF(TRIM(`{$table}`.expense_category), ''), 'Без категории')";
 
         return CashMovement::query()
             ->where('branch_id', $branchId)
@@ -1023,7 +1024,9 @@ class BranchReportService
             ->whereDate('occurred_on', '<=', $toStr)
             ->selectRaw($catExpr.' as category')
             ->selectRaw('SUM(amount) as amount')
-            ->groupBy(DB::raw($catExpr))
+            // GROUP BY 1: совпадает с первым выражением в SELECT; иначе при ONLY_FULL_GROUP_BY
+            // (типично на проде) MySQL/MariaDB может ругаться, что expense_category «не в GROUP BY».
+            ->groupByRaw('1')
             ->orderByDesc('amount')
             ->get()
             ->map(fn ($r) => [
