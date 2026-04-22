@@ -24,8 +24,15 @@
             </div>
         @enderror
 
-        <div>
+        <div class="flex flex-wrap items-center gap-2">
             <a href="{{ route('admin.service-sales.requests') }}" class="text-xs font-semibold text-emerald-800 hover:underline">← К заявкам</a>
+            @if ($serviceOrder->isAwaitingFulfillment() && ($mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines')))
+                <span class="text-slate-300" aria-hidden="true">·</span>
+                <a
+                    href="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $serviceOrder) }}"
+                    class="text-xs font-semibold text-teal-800 hover:underline"
+                >Позиции</a>
+            @endif
         </div>
 
         <div class="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-md ring-1 ring-slate-900/[0.04]">

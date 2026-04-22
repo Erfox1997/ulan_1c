@@ -113,6 +113,9 @@
                                 @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
                                     title="Товаров с неполной характеристикой: {{ $goodsCharacteristicsIncompleteCount }}"
                                 @endif
+                                @if (($child['route'] ?? '') === 'admin.service-sales.requests' && ($serviceOrdersAwaitingFulfillmentCount ?? 0) > 0)
+                                    title="Заявок к оформлению: {{ $serviceOrdersAwaitingFulfillmentCount }}"
+                                @endif
                             >
                                 <span class="min-w-0">{{ $child['label'] }}</span>
                                 @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
@@ -120,6 +123,12 @@
                                         class="shrink-0 rounded-md bg-red-500/30 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-red-100 ring-1 ring-red-400/45"
                                         aria-hidden="true"
                                     >+{{ $goodsCharacteristicsIncompleteCount }}</span>
+                                @endif
+                                @if (($child['route'] ?? '') === 'admin.service-sales.requests' && ($serviceOrdersAwaitingFulfillmentCount ?? 0) > 0)
+                                    <span
+                                        class="shrink-0 rounded-md bg-emerald-500/25 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-emerald-100 ring-1 ring-emerald-400/40"
+                                        aria-hidden="true"
+                                    >+{{ $serviceOrdersAwaitingFulfillmentCount }}</span>
                                 @endif
                             </a>
                         </li>

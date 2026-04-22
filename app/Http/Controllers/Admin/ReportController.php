@@ -392,13 +392,18 @@ class ReportController extends Controller
     {
         $branchId = (int) auth()->user()->branch_id;
         [$from, $to] = $this->parsePeriod($request);
-        $rows = $this->reports->cashTrialBalance($branchId, $from, $to);
+        $osv = $this->reports->cashTurnoverOsv($branchId, $from, $to);
+        $user = $request->user();
+        $user?->loadMissing('branch');
+        $branch = $user?->branch;
 
         return view('admin.reports.turnover', [
             'pageTitle' => 'Оборотно-сальдовая ведомость',
-            'rows' => $rows,
+            'osv' => $osv,
+            'branchName' => $branch?->name,
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
         ]);
     }
 

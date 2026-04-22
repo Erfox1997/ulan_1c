@@ -1,9 +1,18 @@
 <x-admin-layout pageTitle="Заявка №{{ $serviceOrder->id }} — редактирование" main-class="bg-slate-100/80 px-3 py-4 sm:px-4 lg:px-6">
     <div class="mx-auto max-w-lg space-y-3">
         <div class="flex flex-wrap items-center gap-2 text-sm">
-            <a href="{{ route('admin.service-sales.sell') }}" class="font-semibold text-emerald-700 hover:underline">← Заявка на продажу</a>
-            <span class="text-slate-300" aria-hidden="true">·</span>
-            <a href="{{ route('admin.service-sales.sell.lines', $serviceOrder) }}" class="font-semibold text-emerald-700 hover:underline">Позиции</a>
+            @if ($mayAccessRoute('admin.service-sales.requests'))
+                <a href="{{ route('admin.service-sales.requests') }}" class="font-semibold text-emerald-700 hover:underline">← К заявкам</a>
+            @else
+                <a href="{{ route('admin.service-sales.sell') }}" class="font-semibold text-emerald-700 hover:underline">← Заявка на продажу</a>
+            @endif
+            @if ($mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines'))
+                <span class="text-slate-300" aria-hidden="true">·</span>
+                <a
+                    href="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $serviceOrder) }}"
+                    class="font-semibold text-emerald-700 hover:underline"
+                >Позиции</a>
+            @endif
             @if ($mayAccessRoute('admin.service-sales.requests.show'))
                 <span class="text-slate-300" aria-hidden="true">·</span>
                 <a href="{{ route('admin.service-sales.requests.show', $serviceOrder) }}" class="font-semibold text-slate-600 hover:text-emerald-700 hover:underline">Оформление</a>

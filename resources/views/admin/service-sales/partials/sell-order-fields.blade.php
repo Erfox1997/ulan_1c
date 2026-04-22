@@ -254,11 +254,11 @@
             <p class="mt-1 text-xs text-slate-500">Марка, VIN и год сохраняются в карточке; пробег указывается в заявке отдельно.</p>
             <div class="mt-3 grid gap-3 sm:grid-cols-2">
                 <div class="sm:col-span-2">
-                    <label class="block text-xs font-semibold text-slate-700">Марка *</label>
+                    <label class="block text-xs font-semibold text-slate-700">Марка</label>
                     <input type="text" x-model="vBrand" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm" />
                 </div>
                 <div class="sm:col-span-2">
-                    <label class="block text-xs font-semibold text-slate-700">VIN *</label>
+                    <label class="block text-xs font-semibold text-slate-700">VIN</label>
                     <input
                         type="text"
                         x-model="vVin"

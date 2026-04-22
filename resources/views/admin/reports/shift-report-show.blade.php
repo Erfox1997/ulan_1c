@@ -5,6 +5,7 @@
     $kindTitle = static function (string $kind): string {
         return match ($kind) {
             CashMovement::KIND_INCOME_CLIENT => 'Приход: оплата от клиента',
+            CashMovement::KIND_INCOME_OTHER => 'Приход: прочие',
             CashMovement::KIND_EXPENSE_SUPPLIER => 'Расход: оплата поставщику',
             CashMovement::KIND_EXPENSE_OTHER => 'Расход: прочие',
             CashMovement::KIND_TRANSFER => 'Перевод между счетами',
@@ -76,6 +77,10 @@
                     <div class="rounded-lg bg-slate-50 px-3 py-2">
                         <dt class="text-[10px] font-bold uppercase text-slate-500">Приход (клиент, вручную)</dt>
                         <dd class="font-semibold tabular-nums text-slate-900">{{ InvoiceNakladnayaFormatter::formatMoney($kindBreakdown['income_client']) }}</dd>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 px-3 py-2">
+                        <dt class="text-[10px] font-bold uppercase text-slate-500">Прочий приход (вручную)</dt>
+                        <dd class="font-semibold tabular-nums text-slate-900">{{ InvoiceNakladnayaFormatter::formatMoney($kindBreakdown['income_other']) }}</dd>
                     </div>
                     <div class="rounded-lg bg-slate-50 px-3 py-2">
                         <dt class="text-[10px] font-bold uppercase text-slate-500">Расход поставщику</dt>

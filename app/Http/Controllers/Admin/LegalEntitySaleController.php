@@ -156,10 +156,13 @@ class LegalEntitySaleController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
-                    'issue_esf' => $issueEsf,
                 ]);
 
                 $this->appendLines($sale, $branchId, $warehouseId, $lines);
+
+                if ($issueEsf) {
+                    $sale->fresh()->load('lines.good')->esfApplyQueueFromFormCheckbox();
+                }
             });
         } catch (RuntimeException $e) {
             return redirect()
@@ -344,7 +347,8 @@ class LegalEntitySaleController extends Controller
                 }
 
                 $wId = (int) $sale->warehouse_id;
-                $issueEsf = (bool) $sale->issue_esf;
+                $keepEsfQueueGoods = (bool) $sale->esf_queue_goods;
+                $keepEsfQueueServices = (bool) $sale->esf_queue_services;
 
                 $oldLines = $sale->lines()->orderBy('id')->get();
                 foreach ($oldLines as $oldLine) {
@@ -363,11 +367,13 @@ class LegalEntitySaleController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
-                    'issue_esf' => $issueEsf,
+                    'esf_queue_goods' => $keepEsfQueueGoods,
+                    'esf_queue_services' => $keepEsfQueueServices,
                     'esf_exchange_code' => null,
                 ]);
 
                 $this->appendLines($sale->fresh(), $branchId, $wId, $lines);
+                $sale->fresh()->load('lines.good')->esfSyncQueueFlagsToDocumentLines()->save();
             });
         } catch (RuntimeException $e) {
             return redirect()

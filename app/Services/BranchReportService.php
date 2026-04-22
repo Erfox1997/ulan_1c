@@ -1033,19 +1033,65 @@ class BranchReportService
     }
 
     /**
-     * Упрощённая оборотно-сальдовая ведомость по денежным счетам организаций филиала.
+     * Оборотно-сальдовая ведомость по денежным счетам: группировка по организациям, колонки дебет/кредит
+     * (оформление, близкое к привычной «ОСВ» в 1С). Считает те же сальдо и обороты, что и ранее, но
+     * представляет сальдо и итог в виде пары «дебет | кредит».
      *
-     * @return Collection<int, array{id: int, label: string, currency: string, opening: float, turnover_in: float, turnover_out: float, closing: float}>
+     * @return array{
+     *   groups: list<array{
+     *     organization_id: int,
+     *     organization_name: string,
+     *     accounts: list<array{
+     *       id: int,
+     *       account_label: string,
+     *       kind: string,
+     *       currency: string,
+     *       sn_debit: float, sn_credit: float,
+     *       to_debit: float, to_credit: float,
+     *       sk_debit: float, sk_credit: float
+     *     }>,
+     *     subtotal: array{sn_debit: float, sn_credit: float, to_debit: float, to_credit: float, sk_debit: float, sk_credit: float}
+     *   }>,
+     *   grand: array{sn_debit: float, sn_credit: float, to_debit: float, to_credit: float, sk_debit: float, sk_credit: float},
+     *   currency_codes: list<string>
+     * }
      */
-    public function cashTrialBalance(int $branchId, CarbonInterface $from, CarbonInterface $to): Collection
+    public function cashTurnoverOsv(int $branchId, CarbonInterface $from, CarbonInterface $to): array
     {
         $accounts = $this->cashLedger->accountsForBranch($branchId);
         $toExclusive = Carbon::parse($to->format('Y-m-d'))->addDay();
-
         $history = $this->cashLedger->historyRows($branchId, $from, $to);
 
-        return $accounts->map(function (OrganizationBankAccount $acc) use ($branchId, $from, $toExclusive, $history) {
-            $id = $acc->id;
+        $zero = static fn (): array => [
+            'sn_debit' => 0.0,
+            'sn_credit' => 0.0,
+            'to_debit' => 0.0,
+            'to_credit' => 0.0,
+            'sk_debit' => 0.0,
+            'sk_credit' => 0.0,
+        ];
+
+        $rowSix = function (array $a) use ($zero): array {
+            $z = $zero();
+            foreach (array_keys($z) as $k) {
+                $z[$k] = round((float) ($a[$k] ?? 0), 2);
+            }
+
+            return $z;
+        };
+
+        $addSix = function (array $sum, array $b) use ($zero): array {
+            $o = $zero();
+            foreach (array_keys($o) as $k) {
+                $o[$k] = (float) ($sum[$k] ?? 0) + (float) ($b[$k] ?? 0);
+            }
+
+            return $o;
+        };
+
+        $accountRows = [];
+        foreach ($accounts as $acc) {
+            $id = (int) $acc->id;
             $opening = $this->cashLedger->balanceAtDateExclusive($branchId, $id, $from);
             $closing = $this->cashLedger->balanceAtDateExclusive($branchId, $id, $toExclusive);
 
@@ -1063,15 +1109,76 @@ class BranchReportService
                 }
             }
 
-            return [
+            $in = round($in, 2);
+            $out = round($out, 2);
+            $sn = $this->osvBalanceToDebitCredit($opening);
+            $sk = $this->osvBalanceToDebitCredit($closing);
+
+            $org = $acc->organization;
+            $accountRows[] = [
+                'organization_id' => (int) $acc->organization_id,
+                'organization_name' => (string) ($org?->name ?? '—'),
                 'id' => $id,
-                'label' => $acc->movementReportLabel(),
-                'currency' => $acc->currency,
-                'opening' => $opening,
-                'turnover_in' => round($in, 2),
-                'turnover_out' => round($out, 2),
-                'closing' => $closing,
+                'account_label' => $acc->summaryLabel(),
+                'kind' => $acc->isCash() ? 'cash' : 'bank',
+                'currency' => (string) $acc->currency,
+                'sn_debit' => round($sn['debit'], 2),
+                'sn_credit' => round($sn['credit'], 2),
+                'to_debit' => $in,
+                'to_credit' => $out,
+                'sk_debit' => round($sk['debit'], 2),
+                'sk_credit' => round($sk['credit'], 2),
             ];
-        })->values();
+        }
+
+        $orderedOrgIds = $accounts->pluck('organization_id')->unique()->values();
+        $byOrg = collect($accountRows)->groupBy('organization_id');
+        $groups = [];
+        $grand = $zero();
+
+        foreach ($orderedOrgIds as $orgId) {
+            $orgId = (int) $orgId;
+            $orgRows = $byOrg->get($orgId, collect());
+            if ($orgRows->isEmpty()) {
+                continue;
+            }
+            $name = (string) $orgRows->first()['organization_name'];
+            $sub = $zero();
+            $list = [];
+            foreach ($orgRows as $r) {
+                $list[] = $r;
+                $sub = $addSix($sub, $r);
+            }
+            $sub = $rowSix($sub);
+            $grand = $addSix($grand, $sub);
+            $groups[] = [
+                'organization_id' => $orgId,
+                'organization_name' => $name,
+                'accounts' => $list,
+                'subtotal' => $sub,
+            ];
+        }
+
+        $currencies = collect($accountRows)->pluck('currency')->unique()->sort()->values()->all();
+
+        return [
+            'groups' => $groups,
+            'grand' => $rowSix($grand),
+            'currency_codes' => $currencies,
+        ];
+    }
+
+    /**
+     * Чистый остаток на счёте: положительный — в дебет, отрицательный (перерасход) — в кредит.
+     *
+     * @return array{debit: float, credit: float}
+     */
+    private function osvBalanceToDebitCredit(float $balance): array
+    {
+        if ($balance >= 0) {
+            return ['debit' => $balance, 'credit' => 0.0];
+        }
+
+        return ['debit' => 0.0, 'credit' => -$balance];
     }
 }

@@ -9,6 +9,8 @@ class CashMovement extends Model
 {
     public const KIND_INCOME_CLIENT = 'income_client';
 
+    public const KIND_INCOME_OTHER = 'income_other';
+
     public const KIND_EXPENSE_SUPPLIER = 'expense_supplier';
 
     public const KIND_EXPENSE_OTHER = 'expense_other';

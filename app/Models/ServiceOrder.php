@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -108,6 +109,14 @@ class ServiceOrder extends Model
     public function leadMasterEmployee(): BelongsTo
     {
         return $this->belongsTo(Employee::class, 'lead_master_employee_id');
+    }
+
+    /** Очередь «Мастер: Оформление заявок» (вкладка по умолчанию). */
+    public function scopeAwaitingFulfillmentQueue(Builder $query): Builder
+    {
+        return $query->where('status', self::STATUS_AWAITING_FULFILLMENT)
+            ->whereNull('retail_sale_id')
+            ->whereNull('legal_entity_sale_id');
     }
 
     public function resolveRouteBinding($value, $field = null)

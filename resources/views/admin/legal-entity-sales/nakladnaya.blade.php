@@ -180,7 +180,7 @@
         </div>
         <div class="meta-row">
             <span class="lbl">ЭСФ:</span>
-            <span class="val">{{ $legalEntitySale->issue_esf ? 'требуется оформить' : 'не отмечено' }}</span>
+            <span class="val">{{ $legalEntitySale->esfStatusLineForPrint() }}</span>
         </div>
     </div>
 

@@ -136,7 +136,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('p/trade.esf/{legalEntitySale}/queue', [EsfController::class, 'queueForEsf'])->name('esf.queue');
         Route::post('p/trade.esf/{legalEntitySale}/queue/clear', [EsfController::class, 'unqueueFromEsf'])->name('esf.unqueue');
         Route::get('p/trade.esf/{legalEntitySale}/xml', [EsfController::class, 'downloadXml'])->name('esf.xml');
+        Route::post('p/trade.esf/xml-merge', [EsfController::class, 'downloadXmlMerge'])->name('esf.xml-merge');
+        Route::post('p/trade.esf/lines-excel', [EsfController::class, 'downloadEsfLinesExcel'])->name('esf.lines-excel');
         Route::post('p/trade.esf/{legalEntitySale}/submitted', [EsfController::class, 'markSubmitted'])->name('esf.submitted');
+        Route::post('p/trade.esf/submitted-bulk', [EsfController::class, 'markSubmittedBulk'])->name('esf.submitted.bulk');
+        Route::post('p/trade.esf/unqueue-bulk', [EsfController::class, 'unqueueFromEsfBulk'])->name('esf.unqueue.bulk');
         Route::post('p/trade.esf/{legalEntitySale}/submitted/clear', [EsfController::class, 'unmarkSubmitted'])->name('esf.submitted.clear');
         Route::get('p/trade.invoice', [PaymentInvoiceController::class, 'index'])->name('trade-invoices.index');
         Route::get('p/trade.return-client/create', [CustomerReturnController::class, 'create'])->name('customer-returns.create');
@@ -158,6 +162,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('/', [ServiceOrderController::class, 'requestsIndex'])->name('requests');
             Route::get('/{serviceOrder}/print', [ServiceOrderController::class, 'printWorkOrder'])->name('requests.print');
             Route::get('/{serviceOrder}/edit', [ServiceOrderController::class, 'editRequest'])->name('requests.edit');
+            Route::get('/{serviceOrder}/lines', [ServiceOrderController::class, 'sellLines'])->name('requests.lines');
+            Route::post('/{serviceOrder}/lines', [ServiceOrderController::class, 'storeLines'])->name('requests.lines.store');
             Route::put('/{serviceOrder}', [ServiceOrderController::class, 'updateHeader'])->name('requests.update');
             Route::delete('/{serviceOrder}', [ServiceOrderController::class, 'destroy'])->name('requests.destroy');
             Route::get('/{serviceOrder}', [ServiceOrderController::class, 'fulfillForm'])->name('requests.show');
@@ -215,6 +221,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::put('income-client/{cashMovement}', [BankCashController::class, 'updateIncomeClient'])->name('income-client.update')->whereNumber('cashMovement');
             Route::get('income-client', [BankCashController::class, 'incomeClientIndex'])->name('income-client');
             Route::post('income-client', [BankCashController::class, 'storeIncomeClient'])->name('income-client.store');
+            Route::get('income-other/create', [BankCashController::class, 'incomeOtherForm'])->name('income-other.create');
+            Route::get('income-other/{cashMovement}/edit', [BankCashController::class, 'editIncomeOther'])->name('income-other.edit')->whereNumber('cashMovement');
+            Route::put('income-other/{cashMovement}', [BankCashController::class, 'updateIncomeOther'])->name('income-other.update')->whereNumber('cashMovement');
+            Route::get('income-other', [BankCashController::class, 'incomeOtherIndex'])->name('income-other');
+            Route::post('income-other', [BankCashController::class, 'storeIncomeOther'])->name('income-other.store');
             Route::get('expense-supplier/create', [BankCashController::class, 'expenseSupplierForm'])->name('expense-supplier.create');
             Route::get('expense-supplier/{cashMovement}/edit', [BankCashController::class, 'editExpenseSupplier'])->name('expense-supplier.edit')->whereNumber('cashMovement');
             Route::put('expense-supplier/{cashMovement}', [BankCashController::class, 'updateExpenseSupplier'])->name('expense-supplier.update')->whereNumber('cashMovement');

@@ -98,6 +98,13 @@
                                                 href="{{ route('admin.service-sales.requests.edit', $order) }}"
                                                 class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
                                             >Изменить</a>
+                                            @if ($mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines'))
+                                                <a
+                                                    href="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $order) }}"
+                                                    class="inline-flex items-center rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-bold text-teal-900 shadow-sm transition hover:bg-teal-100"
+                                                    title="Добавить, изменить или удалить услуги и товары"
+                                                >Позиции</a>
+                                            @endif
                                             <a
                                                 href="{{ route('admin.service-sales.requests.show', $order) }}"
                                                 class="inline-flex items-center rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:from-emerald-500 hover:to-teal-500"

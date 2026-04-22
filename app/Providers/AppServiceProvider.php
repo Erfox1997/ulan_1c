@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Models\ServiceOrder;
 use App\Models\User;
 use App\Services\BranchAccessService;
 use App\Services\GoodsCharacteristicsService;
@@ -58,10 +59,11 @@ class AppServiceProvider extends ServiceProvider
                 ? app(\App\Services\BranchAccessService::class)->filterMenuForUser($user, $base)
                 : $base;
             $goodsCharacteristicsIncompleteCount = 0;
+            $serviceOrdersAwaitingFulfillmentCount = 0;
             if ($user && $user->branch_id) {
                 $branchId = (int) $user->branch_id;
-                $attrKey = 'goods_characteristics_incomplete_count';
                 $request = request();
+                $attrKey = 'goods_characteristics_incomplete_count';
                 if (! $request->attributes->has($attrKey)) {
                     $request->attributes->set(
                         $attrKey,
@@ -69,10 +71,23 @@ class AppServiceProvider extends ServiceProvider
                     );
                 }
                 $goodsCharacteristicsIncompleteCount = (int) $request->attributes->get($attrKey);
+
+                $attrKeyOrders = 'service_orders_awaiting_fulfillment_queue_count';
+                if (! $request->attributes->has($attrKeyOrders)) {
+                    $request->attributes->set(
+                        $attrKeyOrders,
+                        ServiceOrder::query()
+                            ->where('branch_id', $branchId)
+                            ->awaitingFulfillmentQueue()
+                            ->count()
+                    );
+                }
+                $serviceOrdersAwaitingFulfillmentCount = (int) $request->attributes->get($attrKeyOrders);
             }
             $view->with([
                 'menu' => $menu,
                 'goodsCharacteristicsIncompleteCount' => $goodsCharacteristicsIncompleteCount,
+                'serviceOrdersAwaitingFulfillmentCount' => $serviceOrdersAwaitingFulfillmentCount,
             ]);
         });
     }

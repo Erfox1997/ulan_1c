@@ -88,27 +88,38 @@ class InvoiceNakladnayaFormatter
     }
 
     /**
-     * Заголовок объединённого счёта (несколько реализаций, один покупатель).
-     *
-     * @param  list<int>  $saleIds
+     * Заголовок счёта на оплату по нескольким реализациям (один покупатель): период дат документов.
      */
-    public static function mergedPaymentInvoiceDocumentTitle(CarbonInterface $date, array $saleIds): string
+    public static function mergedPaymentInvoiceDocumentTitle(CarbonInterface $dateFrom, CarbonInterface $dateTo): string
     {
         $months = [
             1 => 'января', 2 => 'февраля', 3 => 'марта', 4 => 'апреля', 5 => 'мая', 6 => 'июня',
             7 => 'июля', 8 => 'августа', 9 => 'сентября', 10 => 'октября', 11 => 'ноября', 12 => 'декабря',
         ];
-        $m = (int) $date->month;
-        $ids = array_values(array_unique(array_map('intval', $saleIds)));
-        sort($ids);
-        $nums = implode(', ', $ids);
+        $df = (int) $dateFrom->day;
+        $mf = (int) $dateFrom->month;
+        $yf = (int) $dateFrom->year;
+        $dt = (int) $dateTo->day;
+        $mt = (int) $dateTo->month;
+        $yt = (int) $dateTo->year;
+
+        if ($df === $dt && $mf === $mt && $yf === $yt) {
+            return sprintf(
+                'Счёт на оплату от %d %s %d г.',
+                $df,
+                $months[$mf] ?? '',
+                $yf
+            );
+        }
 
         return sprintf(
-            'Объединённый счёт на оплату от %d %s %d г. (реализации № %s)',
-            $date->day,
-            $months[$m] ?? '',
-            $date->year,
-            $nums
+            'Счёт на оплату за период с %d %s %d г. по %d %s %d г.',
+            $df,
+            $months[$mf] ?? '',
+            $yf,
+            $dt,
+            $months[$mt] ?? '',
+            $yt
         );
     }
 

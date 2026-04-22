@@ -159,7 +159,7 @@ class PaymentInvoiceController extends Controller
             $data = array_merge($this->mergedInvoiceViewData($request, $orgId), ['forPdf' => true]);
             $ids = $data['saleIds'];
             sort($ids);
-            $filename = 'schet-obedinennyj-'.$ids[0].'-'.$ids[count($ids) - 1];
+            $filename = 'schet-oplaty-'.$ids[0].'-'.$ids[count($ids) - 1];
             if (($data['invoiceFormat'] ?? 'summary') === 'detail') {
                 $filename .= '-podrobno';
             }
@@ -343,28 +343,44 @@ class PaymentInvoiceController extends Controller
                 ?? $organization->bankAccounts->first();
         }
 
-        /** @var \Carbon\Carbon $latestDate */
-        $latestDate = $sales->max('document_date');
+        /** @var \Carbon\Carbon $periodFrom */
+        $periodFrom = $sales->min('document_date');
+        /** @var \Carbon\Carbon $periodTo */
+        $periodTo = $sales->max('document_date');
         $saleIdsSorted = $ids->sort()->values()->all();
 
-        $documentTitle = InvoiceNakladnayaFormatter::mergedPaymentInvoiceDocumentTitle($latestDate, $saleIdsSorted);
+        $documentTitle = InvoiceNakladnayaFormatter::mergedPaymentInvoiceDocumentTitle($periodFrom, $periodTo);
 
         $saleInvoiceAggregates = [];
         foreach ($salesOrdered as $sale) {
             $saleInvoiceAggregates[$sale->id] = $this->aggregateGoodsAndServicesSums($sale->lines);
         }
 
+        $mergedGoods = '0';
+        $mergedServices = '0';
+        foreach ($saleInvoiceAggregates as $agg) {
+            $mergedGoods = bcadd($mergedGoods, $agg['goods'], 2);
+            $mergedServices = bcadd($mergedServices, $agg['services'], 2);
+        }
+        $useMergedSummaryAggregateRows = bccomp($mergedGoods, '0', 2) === 1
+            || bccomp($mergedServices, '0', 2) === 1;
+
         return [
             'salesOrdered' => $salesOrdered,
             'saleIds' => $saleIdsSorted,
             'buyerName' => $buyerName,
             'documentTitle' => $documentTitle,
+            'periodFrom' => $periodFrom,
+            'periodTo' => $periodTo,
             'branch' => $branch,
             'organization' => $organization,
             'bankAccount' => $bankAccount,
             'printOrganizations' => $printOrganizations,
             'totalSum' => $totalSum,
             'saleInvoiceAggregates' => $saleInvoiceAggregates,
+            'mergedGoods' => $mergedGoods,
+            'mergedServices' => $mergedServices,
+            'useMergedSummaryAggregateRows' => $useMergedSummaryAggregateRows,
             'invoiceFormat' => $invoiceFormat,
         ];
     }

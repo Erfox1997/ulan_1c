@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 class LegalEntitySale extends Model
 {
@@ -15,9 +16,11 @@ class LegalEntitySale extends Model
         'buyer_pin',
         'counterparty_id',
         'document_date',
-        'issue_esf',
+        'esf_queue_goods',
+        'esf_queue_services',
         'payment_invoice_sent',
-        'esf_submitted_at',
+        'esf_submitted_goods_at',
+        'esf_submitted_services_at',
         'esf_exchange_code',
     ];
 
@@ -25,9 +28,11 @@ class LegalEntitySale extends Model
     {
         return [
             'document_date' => 'date',
-            'issue_esf' => 'boolean',
+            'esf_queue_goods' => 'boolean',
+            'esf_queue_services' => 'boolean',
             'payment_invoice_sent' => 'boolean',
-            'esf_submitted_at' => 'datetime',
+            'esf_submitted_goods_at' => 'datetime',
+            'esf_submitted_services_at' => 'datetime',
         ];
     }
 
@@ -80,6 +85,175 @@ class LegalEntitySale extends Model
             'has_services' => $hasServices,
             'mixed' => $hasGoods && $hasServices,
         ];
+    }
+
+    /**
+     * @param  'goods'|'services'  $kind
+     */
+    public function esfSubmittedAtForKind(string $kind): ?Carbon
+    {
+        return $kind === 'goods' ? $this->esf_submitted_goods_at : $this->esf_submitted_services_at;
+    }
+
+    /**
+     * @param  'goods'|'services'  $kind
+     */
+    public function esfQueueSetForKind(string $kind, bool $queued): void
+    {
+        if ($kind === 'goods') {
+            $this->esf_queue_goods = $queued;
+        } else {
+            $this->esf_queue_services = $queued;
+        }
+    }
+
+    /**
+     * @param  'goods'|'services'  $kind
+     */
+    public function esfCanQueueKind(string $kind): bool
+    {
+        $p = $this->esfGoodsServicesLinesProfile();
+
+        return $kind === 'goods' ? $p['has_goods'] : $p['has_services'];
+    }
+
+    /**
+     * @param  'goods'|'services'  $kind
+     */
+    public function esfIsKindQueued(string $kind): bool
+    {
+        return $kind === 'goods' ? (bool) $this->esf_queue_goods : (bool) $this->esf_queue_services;
+    }
+
+    /**
+     * Галочка «Нужна ЭСФ» в форме реализации: поставить в очередь все типы строк, которые есть в документе.
+     */
+    public function esfApplyQueueFromFormCheckbox(): void
+    {
+        $p = $this->esfGoodsServicesLinesProfile();
+        if ($p['has_goods']) {
+            $this->esf_queue_goods = true;
+        }
+        if ($p['has_services']) {
+            $this->esf_queue_services = true;
+        }
+        if (! $p['has_goods'] && ! $p['has_services']) {
+            $this->esf_queue_goods = true;
+        }
+        $this->save();
+    }
+
+    /**
+     * После смены строк документа: убрать очередь по типу, которого больше нет в реализации.
+     */
+    public function esfSyncQueueFlagsToDocumentLines(): self
+    {
+        $p = $this->esfGoodsServicesLinesProfile();
+        if (! $p['has_goods']) {
+            $this->esf_queue_goods = false;
+            $this->esf_submitted_goods_at = null;
+        }
+        if (! $p['has_services']) {
+            $this->esf_queue_services = false;
+            $this->esf_submitted_services_at = null;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Список «Реализации без очереди ЭСФ»: показывать, пока не поставлена в очередь и соответствующий тип в документе.
+     */
+    public function esfStatusLineForPrint(): string
+    {
+        $p = $this->esfGoodsServicesLinesProfile();
+        $bits = [];
+        if ($p['has_goods']) {
+            if ($this->esf_submitted_goods_at) {
+                $bits[] = 'товары: записано в ЭСФ';
+            } elseif ($this->esf_queue_goods) {
+                $bits[] = 'товары: в очереди на ЭСФ';
+            }
+        }
+        if ($p['has_services']) {
+            if ($this->esf_submitted_services_at) {
+                $bits[] = 'услуги: записано в ЭСФ';
+            } elseif ($this->esf_queue_services) {
+                $bits[] = 'услуги: в очереди на ЭСФ';
+            }
+        }
+        if (! $p['has_goods'] && ! $p['has_services'] && ($this->esf_queue_goods || $this->esf_queue_services)) {
+            $bits[] = 'ЭСФ: в очереди';
+        }
+        if ($bits === []) {
+            return 'не отмечено';
+        }
+
+        return implode('; ', $bits);
+    }
+
+    public function esfIsAvailableListCandidate(): bool
+    {
+        $p = $this->esfGoodsServicesLinesProfile();
+        if (! $p['has_goods'] && ! $p['has_services']) {
+            return true;
+        }
+        if ($p['has_goods'] && ! $this->esf_queue_goods && $this->esf_submitted_goods_at === null) {
+            return true;
+        }
+        if ($p['has_services'] && ! $this->esf_queue_services && $this->esf_submitted_services_at === null) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, LegalEntitySale>  $sales
+     * @return \Illuminate\Support\Collection<int, object{sale: LegalEntitySale, esf_lines: 'goods'|'services'}>
+     */
+    public static function collectEsfPendingRows(\Illuminate\Support\Collection $sales): \Illuminate\Support\Collection
+    {
+        $out = collect();
+        foreach ($sales as $sale) {
+            $p = $sale->esfGoodsServicesLinesProfile();
+            if ($sale->esf_queue_goods && $p['has_goods'] && $sale->esf_submitted_goods_at === null) {
+                $out->push((object) ['sale' => $sale, 'esf_lines' => 'goods']);
+            }
+            if ($sale->esf_queue_services && $p['has_services'] && $sale->esf_submitted_services_at === null) {
+                $out->push((object) ['sale' => $sale, 'esf_lines' => 'services']);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, LegalEntitySale>  $sales
+     * @return \Illuminate\Support\Collection<int, object{sale: LegalEntitySale, esf_lines: 'goods'|'services', submitted_at: Carbon}>
+     */
+    public static function collectEsfRecordedRows(\Illuminate\Support\Collection $sales): \Illuminate\Support\Collection
+    {
+        $out = collect();
+        foreach ($sales as $sale) {
+            $p = $sale->esfGoodsServicesLinesProfile();
+            if ($sale->esf_submitted_goods_at && $p['has_goods']) {
+                $out->push((object) [
+                    'sale' => $sale,
+                    'esf_lines' => 'goods',
+                    'submitted_at' => $sale->esf_submitted_goods_at,
+                ]);
+            }
+            if ($sale->esf_submitted_services_at && $p['has_services']) {
+                $out->push((object) [
+                    'sale' => $sale,
+                    'esf_lines' => 'services',
+                    'submitted_at' => $sale->esf_submitted_services_at,
+                ]);
+            }
+        }
+
+        return $out->sortByDesc(fn (object $r) => $r->submitted_at->getTimestamp())->values();
     }
 
     public function resolveRouteBinding($value, $field = null)

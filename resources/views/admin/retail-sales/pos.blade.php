@@ -90,6 +90,7 @@
                                 type="search"
                                 x-model="query"
                                 @input.debounce.300ms="search()"
+                                @search="results = []; searchOpen = true"
                                 @focus="searchOpen = true; if (query.trim().length >= 2) { search() }"
                                 @keydown.escape="searchOpen = false"
                                 autocomplete="off"

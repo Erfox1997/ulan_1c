@@ -57,9 +57,7 @@ class ServiceOrderController extends Controller
 
         $recentPending = ServiceOrder::query()
             ->where('branch_id', $branchId)
-            ->where('status', ServiceOrder::STATUS_AWAITING_FULFILLMENT)
-            ->whereNull('retail_sale_id')
-            ->whereNull('legal_entity_sale_id')
+            ->awaitingFulfillmentQueue()
             ->with(['warehouse'])
             ->orderByDesc('created_at')
             ->orderByDesc('id')
@@ -191,6 +189,8 @@ class ServiceOrderController extends Controller
             ];
         }
 
+        $linesFromRequests = $request->route()->named('admin.service-sales.requests.lines');
+
         return view('admin.service-sales.sell-lines', [
             'serviceOrder' => $serviceOrder,
             'warehouses' => $warehouses,
@@ -202,6 +202,9 @@ class ServiceOrderController extends Controller
                 ->orderBy('full_name')
                 ->get(['id', 'full_name']),
             'initialCart' => $initialCart,
+            'linesIndexRoute' => $linesFromRequests ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines',
+            'linesStoreRoute' => $linesFromRequests ? 'admin.service-sales.requests.lines.store' : 'admin.service-sales.sell.lines.store',
+            'linesFromRequests' => $linesFromRequests,
         ]);
     }
 
@@ -256,6 +259,13 @@ class ServiceOrderController extends Controller
                 ->back()
                 ->withInput()
                 ->withErrors(['lines' => 'Не удалось сохранить позиции.']);
+        }
+
+        $fromRequests = $request->route()->named('admin.service-sales.requests.lines.store');
+        if ($fromRequests) {
+            return redirect()
+                ->route('admin.service-sales.requests', ['status' => 'awaiting'])
+                ->with('status', 'Позиции заявки №'.$serviceOrder->id.' сохранены.');
         }
 
         return redirect()
@@ -385,17 +395,13 @@ class ServiceOrderController extends Controller
             ->with(['lines', 'warehouse', 'user', 'retailSale', 'legalEntitySale']);
 
         if ($status === 'awaiting') {
-            $q->where('status', ServiceOrder::STATUS_AWAITING_FULFILLMENT)
-                ->whereNull('retail_sale_id')
-                ->whereNull('legal_entity_sale_id');
+            $q->awaitingFulfillmentQueue();
         } elseif ($status === 'fulfilled') {
             $q->where('status', ServiceOrder::STATUS_FULFILLED);
         } elseif ($status === 'all') {
             // без фильтра по статусу
         } else {
-            $q->where('status', ServiceOrder::STATUS_AWAITING_FULFILLMENT)
-                ->whereNull('retail_sale_id')
-                ->whereNull('legal_entity_sale_id');
+            $q->awaitingFulfillmentQueue();
         }
 
         $orders = $q->orderByDesc('created_at')
@@ -800,7 +806,8 @@ class ServiceOrderController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
-                    'issue_esf' => false,
+                    'esf_queue_goods' => false,
+                    'esf_queue_services' => false,
                 ]);
 
                 $this->appendLegalLines($sale, $branchId, $warehouseId, $lines);

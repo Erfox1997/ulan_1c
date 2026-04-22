@@ -44,34 +44,41 @@ class CustomerVehicleController extends Controller
                 'integer',
                 Rule::exists('counterparties', 'id')->where(fn ($q) => $q->where('branch_id', (int) $branchId)),
             ],
-            'vehicle_brand' => ['required', 'string', 'max:120'],
-            'vin' => ['required', 'string', 'max:32'],
+            'vehicle_brand' => ['nullable', 'string', 'max:120'],
+            'vin' => ['nullable', 'string', 'max:32'],
             'vehicle_year' => ['nullable', 'integer', 'min:1950', 'max:'.((int) date('Y') + 1)],
             'engine_volume' => ['nullable', 'string', 'max:64'],
             'plate_number' => ['nullable', 'string', 'max:32'],
         ]);
 
-        $vin = trim($validated['vin']);
-        $dup = CustomerVehicle::query()
-            ->where('branch_id', (int) $branchId)
-            ->where('vin', $vin)
-            ->first();
-        if ($dup !== null) {
-            return response()->json([
-                'id' => $dup->id,
-                'vehicle_brand' => $dup->vehicle_brand,
-                'vin' => $dup->vin,
-                'vehicle_year' => $dup->vehicle_year,
-                'engine_volume' => $dup->engine_volume,
-                'plate_number' => $dup->plate_number,
-                'existing' => true,
-            ]);
+        $brandRaw = isset($validated['vehicle_brand']) ? trim((string) $validated['vehicle_brand']) : '';
+        $brand = $brandRaw === '' ? null : $brandRaw;
+
+        $vinRaw = isset($validated['vin']) ? trim((string) $validated['vin']) : '';
+        $vin = $vinRaw === '' ? null : $vinRaw;
+
+        if ($vin !== null) {
+            $dup = CustomerVehicle::query()
+                ->where('branch_id', (int) $branchId)
+                ->where('vin', $vin)
+                ->first();
+            if ($dup !== null) {
+                return response()->json([
+                    'id' => $dup->id,
+                    'vehicle_brand' => $dup->vehicle_brand,
+                    'vin' => $dup->vin,
+                    'vehicle_year' => $dup->vehicle_year,
+                    'engine_volume' => $dup->engine_volume,
+                    'plate_number' => $dup->plate_number,
+                    'existing' => true,
+                ]);
+            }
         }
 
         $vehicle = CustomerVehicle::query()->create([
             'branch_id' => (int) $branchId,
             'counterparty_id' => (int) $validated['counterparty_id'],
-            'vehicle_brand' => trim($validated['vehicle_brand']),
+            'vehicle_brand' => $brand,
             'vin' => $vin,
             'vehicle_year' => $validated['vehicle_year'] ?? null,
             'engine_volume' => isset($validated['engine_volume']) ? trim((string) $validated['engine_volume']) : null,

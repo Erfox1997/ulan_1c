@@ -5,23 +5,25 @@
     $amountWords = InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalSum);
     $saleInvoiceAggregates = $saleInvoiceAggregates ?? [];
     $invoiceFormat = $invoiceFormat ?? 'summary';
+    $mergedGoods = $mergedGoods ?? '0';
+    $mergedServices = $mergedServices ?? '0';
+    $useMergedSummaryAggregateRows = $useMergedSummaryAggregateRows ?? false;
     $linesCount = 0;
-    foreach ($salesOrdered as $s) {
-        if ($invoiceFormat === 'detail') {
-            $linesCount += $s->lines->count();
-            continue;
-        }
-        $agg = $saleInvoiceAggregates[$s->id] ?? ['goods' => '0', 'services' => '0'];
-        $useAgg = $s->lines->isNotEmpty()
-            && (bccomp($agg['goods'], '0', 2) === 1 || bccomp($agg['services'], '0', 2) === 1);
-        if ($useAgg) {
-            if (bccomp($agg['goods'], '0', 2) === 1) {
+    if ($invoiceFormat === 'summary') {
+        if ($useMergedSummaryAggregateRows) {
+            if (bccomp($mergedGoods, '0', 2) === 1) {
                 $linesCount++;
             }
-            if (bccomp($agg['services'], '0', 2) === 1) {
+            if (bccomp($mergedServices, '0', 2) === 1) {
                 $linesCount++;
             }
         } else {
+            foreach ($salesOrdered as $s) {
+                $linesCount += $s->lines->count();
+            }
+        }
+    } else {
+        foreach ($salesOrdered as $s) {
             $linesCount += $s->lines->count();
         }
     }
@@ -190,7 +192,6 @@
         <div class="no-print">
             <button type="button" class="primary" onclick="window.print()">Печать</button>
             <button type="button" onclick="window.close()">Закрыть</button>
-            <span style="margin-left:8px;font-size:10pt;color:#64748b;">Объединённый счёт по нескольким реализациям.</span>
         </div>
         @if (isset($printOrganizations) && $printOrganizations->count() > 1)
             @php
@@ -247,6 +248,18 @@
             <span class="lbl">Покупатель:</span>
             <span class="val">{{ trim((string) $buyerName) !== '' ? $buyerName : '—' }}</span>
         </div>
+        @if (isset($periodFrom, $periodTo) && $periodFrom && $periodTo)
+            <div class="meta-row">
+                <span class="lbl">Период:</span>
+                <span class="val">
+                    @if ($periodFrom->isSameDay($periodTo))
+                        {{ $periodFrom->format('d.m.Y') }}
+                    @else
+                        с {{ $periodFrom->format('d.m.Y') }} по {{ $periodTo->format('d.m.Y') }}
+                    @endif
+                </span>
+            </div>
+        @endif
     </div>
 
     @if ($bankAccount && $bankAccount->isBank())
@@ -272,86 +285,143 @@
         </div>
     @endif
 
-    @foreach ($salesOrdered as $sale)
-        @php
-            $saleLines = $sale->lines->sortBy('id')->values();
-            $saleSum = '0';
-            foreach ($saleLines as $ln) {
-                if ($ln->line_sum !== null) {
-                    $saleSum = bcadd($saleSum, (string) $ln->line_sum, 2);
-                }
-            }
-            $agg = $saleInvoiceAggregates[$sale->id] ?? ['goods' => '0', 'services' => '0'];
-            $useAggregateInvoiceRows = $invoiceFormat !== 'detail'
-                && $saleLines->isNotEmpty()
-                && (bccomp($agg['goods'], '0', 2) === 1 || bccomp($agg['services'], '0', 2) === 1);
-        @endphp
-        <section class="sale-block">
-            <h2 class="sale-heading">Реализация № {{ $sale->id }} от {{ $sale->document_date->format('d.m.Y') }}</h2>
-            <div class="sale-sub">
-                <span class="lbl">Склад:</span>
-                <span>{{ $sale->warehouse->name }}</span>
-            </div>
-            <table class="grid">
-                <thead>
-                    <tr>
-                        <th style="width:2.2rem;" class="c">№</th>
-                        <th>Наименование</th>
-                        <th style="width:8rem;">Количество</th>
-                        <th style="width:5rem;" class="num">Цена</th>
-                        <th style="width:5.5rem;" class="num">Сумма</th>
+    @if ($invoiceFormat === 'summary')
+        <table class="grid">
+            <thead>
+                <tr>
+                    <th style="width:2.2rem;" class="c">№</th>
+                    <th>Наименование</th>
+                    <th style="width:8rem;">Количество</th>
+                    <th style="width:5rem;" class="num">Цена</th>
+                    <th style="width:5.5rem;" class="num">Сумма</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if ($useMergedSummaryAggregateRows)
+                    <tr class="subsection">
+                        <td colspan="5">Техническое обслуживание и ремонт автомобилей</td>
                     </tr>
-                </thead>
-                <tbody>
-                    @if ($useAggregateInvoiceRows)
-                        <tr class="subsection">
-                            <td colspan="5">Техническое обслуживание и ремонт автомобилей</td>
+                    @php $rowNum = 0; @endphp
+                    @if (bccomp($mergedGoods, '0', 2) === 1)
+                        @php $rowNum++; @endphp
+                        <tr>
+                            <td class="c">{{ $rowNum }}</td>
+                            <td>Оплата за запасные части</td>
+                            <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                            <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $mergedGoods) }}</td>
+                            <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $mergedGoods) }}</td>
                         </tr>
-                        @php $rowNum = 0; @endphp
-                        @if (bccomp($agg['goods'], '0', 2) === 1)
+                    @endif
+                    @if (bccomp($mergedServices, '0', 2) === 1)
+                        @php $rowNum++; @endphp
+                        <tr>
+                            <td class="c">{{ $rowNum }}</td>
+                            <td>Оплата за услуги ремонта</td>
+                            <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                            <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $mergedServices) }}</td>
+                            <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $mergedServices) }}</td>
+                        </tr>
+                    @endif
+                @else
+                    @php
+                        $rowNum = 0;
+                    @endphp
+                    @foreach ($salesOrdered as $sale)
+                        @foreach ($sale->lines->sortBy('id') as $line)
                             @php $rowNum++; @endphp
                             <tr>
                                 <td class="c">{{ $rowNum }}</td>
-                                <td>Оплата за запасные части</td>
-                                <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
-                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
-                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
-                            </tr>
-                        @endif
-                        @if (bccomp($agg['services'], '0', 2) === 1)
-                            @php $rowNum++; @endphp
-                            <tr>
-                                <td class="c">{{ $rowNum }}</td>
-                                <td>Оплата за услуги ремонта</td>
-                                <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
-                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
-                                <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
-                            </tr>
-                        @endif
-                    @else
-                        @foreach ($saleLines as $i => $line)
-                            <tr>
-                                <td class="c">{{ $i + 1 }}</td>
                                 <td>{{ $line->name }}</td>
                                 <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
                                 <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
                                 <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
                             </tr>
                         @endforeach
-                    @endif
-                </tbody>
-            </table>
-            <div class="totals-wrap" style="margin-top:6px;">
-                <div class="totals-left"></div>
-                <div class="totals-right">
-                    <div class="row">
-                        <span>Сумма по реализации:</span>
-                        <strong>{{ InvoiceNakladnayaFormatter::formatMoney((float) $saleSum) }}</strong>
+                    @endforeach
+                @endif
+            </tbody>
+        </table>
+    @else
+        @foreach ($salesOrdered as $sale)
+            @php
+                $saleLines = $sale->lines->sortBy('id')->values();
+                $saleSum = '0';
+                foreach ($saleLines as $ln) {
+                    if ($ln->line_sum !== null) {
+                        $saleSum = bcadd($saleSum, (string) $ln->line_sum, 2);
+                    }
+                }
+                $agg = $saleInvoiceAggregates[$sale->id] ?? ['goods' => '0', 'services' => '0'];
+                $useAggregateInvoiceRows = $saleLines->isNotEmpty()
+                    && (bccomp($agg['goods'], '0', 2) === 1 || bccomp($agg['services'], '0', 2) === 1);
+            @endphp
+            <section class="sale-block">
+                <h2 class="sale-heading">Реализация № {{ $sale->id }} от {{ $sale->document_date->format('d.m.Y') }}</h2>
+                <div class="sale-sub">
+                    <span class="lbl">Склад:</span>
+                    <span>{{ $sale->warehouse->name }}</span>
+                </div>
+                <table class="grid">
+                    <thead>
+                        <tr>
+                            <th style="width:2.2rem;" class="c">№</th>
+                            <th>Наименование</th>
+                            <th style="width:8rem;">Количество</th>
+                            <th style="width:5rem;" class="num">Цена</th>
+                            <th style="width:5.5rem;" class="num">Сумма</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if ($useAggregateInvoiceRows)
+                            <tr class="subsection">
+                                <td colspan="5">Техническое обслуживание и ремонт автомобилей</td>
+                            </tr>
+                            @php $rowNum = 0; @endphp
+                            @if (bccomp($agg['goods'], '0', 2) === 1)
+                                @php $rowNum++; @endphp
+                                <tr>
+                                    <td class="c">{{ $rowNum }}</td>
+                                    <td>Оплата за запасные части</td>
+                                    <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                                    <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
+                                    <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['goods']) }}</td>
+                                </tr>
+                            @endif
+                            @if (bccomp($agg['services'], '0', 2) === 1)
+                                @php $rowNum++; @endphp
+                                <tr>
+                                    <td class="c">{{ $rowNum }}</td>
+                                    <td>Оплата за услуги ремонта</td>
+                                    <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit('1', 'шт.') }}</td>
+                                    <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
+                                    <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney((float) $agg['services']) }}</td>
+                                </tr>
+                            @endif
+                        @else
+                            @foreach ($saleLines as $i => $line)
+                                <tr>
+                                    <td class="c">{{ $i + 1 }}</td>
+                                    <td>{{ $line->name }}</td>
+                                    <td>{{ InvoiceNakladnayaFormatter::formatQuantityWithUnit($line->quantity, $line->unit) }}</td>
+                                    <td class="num">{{ $line->unit_price !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->unit_price) : '—' }}</td>
+                                    <td class="num">{{ $line->line_sum !== null ? InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum) : '—' }}</td>
+                                </tr>
+                            @endforeach
+                        @endif
+                    </tbody>
+                </table>
+                <div class="totals-wrap" style="margin-top:6px;">
+                    <div class="totals-left"></div>
+                    <div class="totals-right">
+                        <div class="row">
+                            <span>Сумма по реализации:</span>
+                            <strong>{{ InvoiceNakladnayaFormatter::formatMoney((float) $saleSum) }}</strong>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </section>
-    @endforeach
+            </section>
+        @endforeach
+    @endif
 
     <div class="totals-wrap">
         <div class="totals-left"></div>

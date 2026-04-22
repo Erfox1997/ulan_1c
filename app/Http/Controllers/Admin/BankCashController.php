@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreBankCashExpenseOtherRequest;
 use App\Http\Requests\StoreBankCashExpenseSupplierRequest;
 use App\Http\Requests\StoreBankCashIncomeClientRequest;
+use App\Http\Requests\StoreBankCashIncomeOtherRequest;
 use App\Http\Requests\StoreBankCashTransferRequest;
 use App\Models\CashMovement;
 use App\Models\Counterparty;
@@ -133,6 +134,110 @@ class BankCashController extends Controller
 
         return redirect()
             ->route('admin.bank.income-client')
+            ->with('status', 'Операция №'.$movement->id.' обновлена.');
+    }
+
+    public function incomeOtherIndex(): View|RedirectResponse
+    {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->with(['ourAccount.organization', 'user'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->limit(500)
+            ->get();
+
+        return view('admin.bank.income-other.index', [
+            'movements' => $movements,
+        ]);
+    }
+
+    public function incomeOtherForm(CashLedgerService $ledger): View|RedirectResponse
+    {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        return view('admin.bank.income-other.create', [
+            'movement' => null,
+            'accounts' => $ledger->accountsForBranch($branchId),
+        ]);
+    }
+
+    public function editIncomeOther(CashLedgerService $ledger, int $cashMovement): View|RedirectResponse
+    {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        $movement = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->findOrFail($cashMovement);
+
+        return view('admin.bank.income-other.create', [
+            'movement' => $movement,
+            'accounts' => $ledger->accountsForBranch($branchId),
+        ]);
+    }
+
+    public function storeIncomeOther(StoreBankCashIncomeOtherRequest $request): RedirectResponse
+    {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+        CashMovement::query()->create([
+            'branch_id' => $branchId,
+            'kind' => CashMovement::KIND_INCOME_OTHER,
+            'occurred_on' => $request->validated('occurred_on'),
+            'amount' => $request->validated('amount'),
+            'our_account_id' => $request->validated('our_account_id'),
+            'expense_category' => $request->validated('expense_category'),
+            'comment' => $request->validated('comment'),
+            'user_id' => auth()->id(),
+        ]);
+
+        return redirect()
+            ->route('admin.bank.income-other')
+            ->with('status', 'Прочий приход записан.');
+    }
+
+    public function updateIncomeOther(StoreBankCashIncomeOtherRequest $request, int $cashMovement): RedirectResponse
+    {
+        if ($redirect = $this->redirectIfNoOpenCashShift()) {
+            return $redirect;
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        $movement = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->findOrFail($cashMovement);
+
+        $movement->update([
+            'occurred_on' => $request->validated('occurred_on'),
+            'amount' => $request->validated('amount'),
+            'our_account_id' => $request->validated('our_account_id'),
+            'expense_category' => $request->validated('expense_category'),
+            'comment' => $request->validated('comment'),
+        ]);
+
+        return redirect()
+            ->route('admin.bank.income-other')
             ->with('status', 'Операция №'.$movement->id.' обновлена.');
     }
 

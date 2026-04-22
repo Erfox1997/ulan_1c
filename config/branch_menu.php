@@ -37,6 +37,7 @@ return [
         'icon' => 'bank',
         'children' => [
             ['label' => 'Приход: оплата от покупателя', 'route' => 'admin.bank.income-client', 'route_is' => 'admin.bank.income-client*'],
+            ['label' => 'Приход: прочие', 'route' => 'admin.bank.income-other', 'route_is' => 'admin.bank.income-other*'],
             ['label' => 'Расход: оплата поставщику', 'route' => 'admin.bank.expense-supplier', 'route_is' => 'admin.bank.expense-supplier*'],
             ['label' => 'Расход: прочие', 'route' => 'admin.bank.expense-other', 'route_is' => 'admin.bank.expense-other*'],
             ['label' => 'Переводы между счетами', 'route' => 'admin.bank.transfers', 'route_is' => 'admin.bank.transfers*'],
@@ -56,8 +57,8 @@ return [
             ['label' => 'Продажа юрлицам', 'route' => 'admin.legal-entity-sales.index', 'route_is' => 'admin.legal-entity-sales.*'],
             ['label' => 'Наименование услуг', 'route' => 'admin.sale-services.index', 'route_is' => 'admin.sale-services.*'],
             // sell* — шапка, позиции, сохранение; requests* — список, правка, проведение (отдельное право в роли)
-            ['label' => 'Отправка заявки', 'route' => 'admin.service-sales.sell', 'route_is' => 'admin.service-sales.sell*'],
-            ['label' => 'Оформление заявок', 'route' => 'admin.service-sales.requests', 'route_is' => 'admin.service-sales.requests*'],
+            ['label' => 'Мастер: Отправка заявки', 'route' => 'admin.service-sales.sell', 'route_is' => 'admin.service-sales.sell*'],
+            ['label' => 'Мастер: Оформление заявок', 'route' => 'admin.service-sales.requests', 'route_is' => 'admin.service-sales.requests*'],
             ['label' => 'Возврат от покупателя', 'route' => 'admin.customer-returns.index', 'route_is' => 'admin.customer-returns.*'],
             ['label' => 'Счёт на оплату', 'route' => 'admin.trade-invoices.index', 'route_is' => 'admin.trade-invoices.*'],
             ['label' => 'ЭСФ', 'route' => 'admin.esf.index', 'route_is' => 'admin.esf.*'],

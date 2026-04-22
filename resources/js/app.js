@@ -2257,18 +2257,14 @@ document.addEventListener('alpine:init', () => {
             },
             async saveVehicle() {
                 this.vehicleError = '';
-                const vehicle_brand = this.vBrand.trim();
-                const vin = this.vVin.trim();
-                if (!vehicle_brand || !vin) {
-                    this.vehicleError = 'Укажите марку и VIN.';
-                    return;
-                }
                 if (!this.counterpartyId) {
                     this.vehicleError = 'Сначала выберите клиента.';
                     return;
                 }
                 this.vehicleSaving = true;
                 try {
+                    const vehicle_brand = this.vBrand.trim();
+                    const vin = this.vVin.trim();
                     const body = {
                         counterparty_id: this.counterpartyId,
                         vehicle_brand,
@@ -2558,6 +2554,11 @@ document.addEventListener('alpine:init', () => {
                     this.results = [];
                 } finally {
                     this.loading = false;
+                    // После клика по «×» у type=search Alpine ставит searchOpen=false (@click.outside).
+                    // Иначе запрос выполняется, но выпадающий список остаётся скрытым, пока не сфокусировать поле снова.
+                    if (this.query.trim().length >= 2) {
+                        this.searchOpen = true;
+                    }
                 }
             },
             addProduct(row) {

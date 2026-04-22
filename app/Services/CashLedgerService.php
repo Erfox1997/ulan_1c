@@ -56,7 +56,7 @@ class CashLedgerService
 
         $inc = (float) (CashMovement::query()
             ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereIn('kind', [CashMovement::KIND_INCOME_CLIENT, CashMovement::KIND_INCOME_OTHER])
             ->where('our_account_id', $accountId)
             ->where('occurred_on', '<', $dateStr)
             ->sum('amount'));
@@ -222,6 +222,18 @@ class CashLedgerService
                 $deltas[$m->our_account_id] = $in;
             }
             $title = 'Приход: оплата от клиента';
+        } elseif ($m->kind === CashMovement::KIND_INCOME_OTHER) {
+            $in = (float) $m->amount;
+            $accountLabel = $m->ourAccount?->movementReportLabel() ?? '—';
+            $cat = trim((string) $m->expense_category);
+            if ($cat !== '') {
+                $detail = $cat.($detail !== '' ? ' · '.$detail : '');
+            }
+            if ($m->our_account_id) {
+                $affected[] = $m->our_account_id;
+                $deltas[$m->our_account_id] = $in;
+            }
+            $title = 'Приход: прочие';
         } elseif ($m->kind === CashMovement::KIND_EXPENSE_SUPPLIER) {
             $out = (float) $m->amount;
             $accountLabel = $m->ourAccount?->movementReportLabel() ?? '—';
@@ -285,7 +297,7 @@ class CashLedgerService
     }
 
     /**
-     * Сводка движения по дням: приход (клиент + розница), расход поставщику, прочие расходы, переводы между счетами.
+     * Сводка движения по дням: приход (клиент, прочий приход, розница), расход поставщику, прочие расходы, переводы между счетами.
      *
      * @return array{rows: Collection<int, array{date: string, date_sort: string, income: float, expense_supplier: float, expense_other: float, transfer: float}>, totals: array{income: float, expense_supplier: float, expense_other: float, transfer: float}}
      */
@@ -319,6 +331,8 @@ class CashLedgerService
             $amt = (float) $m->amount;
 
             if ($m->kind === CashMovement::KIND_INCOME_CLIENT) {
+                $bucket[$d]['income'] += $amt;
+            } elseif ($m->kind === CashMovement::KIND_INCOME_OTHER) {
                 $bucket[$d]['income'] += $amt;
             } elseif ($m->kind === CashMovement::KIND_EXPENSE_SUPPLIER) {
                 $bucket[$d]['expense_supplier'] += $amt;
@@ -454,7 +468,7 @@ class CashLedgerService
             ->get();
 
         foreach ($movements as $m) {
-            if ($m->kind === CashMovement::KIND_INCOME_CLIENT) {
+            if ($m->kind === CashMovement::KIND_INCOME_CLIENT || $m->kind === CashMovement::KIND_INCOME_OTHER) {
                 if ($m->our_account_id) {
                     $add((int) $m->our_account_id, (float) $m->amount);
                 }
@@ -575,7 +589,7 @@ class CashLedgerService
     /**
      * Сводка по видам операций за интервал смены (тот же кассир и created_at, что и в netCashChangeByAccountInShiftWindow).
      *
-     * @return array{retail_checks: int, retail_payments: float, refunds: float, income_client: float, expense_supplier: float, expense_other: float, transfer_volume: float}
+     * @return array{retail_checks: int, retail_payments: float, refunds: float, income_client: float, income_other: float, expense_supplier: float, expense_other: float, transfer_volume: float}
      */
     public function shiftMoneyKindBreakdown(int $branchId, CarbonInterface $from, CarbonInterface $until, int $cashierUserId): array
     {
@@ -603,6 +617,7 @@ class CashLedgerService
             ->sum('retail_sale_refunds.amount'));
 
         $incomeClient = 0.0;
+        $incomeOther = 0.0;
         $expenseSupplier = 0.0;
         $expenseOther = 0.0;
         $transferVolume = 0.0;
@@ -618,6 +633,8 @@ class CashLedgerService
             $amt = (float) $m->amount;
             if ($m->kind === CashMovement::KIND_INCOME_CLIENT) {
                 $incomeClient += $amt;
+            } elseif ($m->kind === CashMovement::KIND_INCOME_OTHER) {
+                $incomeOther += $amt;
             } elseif ($m->kind === CashMovement::KIND_EXPENSE_SUPPLIER) {
                 $expenseSupplier += $amt;
             } elseif ($m->kind === CashMovement::KIND_EXPENSE_OTHER) {
@@ -632,6 +649,7 @@ class CashLedgerService
             'retail_payments' => round($retailPayments, 2),
             'refunds' => round($refunds, 2),
             'income_client' => round($incomeClient, 2),
+            'income_other' => round($incomeOther, 2),
             'expense_supplier' => round($expenseSupplier, 2),
             'expense_other' => round($expenseOther, 2),
             'transfer_volume' => round($transferVolume, 2),

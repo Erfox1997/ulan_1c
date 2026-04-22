@@ -8,6 +8,7 @@ use App\Models\OrganizationBankAccount;
 use Carbon\CarbonImmutable;
 use DOMDocument;
 use DOMElement;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -32,22 +33,97 @@ class EsfXmlGenerator
         string $linesKind = 'all',
         bool $splitReceiptNoteAndCrm = false
     ): string {
-        $cfg = config('esf');
-        $encoding = $cfg['encoding'] ?? 'UTF-8';
-        $tz = (string) ($cfg['timezone'] ?? 'Asia/Bishkek');
-
-        $sale->loadMissing('lines.good');
-
-        $lines = $sale->lines;
-        if ($linesKind === 'goods') {
-            $lines = $lines->filter(fn ($l) => $l->good && ! $l->good->is_service)->values();
-        } elseif ($linesKind === 'services') {
-            $lines = $lines->filter(fn ($l) => $l->good && $l->good->is_service)->values();
+        $dom = $this->createEmptyDocument();
+        $receipts = $dom->getElementsByTagName('receipts')->item(0);
+        if (! $receipts instanceof DOMElement) {
+            throw new \RuntimeException('Неверная структура DOM ЭСФ.');
         }
 
+        $lines = $this->collectLinesForKind($sale, $linesKind);
         if ($lines->isEmpty()) {
             throw new \InvalidArgumentException('Нет строк для выгрузки ЭСФ по выбранному виду (товары или услуги).');
         }
+        if ($linesKind === 'all') {
+            $profile = $sale->esfGoodsServicesLinesProfile();
+            $splitReceiptNoteAndCrm = $profile['mixed'];
+        }
+
+        $ex = ($exchangeCode !== null && trim($exchangeCode) !== '')
+            ? trim($exchangeCode)
+            : (string) Str::uuid();
+
+        $this->appendOneReceipt(
+            $dom,
+            $receipts,
+            $sale,
+            $paymentKind,
+            $paymentAccount,
+            $ex,
+            $lines,
+            $linesKind,
+            $splitReceiptNoteAndCrm
+        );
+
+        return $this->saveDocumentXml($dom);
+    }
+
+    /**
+     * Несколько чеков в одном файле: один &lt;receipts&gt;, несколько &lt;receipt&gt; (та же схема, что и одна реализация).
+     * У каждого чека свой exchangeCode.
+     *
+     * @param  list<LegalEntitySale>  $sales
+     * @param  'goods'|'services'  $linesKind
+     */
+    public function buildMany(
+        array $sales,
+        Organization $seller,
+        string $paymentKind,
+        ?OrganizationBankAccount $paymentAccount,
+        string $linesKind
+    ): string {
+        if (count($sales) < 2) {
+            throw new \InvalidArgumentException('Для объединённого XML нужно не меньше двух документов.');
+        }
+        if (! in_array($linesKind, ['goods', 'services'], true)) {
+            throw new \InvalidArgumentException('Один файл — только товары или только услуги.');
+        }
+
+        $dom = $this->createEmptyDocument();
+        $receipts = $dom->getElementsByTagName('receipts')->item(0);
+        if (! $receipts instanceof DOMElement) {
+            throw new \RuntimeException('Неверная структура DOM ЭСФ.');
+        }
+
+        foreach ($sales as $sale) {
+            $profile = $sale->esfGoodsServicesLinesProfile();
+            $splitReceiptNoteAndCrm = $profile['mixed'];
+            $lines = $this->collectLinesForKind($sale, $linesKind);
+            if ($lines->isEmpty()) {
+                throw new \InvalidArgumentException(
+                    'Документ № '.(int) $sale->id.': нет строк выбранного вида (товары или услуги).'
+                );
+            }
+            $ex = (string) Str::uuid();
+            $this->appendOneReceipt(
+                $dom,
+                $receipts,
+                $sale,
+                $paymentKind,
+                $paymentAccount,
+                $ex,
+                $lines,
+                $linesKind,
+                $splitReceiptNoteAndCrm
+            );
+        }
+
+        return $this->saveDocumentXml($dom);
+    }
+
+    private function createEmptyDocument(): DOMDocument
+    {
+        $cfg = config('esf');
+        $encoding = $cfg['encoding'] ?? 'UTF-8';
 
         $dom = new DOMDocument('1.0', $encoding);
         if (property_exists($dom, 'xmlStandalone')) {
@@ -59,6 +135,52 @@ class EsfXmlGenerator
         $receipts = $dom->createElement('receipts');
         $dom->appendChild($receipts);
 
+        return $dom;
+    }
+
+    private function saveDocumentXml(DOMDocument $dom): string
+    {
+        $xml = $dom->saveXML();
+        if ($xml === false) {
+            throw new \RuntimeException('Не удалось сформировать XML ЭСФ.');
+        }
+
+        return $xml;
+    }
+
+    private function collectLinesForKind(LegalEntitySale $sale, string $linesKind): Collection
+    {
+        $sale->loadMissing('lines.good');
+        $lines = $sale->lines;
+        if ($linesKind === 'goods') {
+            return $lines->filter(fn ($l) => $l->good && ! $l->good->is_service)->values();
+        }
+        if ($linesKind === 'services') {
+            return $lines->filter(fn ($l) => $l->good && $l->good->is_service)->values();
+        }
+
+        return $lines->values();
+    }
+
+    /**
+     * @param  Collection<int, \App\Models\LegalEntitySaleLine>  $lines
+     * @param  'all'|'goods'|'services'  $linesKind
+     * @param  bool  $splitReceiptNoteAndCrm
+     */
+    private function appendOneReceipt(
+        DOMDocument $dom,
+        DOMElement $receipts,
+        LegalEntitySale $sale,
+        string $paymentKind,
+        ?OrganizationBankAccount $paymentAccount,
+        string $exchangeCode,
+        Collection $lines,
+        string $linesKind,
+        bool $splitReceiptNoteAndCrm
+    ): void {
+        $cfg = config('esf');
+        $tz = (string) ($cfg['timezone'] ?? 'Asia/Bishkek');
+
         $receipt = $dom->createElement('receipt');
         $receipts->appendChild($receipt);
 
@@ -66,9 +188,6 @@ class EsfXmlGenerator
         $createdDate = $docDay->format('Y-m-d');
         $deliveryDate = $createdDate;
         $deliveryContractDate = $docDay->startOfDay()->format('c');
-        $exchangeCode = ($exchangeCode !== null && trim($exchangeCode) !== '')
-            ? trim($exchangeCode)
-            : (string) Str::uuid();
 
         $paymentTypeCode = (string) (($cfg['payment_type_code'][$paymentKind] ?? $cfg['payment_type_code']['cash']) ?? '10');
         $receiptTypeCode = (string) ($cfg['receipt_type_code'] ?? '10');
@@ -85,7 +204,6 @@ class EsfXmlGenerator
             $contractorBankAccountValue = $sale->resolvedBuyerBankAccountNumberForEsf();
         }
 
-        // Порядок и набор узлов как в test_esf_realization_real.xml (без contractorBranchName / citizenship перед именем).
         $this->appendNil($dom, $receipt, 'amountToBePaid');
         $this->appendNil($dom, $receipt, 'assessedContributionsAmount');
         if ($bankAccountValue !== null) {
@@ -195,13 +313,6 @@ class EsfXmlGenerator
         $this->appendText($dom, $receipt, 'type', $documentTypeCode);
         $this->appendText($dom, $receipt, 'vatCode', (string) ($cfg['vat_code'] ?? '100'));
         $this->appendText($dom, $receipt, 'vatDeliveryTypeCode', (string) ($cfg['vat_delivery_type_code'] ?? '102'));
-
-        $xml = $dom->saveXML();
-        if ($xml === false) {
-            throw new \RuntimeException('Не удалось сформировать XML ЭСФ.');
-        }
-
-        return $xml;
     }
 
     /** Как в test_esf_realization_real.xml: xsi:nil + xmlns:xsi на каждом пустом поле. */

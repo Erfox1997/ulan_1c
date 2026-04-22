@@ -87,6 +87,15 @@
             inset 0 1px 2px rgb(15 23 42 / 0.04);
     }
 
+    .page-income-other.bank-1c-page-modern.bank-1c-scope .bank-1c-header input:focus,
+    .page-income-other.bank-1c-page-modern.bank-1c-scope .bank-1c-header select:focus,
+    .page-income-other.bank-1c-page-modern.bank-1c-scope .bank-1c-header textarea:focus {
+        border-color: rgb(5 150 105);
+        box-shadow:
+            0 0 0 3px rgb(16 185 129 / 0.3),
+            inset 0 1px 2px rgb(15 23 42 / 0.04);
+    }
+
     .page-expense-supplier.bank-1c-page-modern.bank-1c-scope .bank-1c-header input:focus,
     .page-expense-supplier.bank-1c-page-modern.bank-1c-scope .bank-1c-header select:focus,
     .page-expense-supplier.bank-1c-page-modern.bank-1c-scope .bank-1c-header textarea:focus,

@@ -1,8 +1,17 @@
 <x-admin-layout pageTitle="Заявка №{{ $serviceOrder->id }} — позиции" main-class="bg-slate-100/80 px-3 py-4 sm:px-4 lg:px-6">
     <div class="mx-auto max-w-6xl space-y-3">
+        @php
+            $linesIndexRoute = $linesIndexRoute ?? 'admin.service-sales.sell.lines';
+            $linesStoreRoute = $linesStoreRoute ?? 'admin.service-sales.sell.lines.store';
+            $linesFromRequests = $linesFromRequests ?? false;
+        @endphp
         <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
             <div class="flex flex-wrap items-center gap-2">
-                <a href="{{ route('admin.service-sales.sell') }}" class="font-semibold text-emerald-700 hover:underline">← Заявка на продажу</a>
+                @if ($linesFromRequests)
+                    <a href="{{ route('admin.service-sales.requests') }}" class="font-semibold text-emerald-700 hover:underline">← К заявкам</a>
+                @else
+                    <a href="{{ route('admin.service-sales.sell') }}" class="font-semibold text-emerald-700 hover:underline">← Заявка на продажу</a>
+                @endif
                 @if ($mayAccessRoute('admin.service-sales.requests.edit'))
                     <span class="text-slate-300" aria-hidden="true">·</span>
                     <a href="{{ route('admin.service-sales.requests.edit', $serviceOrder) }}" class="font-semibold text-slate-600 hover:text-emerald-700 hover:underline">Шапка заявки</a>
@@ -68,7 +77,7 @@
             <div class="relative z-[100] lg:col-span-5">
                 <div class="rounded-xl border border-slate-200/90 bg-white shadow-md ring-1 ring-slate-900/[0.04]">
                     <div class="space-y-2 p-3">
-                        <form method="GET" action="{{ route('admin.service-sales.sell.lines', $serviceOrder) }}" class="flex items-center gap-2">
+                        <form method="GET" action="{{ route($linesIndexRoute, $serviceOrder) }}" class="flex items-center gap-2">
                             <label for="svc_lines_wh" class="shrink-0 text-[10px] font-bold uppercase tracking-wide text-slate-500">Склад (остатки)</label>
                             <select
                                 id="svc_lines_wh"
@@ -87,6 +96,7 @@
                                 type="search"
                                 x-model="query"
                                 @input.debounce.300ms="search()"
+                                @search="results = []; searchOpen = true"
                                 @focus="searchOpen = true; if (query.trim().length >= 2) { search() }"
                                 @keydown.escape="searchOpen = false"
                                 autocomplete="off"
@@ -144,7 +154,7 @@
             <div class="min-w-0 lg:col-span-7">
                 <form
                     method="POST"
-                    action="{{ route('admin.service-sales.sell.lines.store', $serviceOrder) }}"
+                    action="{{ route($linesStoreRoute, $serviceOrder) }}"
                     class="relative z-10 overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-md ring-1 ring-slate-900/[0.04]"
                     @submit="handleSubmit($event)"
                 >
