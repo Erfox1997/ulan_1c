@@ -51,7 +51,8 @@
                     <thead>
                         <tr class="border-b border-slate-200 bg-slate-50/95 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                             <th class="whitespace-nowrap px-4 py-2.5">№</th>
-                            <th class="whitespace-nowrap px-4 py-2.5">Для кого</th>
+                            <th class="min-w-[7rem] px-4 py-2.5">Клиент</th>
+                            <th class="whitespace-nowrap px-4 py-2.5">Марка авто</th>
                             <th class="whitespace-nowrap px-4 py-2.5">Дата</th>
                             <th class="min-w-[6rem] px-4 py-2.5">Склад</th>
                             <th class="whitespace-nowrap px-4 py-2.5 text-right">Сумма</th>
@@ -63,8 +64,11 @@
                         @forelse ($orders as $order)
                             <tr class="transition-colors hover:bg-emerald-50/40">
                                 <td class="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-slate-600">#{{ $order->id }}</td>
-                                <td class="px-4 py-3">
-                                    <span class="font-medium text-slate-900">{{ $order->recipientKindLabel() }}</span>
+                                <td class="max-w-[12rem] px-4 py-3">
+                                    <span class="font-medium text-slate-900" title="{{ $order->recipientKindLabel() }}">{{ $order->clientDisplayLabel() }}</span>
+                                </td>
+                                <td class="max-w-[9rem] truncate px-4 py-3 text-slate-700" title="{{ $order->customerVehicle?->vehicle_brand ?? '' }}">
+                                    {{ $order->customerVehicle?->vehicle_brand ? $order->customerVehicle->vehicle_brand : '—' }}
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 tabular-nums text-slate-700">{{ $order->document_date?->format('d.m.Y') ?? '—' }}</td>
                                 <td class="max-w-[10rem] truncate px-4 py-3 text-slate-600" title="{{ $order->warehouse?->name ?? '' }}">{{ $order->warehouse?->name ?? '—' }}</td>
@@ -86,51 +90,41 @@
                                     @endif
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-right">
-                                    <div class="flex flex-wrap items-center justify-end gap-2">
-                                        <a
-                                            href="{{ route('admin.service-sales.requests.print', $order) }}"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
-                                        >Печать</a>
+                                    @if ($order->isAwaitingFulfillment())
+                                        <form
+                                            id="service-order-destroy-{{ $order->id }}"
+                                            method="POST"
+                                            action="{{ route('admin.service-sales.requests.destroy', $order) }}"
+                                            class="hidden"
+                                        >
+                                            @csrf
+                                            @method('DELETE')
+                                        </form>
+                                    @endif
+                                    <select
+                                        class="service-order-actions-select ml-auto block w-full max-w-[11rem] cursor-pointer rounded-lg border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-left text-xs font-semibold text-slate-800 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                        data-order-id="{{ $order->id }}"
+                                        aria-label="Действия по заявке №{{ $order->id }}"
+                                    >
+                                        <option value="" selected>Действия…</option>
+                                        <option value="print" data-url="{{ route('admin.service-sales.requests.print', $order) }}">Печать</option>
                                         @if ($order->isAwaitingFulfillment())
-                                            <a
-                                                href="{{ route('admin.service-sales.requests.edit', $order) }}"
-                                                class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-50"
-                                            >Изменить</a>
+                                            <option value="edit" data-url="{{ route('admin.service-sales.requests.edit', $order) }}">Изменить данные</option>
                                             @if ($mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines'))
-                                                <a
-                                                    href="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $order) }}"
-                                                    class="inline-flex items-center rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-bold text-teal-900 shadow-sm transition hover:bg-teal-100"
-                                                    title="Добавить, изменить или удалить услуги и товары"
-                                                >Позиции</a>
+                                                <option
+                                                    value="lines"
+                                                    data-url="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $order) }}"
+                                                >Изменить позиции</option>
                                             @endif
-                                            <a
-                                                href="{{ route('admin.service-sales.requests.show', $order) }}"
-                                                class="inline-flex items-center rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:from-emerald-500 hover:to-teal-500"
-                                            >Подробнее / оформить</a>
-                                            <form
-                                                method="POST"
-                                                action="{{ route('admin.service-sales.requests.destroy', $order) }}"
-                                                class="inline"
-                                                onsubmit="return confirm('Удалить заявку №{{ $order->id }}?');"
-                                            >
-                                                @csrf
-                                                @method('DELETE')
-                                                <button
-                                                    type="submit"
-                                                    class="inline-flex items-center rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
-                                                >
-                                                    Удалить
-                                                </button>
-                                            </form>
+                                            <option value="fulfill" data-url="{{ route('admin.service-sales.requests.show', $order) }}">Оформить</option>
+                                            <option value="delete">Удалить</option>
                                         @endif
-                                    </div>
+                                    </select>
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="7" class="px-4 py-14 text-center">
+                                <td colspan="8" class="px-4 py-14 text-center">
                                     <p class="text-sm font-medium text-slate-600">Нет заявок в этом разделе</p>
                                     <p class="mt-1 text-xs text-slate-400">Смените фильтр выше или создайте заявку на странице продажи услуг</p>
                                 </td>
@@ -141,4 +135,35 @@
             </div>
         </div>
     </div>
+    <script>
+        (function () {
+            document.querySelectorAll('.service-order-actions-select').forEach(function (sel) {
+                sel.addEventListener('change', function () {
+                    var v = sel.value;
+                    var opt = sel.options[sel.selectedIndex];
+                    sel.selectedIndex = 0;
+                    if (!v) {
+                        return;
+                    }
+                    if (v === 'delete') {
+                        var id = sel.getAttribute('data-order-id');
+                        var form = document.getElementById('service-order-destroy-' + id);
+                        if (form && confirm('Удалить заявку №' + id + '?')) {
+                            form.submit();
+                        }
+                        return;
+                    }
+                    var url = opt.getAttribute('data-url');
+                    if (!url) {
+                        return;
+                    }
+                    if (v === 'print') {
+                        window.open(url, '_blank', 'noopener,noreferrer');
+                    } else {
+                        window.location.href = url;
+                    }
+                });
+            });
+        })();
+    </script>
 </x-admin-layout>

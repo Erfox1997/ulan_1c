@@ -215,6 +215,18 @@ class GoodSearchController extends Controller
             ]);
         }
 
+        $normalizedBarcode = preg_replace('/\D+/', '', $term);
+        $exactMatchOrder = [
+            "WHEN LOWER(TRIM(COALESCE(goods.article_code, ''))) = LOWER(?) THEN 0",
+            "WHEN TRIM(COALESCE(goods.barcode, '')) = ? THEN 0",
+        ];
+        $exactMatchBindings = [$term, $term];
+        if ($normalizedBarcode !== '') {
+            $exactMatchOrder[] = "WHEN REPLACE(REPLACE(COALESCE(goods.barcode, ''), ' ', ''), '-', '') = ? THEN 0";
+            $exactMatchBindings[] = $normalizedBarcode;
+        }
+        $query->orderByRaw('CASE '.implode(' ', $exactMatchOrder).' ELSE 1 END', $exactMatchBindings);
+
         $goods = $query
             ->orderBy('goods.name')
             ->limit(25)

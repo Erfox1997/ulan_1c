@@ -39,7 +39,7 @@ class CounterpartySearchController extends Controller
             return response()->json($rows);
         }
 
-        /** @var string $for sale = покупатели у нас; purchase = поставщики нам; пусто = все (редко) */
+        /** @var string $for sale = покупатели у нас; purchase = поставщики нам; other = только «прочее»; пусто = все (редко) */
         $for = (string) $request->query('for', '');
 
         $query = Counterparty::query()
@@ -57,16 +57,26 @@ class CounterpartySearchController extends Controller
             $query->whereIn('kind', [Counterparty::KIND_SUPPLIER, Counterparty::KIND_OTHER]);
             $orderSql = 'CASE WHEN kind = ? THEN 0 WHEN kind = ? THEN 1 ELSE 2 END';
             $orderBindings = [Counterparty::KIND_SUPPLIER, Counterparty::KIND_OTHER];
+        } elseif ($for === 'other') {
+            /** Только «прочие» контрагенты — займы, прочие обязательства и т.п. */
+            $query->where('kind', Counterparty::KIND_OTHER);
         } else {
             $orderSql = 'CASE WHEN kind = ? THEN 0 WHEN kind = ? THEN 1 ELSE 2 END';
             $orderBindings = [Counterparty::KIND_BUYER, Counterparty::KIND_OTHER];
         }
 
-        $rows = $query
-            ->orderByRaw($orderSql, $orderBindings)
-            ->orderBy('name')
-            ->limit(25)
-            ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn', 'phone']);
+        if ($for === 'other') {
+            $rows = $query
+                ->orderBy('name')
+                ->limit(25)
+                ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn', 'phone']);
+        } else {
+            $rows = $query
+                ->orderByRaw($orderSql, $orderBindings)
+                ->orderBy('name')
+                ->limit(25)
+                ->get(['id', 'kind', 'name', 'full_name', 'legal_form', 'inn', 'phone']);
+        }
 
         return response()->json($rows);
     }

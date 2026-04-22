@@ -1,7 +1,9 @@
 @php
     $isEdit = isset($movement) && $movement !== null;
+    $defaultIncomeKind = old('income_kind', $isEdit && $movement->counterparty_id ? 'loan' : 'plain');
 @endphp
-<x-admin-layout pageTitle="{{ $isEdit ? 'Редактирование: прочий приход' : 'Новая операция: прочий приход' }}" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
+<x-admin-layout pageTitle="{{ $isEdit ? 'Редактирование: прочий приход / займ' : 'Новая операция: прочий приход / займ' }}" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
+    @include('admin.partials.cp-brush')
     @include('admin.bank.partials.1c-form-document-styles')
     @include('admin.bank.partials.1c-form-modern-inputs')
 
@@ -29,22 +31,70 @@
             background: linear-gradient(180deg, #fafafe 0%, #f8fafc 100%);
             border-bottom-color: rgb(203 213 225 / 0.6);
         }
-        .page-income-other .bank-1c-foot {
-            background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-            border-top-color: rgb(203 213 225 / 0.65);
-            padding: 12px 16px;
+        /* Выпадающий список контрагента: компактнее и в тон странице */
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd {
+            border-radius: 0.5rem;
+            border: 1px solid rgb(203 213 225);
+            background: #fff;
+            box-shadow:
+                0 4px 6px -1px rgb(0 0 0 / 0.07),
+                0 10px 24px -8px rgb(5 150 105 / 0.18);
+            overflow: hidden;
+            max-height: min(18rem, 70vh);
         }
-        .page-income-other .bank-1c-foot a.bank-foot-link-plain {
-            font-size: 14px;
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .cp-row {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid rgb(241 245 249);
+            font-size: 13px;
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .cp-row:last-of-type {
+            border-bottom: 0;
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .bank-cp-dd-status {
+            margin: 0;
+            padding: 0.5rem 0.75rem;
+            font-size: 12px;
+            line-height: 1.35;
+            color: rgb(100 116 139);
+            background: rgb(248 250 252);
+            border-bottom: 1px solid rgb(241 245 249);
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .bank-cp-dd-empty {
+            padding: 0.75rem;
+            background: rgb(248 250 252);
+            border-top: 1px solid rgb(241 245 249);
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .bank-cp-dd-empty p {
+            margin: 0 0 0.5rem;
+            font-size: 12px;
+            line-height: 1.4;
+            color: rgb(71 85 105);
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .bank-cp-dd-add {
+            display: inline-flex;
+            width: 100%;
+            align-items: center;
+            justify-content: center;
+            padding: 0.4rem 0.65rem;
+            font-size: 12px;
             font-weight: 600;
-            color: #047857;
-            text-decoration: underline;
-            text-decoration-color: rgb(16 185 129 / 0.45);
-            text-underline-offset: 2px;
+            color: rgb(4 120 87);
+            background: #fff;
+            border: 1px solid rgb(167 243 208);
+            border-radius: 0.375rem;
+            cursor: pointer;
+            transition:
+                background 0.15s ease,
+                border-color 0.15s ease;
         }
-        .page-income-other .bank-1c-foot a.bank-foot-link-plain:hover {
-            color: #064e3b;
-            text-decoration-color: #059669;
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .bank-cp-dd-add:hover {
+            background: rgb(236 253 245);
+            border-color: rgb(52 211 153);
+        }
+        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .cp-quick {
+            padding: 0.75rem;
+            background: rgb(255 255 255);
+            border-top: 1px solid rgb(226 232 240);
         }
     </style>
 
@@ -58,6 +108,22 @@
         @include('admin.bank.partials.no-accounts')
 
         @if ($accounts->isNotEmpty())
+            <script>
+                window.__bankCounterpartyFieldInit = @json($cpField);
+                /** Показ блока кредитора без Alpine (надёжнее внутри form + grid). */
+                window.incomeOtherToggleLoanCp = function (form) {
+                    if (!form) {
+                        return;
+                    }
+                    var block = form.querySelector('[data-income-other-loan-cp]');
+                    if (!block) {
+                        return;
+                    }
+                    var loan = form.querySelector('input[name="income_kind"][value="loan"]');
+                    block.style.display = loan && loan.checked ? 'block' : 'none';
+                };
+            </script>
+
             <div
                 class="rounded-[1.75rem] bg-gradient-to-br from-emerald-100/70 via-white to-cyan-50/60 p-[3px] shadow-[0_22px_50px_-18px_rgba(5,150,105,0.35)] ring-1 ring-emerald-200/55"
             >
@@ -65,13 +131,6 @@
                     <div class="mb-5 flex flex-col gap-3 border-b border-slate-200/80 pb-4 sm:flex-row sm:items-center sm:justify-between">
                         <div class="min-w-0">
                             <p class="text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-800/90">Банк и касса</p>
-                            <p class="mt-1 max-w-xl text-sm leading-relaxed text-slate-600">
-                                @if ($isEdit)
-                                    Изменение записи №{{ $movement->id }}: дата, счёт, сумма, категория и комментарий.
-                                @else
-                                    Поступление без привязки к покупателю: укажите счёт, сумму и при необходимости назначение.
-                                @endif
-                            </p>
                         </div>
                         <div
                             class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg shadow-emerald-900/25 ring-2 ring-white/50"
@@ -86,13 +145,15 @@
                     <div class="page-income-other bank-1c-page-modern bank-1c-scope w-full min-w-0">
                         <div class="bank-1c-doc w-full">
                             <div class="bank-1c-titlebar">
-                                <h2>Приход денежных средств — прочие @if ($isEdit)<span class="font-normal text-slate-600">(№{{ $movement->id }})</span>@endif</h2>
+                                <h2>Приход денежных средств — прочие / займ @if ($isEdit)<span class="font-normal text-slate-600">(№{{ $movement->id }})</span>@endif</h2>
                             </div>
 
                             <form
+                                id="income-other-form"
                                 method="POST"
                                 action="{{ $isEdit ? route('admin.bank.income-other.update', $movement->id) : route('admin.bank.income-other.store') }}"
                                 class="contents"
+                                onsubmit="return (function (f) { var k = f.querySelector('input[name=income_kind]:checked'); if (k && k.value === 'loan') { var el = f.querySelector('input[name=counterparty_id]'); var cp = parseInt(String((el && el.value) || '0'), 10); if (!cp) { window.alert('Укажите кредитора: выберите контрагента с типом «прочее» в справочнике.'); return false; } } return true; })(this)"
                             >
                                 @csrf
                                 @if ($isEdit)
@@ -133,10 +194,112 @@
                                             name="amount"
                                             required
                                             inputmode="decimal"
-                                            placeholder="0,00"
                                             value="{{ old('amount', $isEdit ? number_format((float) $movement->amount, 2, ',', ' ') : '') }}"
                                         />
                                         <x-input-error class="mt-1" :messages="$errors->get('amount')" />
+                                    </div>
+                                    <div class="bank-1c-span-full space-y-2">
+                                        <span class="bank-1c-field-label">Тип операции *</span>
+                                        <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-x-6">
+                                            <label class="flex cursor-pointer items-start gap-2 text-sm text-slate-800">
+                                                <input
+                                                    type="radio"
+                                                    name="income_kind"
+                                                    value="plain"
+                                                    class="mt-1"
+                                                    @checked($defaultIncomeKind === 'plain')
+                                                    onchange="window.incomeOtherToggleLoanCp(this.form)"
+                                                />
+                                                <span class="font-semibold">Прочий приход</span>
+                                            </label>
+                                            <label class="flex cursor-pointer items-start gap-2 text-sm text-slate-800">
+                                                <input
+                                                    type="radio"
+                                                    name="income_kind"
+                                                    value="loan"
+                                                    class="mt-1"
+                                                    @checked($defaultIncomeKind === 'loan')
+                                                    onchange="window.incomeOtherToggleLoanCp(this.form)"
+                                                />
+                                                <span class="font-semibold">Получение займа</span>
+                                            </label>
+                                        </div>
+                                        <x-input-error class="mt-1" :messages="$errors->get('income_kind')" />
+                                    </div>
+                                    <div
+                                        class="bank-1c-span-full"
+                                        data-income-other-loan-cp
+                                        style="{{ $defaultIncomeKind === 'loan' ? '' : 'display: none' }}"
+                                    >
+                                            <div
+                                                class="relative bank-1c-cp-wrap"
+                                                x-ref="bankCpRoot"
+                                                x-data="bankCounterpartyField()"
+                                            >
+                                                <span class="bank-1c-field-label">Кредитор (контрагент «прочее») *</span>
+                                                <input
+                                                    type="text"
+                                                    x-ref="bankCpInput"
+                                                    autocomplete="off"
+                                                    :value="query"
+                                                    @focus="onCpFocus($event)"
+                                                    @input="onCpInput($event)"
+                                                    @blur="onCpBlur()"
+                                                />
+                                                <input type="hidden" name="counterparty_id" :value="counterpartyId" />
+                                                <x-input-error class="mt-1" :messages="$errors->get('counterparty_id')" />
+
+                                                <div
+                                                    x-cloak
+                                                    x-show="showCpDropdown()"
+                                                    class="bank-1c-dd fixed z-[220]"
+                                                    role="listbox"
+                                                    @mousedown.prevent
+                                                    :style="'top:' + cpPos.top + 'px;left:' + cpPos.left + 'px;width:' + cpPos.width + 'px'"
+                                                >
+                                                    <div x-show="cpLoading" class="bank-cp-dd-status">Поиск…</div>
+                                                    <template x-for="item in cpItems" :key="item.id">
+                                                        <button
+                                                            type="button"
+                                                            class="cp-row"
+                                                            @mousedown.prevent
+                                                            @click="pickCounterparty(item)"
+                                                        >
+                                                            <span x-text="item.full_name || item.name"></span>
+                                                            <span class="cp-kind" x-text="kindLabel(item.kind)"></span>
+                                                        </button>
+                                                    </template>
+                                                    <div x-show="!cpLoading && cpNoHits && cpItems.length === 0 && !cpQuickOpen" class="bank-cp-dd-empty">
+                                                        <p>Нет совпадений в «прочее».</p>
+                                                        <button type="button" class="bank-cp-dd-add" @mousedown.prevent @click="openCpQuickAdd($event)" x-text="quickBtnAdd"></button>
+                                                    </div>
+                                                    <div x-show="cpQuickOpen" class="cp-quick space-y-2 rounded-b-lg">
+                                                        <p class="m-0 text-xs font-semibold text-slate-800" x-text="quickTitle"></p>
+                                                        <label class="bank-1c-field-label mb-0" for="bank_cp_quick_lf_io">Правовая форма</label>
+                                                        <select id="bank_cp_quick_lf_io" x-model="cpQuickLegalForm" @mousedown.stop>
+                                                            @foreach (\App\Models\Counterparty::legalFormLabels() as $k => $label)
+                                                                <option value="{{ $k }}">{{ $label }}</option>
+                                                            @endforeach
+                                                        </select>
+                                                        <p x-show="cpQuickError" class="m-0 text-[11px] text-red-700" x-text="cpQuickError"></p>
+                                                        <div class="flex flex-wrap gap-2">
+                                                            <button
+                                                                type="button"
+                                                                class="bank-1c-tb-btn"
+                                                                :disabled="cpQuickSaving"
+                                                                @mousedown.prevent
+                                                                @click="submitCpQuickAdd()"
+                                                            >
+                                                                <span x-show="!cpQuickSaving">Создать и подставить</span>
+                                                                <span x-show="cpQuickSaving">Сохранение…</span>
+                                                            </button>
+                                                            <button type="button" class="bank-1c-tb-btn" @mousedown.prevent @click="cpQuickOpen = false; cpQuickError = ''">
+                                                                Отмена
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                     </div>
                                     <div class="bank-1c-span-full">
                                         <span class="bank-1c-field-label">Категория / назначение</span>
@@ -144,7 +307,6 @@
                                             type="text"
                                             name="expense_category"
                                             value="{{ old('expense_category', $isEdit ? (string) ($movement->expense_category ?? '') : '') }}"
-                                            placeholder="Напр.: возврат депозита, субсидия"
                                         />
                                         <x-input-error class="mt-1" :messages="$errors->get('expense_category')" />
                                     </div>
@@ -154,15 +316,19 @@
                                         <x-input-error class="mt-1" :messages="$errors->get('comment')" />
                                     </div>
                                 </div>
-
-                                <div class="bank-1c-foot flex flex-wrap items-center justify-between gap-3">
-                                    <a href="{{ route('admin.organizations.index') }}" class="bank-foot-link-plain">Данные организации — счета</a>
-                                </div>
                             </form>
                         </div>
                     </div>
                 </div>
             </div>
+            <script>
+                document.addEventListener('DOMContentLoaded', function () {
+                    var f = document.getElementById('income-other-form');
+                    if (f && window.incomeOtherToggleLoanCp) {
+                        window.incomeOtherToggleLoanCp(f);
+                    }
+                });
+            </script>
         @endif
     </div>
 </x-admin-layout>

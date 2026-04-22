@@ -1,14 +1,14 @@
 @php
     $fmtMoney = static fn ($v): string => number_format((float) $v, 2, ',', ' ');
 @endphp
-<x-admin-layout pageTitle="Приход: прочие" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
+<x-admin-layout pageTitle="Приход: прочие и займы" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
     <div class="mx-auto w-full max-w-5xl space-y-4">
         @include('admin.partials.status-flash')
 
         <div class="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div class="min-w-0">
                 <p class="text-[11px] font-bold uppercase tracking-[0.14em] text-sky-800/90">Банк и касса</p>
-                <p class="mt-0.5 text-sm text-slate-600">Прочие приходы по филиалу (последние 500 записей).</p>
+                <p class="mt-0.5 text-sm text-slate-600">Прочие приходы и поступления займов от контрагентов «прочее» (последние 500 записей).</p>
             </div>
             <a
                 href="{{ route('admin.bank.income-other.create') }}"
@@ -32,6 +32,8 @@
                             <th class="whitespace-nowrap px-4 py-2.5">Дата</th>
                             <th class="whitespace-nowrap px-4 py-2.5 text-right">Сумма</th>
                             <th class="min-w-[10rem] px-4 py-2.5">Счёт / касса</th>
+                            <th class="whitespace-nowrap px-4 py-2.5">Тип</th>
+                            <th class="min-w-[9rem] px-4 py-2.5">Кредитор</th>
                             <th class="min-w-[10rem] px-4 py-2.5">Категория / назначение</th>
                             <th class="min-w-[8rem] px-4 py-2.5">Комментарий</th>
                             <th class="whitespace-nowrap px-4 py-2.5">Кто внёс</th>
@@ -52,6 +54,26 @@
                                 <td class="max-w-[14rem] px-4 py-3 text-slate-700" title="{{ $m->ourAccount?->summaryLabel() ?? '' }}">
                                     {{ $m->ourAccount?->summaryLabel() ?? '—' }}
                                 </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-800">
+                                    @if ($m->counterparty_id)
+                                        <span class="rounded-md bg-amber-100/90 px-2 py-0.5 text-xs font-semibold text-amber-900">Займ</span>
+                                    @else
+                                        <span class="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">Прочее</span>
+                                    @endif
+                                </td>
+                                <td class="max-w-[12rem] px-4 py-3 text-slate-800" title="{{ $m->counterparty?->full_name ?? $m->counterparty?->name ?? '' }}">
+                                    @if ($m->counterparty)
+                                        @php
+                                            $cpLabel = trim((string) ($m->counterparty->full_name ?? ''));
+                                            if ($cpLabel === '') {
+                                                $cpLabel = \App\Models\Counterparty::buildFullName($m->counterparty->legal_form, (string) $m->counterparty->name);
+                                            }
+                                        @endphp
+                                        <span class="line-clamp-2">{{ $cpLabel !== '' ? \Illuminate\Support\Str::limit($cpLabel, 48) : '—' }}</span>
+                                    @else
+                                        —
+                                    @endif
+                                </td>
                                 <td class="max-w-[14rem] px-4 py-3 text-slate-800" title="{{ $m->expense_category ?? '' }}">
                                     <span class="line-clamp-2">{{ $m->expense_category ? \Illuminate\Support\Str::limit((string) $m->expense_category, 64) : '—' }}</span>
                                 </td>
@@ -62,8 +84,8 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="6" class="px-4 py-12 text-center text-sm text-slate-500">
-                                    Пока нет операций. Нажмите «Создать операцию», чтобы записать прочий приход.
+                                <td colspan="8" class="px-4 py-12 text-center text-sm text-slate-500">
+                                    Пока нет операций. Нажмите «Создать операцию», чтобы записать прочий приход или займ.
                                 </td>
                             </tr>
                         @endforelse

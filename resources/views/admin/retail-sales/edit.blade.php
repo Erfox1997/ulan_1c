@@ -167,7 +167,7 @@
                             >
                                 <div class="min-w-0 flex-1">
                                     <p
-                                        class="text-[15px] font-semibold leading-snug"
+                                        class="text-[13px] font-semibold leading-snug"
                                         :class="cartLineStockDanger(line) ? 'text-red-950' : 'text-slate-900'"
                                         x-text="line.name"
                                     ></p>

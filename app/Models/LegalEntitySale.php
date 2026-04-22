@@ -16,6 +16,7 @@ class LegalEntitySale extends Model
         'buyer_pin',
         'counterparty_id',
         'document_date',
+        'comment',
         'esf_queue_goods',
         'esf_queue_services',
         'payment_invoice_sent',

@@ -32,6 +32,7 @@ class StoreLegalEntitySaleRequest extends FormRequest
                 Rule::exists('counterparties', 'id')->where(fn ($q) => $q->where('branch_id', $this->user()->branch_id)),
             ],
             'document_date' => ['required', 'date'],
+            'comment' => ['nullable', 'string', 'max:5000'],
             'issue_esf' => ['sometimes', 'boolean'],
             'lines' => ['required', 'array'],
             'lines.*.article_code' => ['nullable', 'string', 'max:128'],

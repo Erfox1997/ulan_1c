@@ -377,16 +377,10 @@
                                     @mousedown.prevent="pickGoodFromSuggest(item)"
                                 >
                                     <span class="text-slate-900" x-text="item.name"></span>
-                                    <span class="font-mono text-[11px] text-slate-500" x-text="item.article_code"></span>
                                     <span
-                                        class="text-[10px] text-slate-600"
-                                        x-show="item.stock_quantity != null && item.stock_quantity !== ''"
-                                        x-text="'Остаток на складе: ' + item.stock_quantity"
-                                    ></span>
-                                    <span
-                                        class="text-[10px] text-emerald-800"
-                                        x-show="item.sale_price != null && item.sale_price !== ''"
-                                        x-text="'Цена в карточке: ' + item.sale_price"
+                                        class="text-[10px] leading-tight text-slate-600"
+                                        x-show="goodsSuggestCompactMeta(item) !== ''"
+                                        x-text="goodsSuggestCompactMeta(item)"
                                     ></span>
                                 </button>
                             </template>

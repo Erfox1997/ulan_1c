@@ -63,7 +63,6 @@
             window.__retailPosInit = {
                 goodsSearchUrl: @json($goodsSearchUrl),
                 counterpartySearchUrl: '',
-                masters: @json($masters->map(fn ($e) => ['id' => $e->id, 'full_name' => $e->full_name])->values()),
                 initialCounterparty: null,
                 warehouseId: {{ (int) $selectedWarehouseId }},
                 defaultWarehouseId: {{ $warehouses->isNotEmpty() ? (int) $warehouses->first()->id : 0 }},
@@ -184,7 +183,10 @@
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-slate-100">
-                                    <template x-for="(line, idx) in cart" :key="line.good_id">
+                                    <template
+                                        x-for="(line, idx) in cart"
+                                        :key="(line.line_id != null && line.line_id !== '' ? 'id-' + line.line_id : 'i-' + idx) + '-' + (line.article_code || '')"
+                                    >
                                         <tr class="align-middle text-slate-800" :class="cartLineStockDanger(line) ? 'bg-red-50/80' : ''">
                                             <td class="max-w-0 px-3 py-2">
                                                 <p
@@ -203,9 +205,9 @@
                                                         class="w-full min-w-[6.5rem] max-w-[10rem] rounded-md border border-slate-200 bg-white px-1 py-1 text-[11px] text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
                                                     >
                                                         <option value="">— мастер —</option>
-                                                        <template x-for="m in masters" :key="m.id">
-                                                            <option :value="String(m.id)" x-text="m.full_name"></option>
-                                                        </template>
+                                                        @foreach ($masters as $m)
+                                                            <option value="{{ $m->id }}">{{ $m->full_name }}</option>
+                                                        @endforeach
                                                     </select>
                                                 </template>
                                                 <template x-if="!(line.is_service === true || line.is_service === 1)">

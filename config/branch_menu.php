@@ -37,7 +37,7 @@ return [
         'icon' => 'bank',
         'children' => [
             ['label' => 'Приход: оплата от покупателя', 'route' => 'admin.bank.income-client', 'route_is' => 'admin.bank.income-client*'],
-            ['label' => 'Приход: прочие', 'route' => 'admin.bank.income-other', 'route_is' => 'admin.bank.income-other*'],
+            ['label' => 'Приход: прочие / займы', 'route' => 'admin.bank.income-other', 'route_is' => 'admin.bank.income-other*'],
             ['label' => 'Расход: оплата поставщику', 'route' => 'admin.bank.expense-supplier', 'route_is' => 'admin.bank.expense-supplier*'],
             ['label' => 'Расход: прочие', 'route' => 'admin.bank.expense-other', 'route_is' => 'admin.bank.expense-other*'],
             ['label' => 'Переводы между счетами', 'route' => 'admin.bank.transfers', 'route_is' => 'admin.bank.transfers*'],

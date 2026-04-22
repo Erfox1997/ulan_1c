@@ -178,6 +178,12 @@
             <span class="lbl">Покупатель:</span>
             <span class="val">{{ $legalEntitySale->buyer_name !== '' ? $legalEntitySale->buyer_name : '—' }}</span>
         </div>
+        @if (trim((string) ($legalEntitySale->comment ?? '')) !== '')
+            <div class="meta-row">
+                <span class="lbl">Комментарий:</span>
+                <span class="val" style="white-space: pre-wrap;">{{ $legalEntitySale->comment }}</span>
+            </div>
+        @endif
         <div class="meta-row">
             <span class="lbl">ЭСФ:</span>
             <span class="val">{{ $legalEntitySale->esfStatusLineForPrint() }}</span>

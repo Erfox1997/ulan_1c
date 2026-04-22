@@ -147,4 +147,22 @@ class ServiceOrder extends Model
 
         return (string) ($cp->full_name ?: $cp->name);
     }
+
+    /** Имя клиента / контактное лицо (как на печатной форме заказ-наряда). */
+    public function clientDisplayLabel(): string
+    {
+        if ($this->contact_name !== null && trim((string) $this->contact_name) !== '') {
+            return trim((string) $this->contact_name);
+        }
+
+        $cp = $this->relationLoaded('counterparty') ? $this->counterparty : null;
+        if ($cp === null) {
+            return '—';
+        }
+
+        $name = trim((string) $cp->name);
+        $fullName = trim((string) $cp->full_name);
+
+        return $name !== '' ? $name : ($fullName !== '' ? $fullName : '—');
+    }
 }

@@ -92,8 +92,8 @@
                                 </div>
 
                                 <div class="ob-1c-header">
-                                    <div class="les-top-row flex w-full min-w-0 flex-wrap items-start gap-x-4 gap-y-3">
-                                        <div class="relative min-w-0 flex-1 basis-[min(100%,22rem)]" x-ref="buyerRoot">
+                                    <div class="les-header-primary-row flex w-full min-w-0 flex-wrap items-end gap-x-4 gap-y-3">
+                                        <div class="relative min-w-0 flex-1 basis-[min(100%,14rem)]" x-ref="buyerRoot">
                                             <label for="buyer_name">Покупатель</label>
                                             <input
                                                 id="buyer_name"
@@ -190,19 +190,29 @@
                                                 required
                                             />
                                         </div>
+                                        <div class="les-buyer-pin-field">
+                                            <label for="buyer_pin">ИНН / ПИН покупателя</label>
+                                            <input
+                                                id="buyer_pin"
+                                                type="text"
+                                                name="buyer_pin"
+                                                x-model="buyerPin"
+                                                inputmode="numeric"
+                                                autocomplete="off"
+                                                maxlength="14"
+                                            />
+                                        </div>
                                     </div>
-                                    <div class="les-buyer-pin-full">
-                                        <label for="buyer_pin">ИНН / ПИН покупателя</label>
-                                        <input
-                                            id="buyer_pin"
-                                            type="text"
-                                            name="buyer_pin"
-                                            x-model="buyerPin"
-                                            inputmode="numeric"
-                                            autocomplete="off"
-                                            maxlength="14"
-                                            class="mt-0.5"
-                                        />
+                                    <div class="les-comment-row mt-3">
+                                        <label for="les_document_comment">Комментарий к документу</label>
+                                        <textarea
+                                            id="les_document_comment"
+                                            name="comment"
+                                            rows="1"
+                                            maxlength="5000"
+                                            class="les-doc-comment mt-0.5 block w-full placeholder:text-slate-400"
+                                            placeholder="Необязательно: условия оплаты, адрес доставки и т.п."
+                                        >{{ old('comment', '') }}</textarea>
                                     </div>
                                 </div>
 
@@ -240,6 +250,7 @@
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('document_date')" />
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_name')" />
                                 <x-input-error class="mx-3 mt-2" :messages="$errors->get('buyer_pin')" />
+                                <x-input-error class="mx-3 mt-2" :messages="$errors->get('comment')" />
 
                                 @php
                                     $lineFieldErrors = collect($errors->getMessages())->filter(fn ($_, $k) => str_starts_with((string) $k, 'lines.'));
@@ -256,17 +267,24 @@
 
                                 <div class="overflow-x-auto border-t border-slate-200/90">
                                     <table
-                                        class="ob-1c-table"
+                                        class="ob-1c-table les-sale-lines-table"
                                         @focusin="$event.target.classList.contains('ob-inp') && $event.target.select()"
                                         @mouseup="$event.target.classList.contains('ob-inp') && $event.preventDefault()"
                                     >
+                                        <colgroup>
+                                            <col style="width: 2.25rem" />
+                                            <col />
+                                            <col style="width: 7rem" />
+                                            <col style="width: 4rem" />
+                                            <col style="width: 4.5rem" />
+                                            <col style="width: 6.25rem" />
+                                            <col style="width: 5.25rem" />
+                                        </colgroup>
                                         <thead>
                                             <tr>
                                                 <th class="ob-num">N</th>
                                                 <th>Наименование *</th>
                                                 <th>Штрихкод</th>
-                                                <th>Категория</th>
-                                                <th>Артикул *</th>
                                                 <th>Ед. изм.</th>
                                                 <th>Кол-во *</th>
                                                 <th>Цена продажи *</th>
@@ -281,7 +299,9 @@
                                                     @click="selectedRow = index"
                                                 >
                                                     <td class="ob-num" x-text="index + 1"></td>
-                                                    <td class="min-w-[10rem]">
+                                                    <td class="les-col-name">
+                                                        <input type="hidden" :name="`lines[${index}][article_code]`" x-model="row.article_code" autocomplete="off" />
+                                                        <input type="hidden" :name="`lines[${index}][category]`" x-model="row.category" autocomplete="off" />
                                                         <input
                                                             type="text"
                                                             :name="`lines[${index}][name]`"
@@ -293,7 +313,7 @@
                                                             @blur="onNameBlur()"
                                                         />
                                                     </td>
-                                                    <td class="min-w-[7.5rem]">
+                                                    <td>
                                                         <input
                                                             type="text"
                                                             :name="`lines[${index}][barcode]`"
@@ -306,28 +326,16 @@
                                                             @blur="onBarcodeBlur()"
                                                         />
                                                     </td>
-                                                    <td class="min-w-[6rem]">
-                                                        <input
-                                                            type="text"
-                                                            :name="`lines[${index}][category]`"
-                                                            x-model="row.category"
-                                                            class="ob-inp"
-                                                            autocomplete="off"
-                                                        />
-                                                    </td>
-                                                    <td class="min-w-[6rem]">
-                                                        <input type="text" :name="`lines[${index}][article_code]`" x-model="row.article_code" class="ob-inp font-mono text-[11px]" autocomplete="off" />
-                                                    </td>
-                                                    <td class="min-w-[3.5rem]">
+                                                    <td>
                                                         <input type="text" :name="`lines[${index}][unit]`" x-model="row.unit" class="ob-inp" autocomplete="off" />
                                                     </td>
-                                                    <td class="min-w-[4rem] ob-numr">
+                                                    <td class="ob-numr">
                                                         <input type="text" :name="`lines[${index}][quantity]`" x-model="row.quantity" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                                     </td>
-                                                    <td class="min-w-[4.5rem] ob-numr">
+                                                    <td class="ob-numr">
                                                         <input type="text" :name="`lines[${index}][unit_price]`" x-model="row.unit_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                                     </td>
-                                                    <td class="min-w-[4.5rem] ob-sum ob-numr">
+                                                    <td class="ob-sum ob-numr">
                                                         <input type="text" class="ob-inp" readonly tabindex="-1" :value="lineSum(row)" />
                                                     </td>
                                                 </tr>
@@ -352,21 +360,10 @@
                                             @mousedown.prevent="pickGoodFromSuggest(item)"
                                         >
                                             <span class="text-slate-900" x-text="item.name"></span>
-                                            <span class="font-mono text-[11px] text-slate-500" x-text="item.article_code"></span>
                                             <span
-                                                class="text-[10px] text-slate-600"
-                                                x-show="item.stock_quantity != null && item.stock_quantity !== ''"
-                                                x-text="'Остаток на складе: ' + item.stock_quantity"
-                                            ></span>
-                                            <span
-                                                class="text-[10px] text-emerald-800"
-                                                x-show="item.sale_price != null && item.sale_price !== ''"
-                                                x-text="'Цена в карточке: ' + item.sale_price"
-                                            ></span>
-                                            <span
-                                                class="text-[10px] text-sky-800"
-                                                x-show="item.wholesale_price != null && item.wholesale_price !== ''"
-                                                x-text="'Оптовая: ' + item.wholesale_price"
+                                                class="text-[10px] leading-tight text-slate-600"
+                                                x-show="goodsSuggestCompactMeta(item) !== ''"
+                                                x-text="goodsSuggestCompactMeta(item)"
                                             ></span>
                                         </button>
                                     </template>

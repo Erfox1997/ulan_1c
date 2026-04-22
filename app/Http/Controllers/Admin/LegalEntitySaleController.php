@@ -8,8 +8,10 @@ use App\Models\Good;
 use App\Models\LegalEntitySale;
 use App\Models\LegalEntitySaleLine;
 use App\Models\Organization;
+use App\Models\ServiceOrder;
 use App\Models\Warehouse;
 use App\Services\OpeningBalanceService;
+use App\Support\InvoiceNakladnayaFormatter;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -144,11 +146,13 @@ class LegalEntitySaleController extends Controller
         $counterpartyId = $request->validated('counterparty_id');
         $counterpartyId = $counterpartyId !== null && $counterpartyId !== '' ? (int) $counterpartyId : null;
         $documentDate = (string) $request->validated('document_date');
+        $comment = trim((string) $request->validated('comment', ''));
+        $comment = $comment !== '' ? $comment : null;
         $issueEsf = $request->boolean('issue_esf');
         $lines = $request->input('lines', []);
 
         try {
-            DB::transaction(function () use ($branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $issueEsf, $lines) {
+            DB::transaction(function () use ($branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $comment, $issueEsf, $lines) {
                 $sale = LegalEntitySale::query()->create([
                     'branch_id' => $branchId,
                     'warehouse_id' => $warehouseId,
@@ -156,6 +160,7 @@ class LegalEntitySaleController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
+                    'comment' => $comment,
                 ]);
 
                 $this->appendLines($sale, $branchId, $warehouseId, $lines);
@@ -257,6 +262,86 @@ class LegalEntitySaleController extends Controller
         ));
     }
 
+    /**
+     * Печать в формате заказ-наряда (как у заявок на услуги): материалы и работы отдельно, заголовок «Заказ-наряд №…».
+     */
+    public function printWorkOrder(Request $request, LegalEntitySale $legalEntitySale): View
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $orgId = $this->parseOrganizationQueryId($request);
+
+        $legalEntitySale->load(['lines.good', 'warehouse', 'branch', 'counterparty']);
+
+        $printOrganizations = Organization::query()
+            ->where('branch_id', $branchId)
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
+
+        $organization = null;
+        if ($orgId !== null) {
+            $organization = $printOrganizations->firstWhere('id', $orgId);
+        }
+        if ($organization === null) {
+            $organization = $printOrganizations->first();
+        }
+
+        $serviceOrder = ServiceOrder::query()
+            ->where('branch_id', $branchId)
+            ->where('legal_entity_sale_id', $legalEntitySale->id)
+            ->with(['counterparty', 'customerVehicle', 'leadMasterEmployee'])
+            ->first();
+
+        $materialRows = [];
+        $serviceRows = [];
+        $totalMaterials = '0.00';
+        $totalServices = '0.00';
+
+        foreach ($legalEntitySale->lines as $line) {
+            $sum = $this->legalEntitySaleLineSum($line);
+            $isService = (bool) ($line->good?->is_service);
+            $row = [
+                'name' => (string) $line->name,
+                'quantity' => $line->quantity,
+                'unit' => (string) ($line->unit ?? 'шт.'),
+                'unit_price' => $line->unit_price,
+                'line_sum' => $sum,
+            ];
+            if ($isService) {
+                $serviceRows[] = $row;
+                $totalServices = bcadd($totalServices, $sum, 2);
+            } else {
+                $materialRows[] = $row;
+                $totalMaterials = bcadd($totalMaterials, $sum, 2);
+            }
+        }
+
+        $grandTotal = bcadd($totalMaterials, $totalServices, 2);
+        $docDate = $legalEntitySale->document_date ?? $legalEntitySale->created_at ?? now();
+        $workOrderNumber = $serviceOrder !== null
+            ? (int) $serviceOrder->id
+            : (int) $legalEntitySale->id;
+
+        return view('admin.legal-entity-sales.work-order-print', [
+            'legalEntitySale' => $legalEntitySale,
+            'serviceOrder' => $serviceOrder,
+            'organization' => $organization,
+            'branch' => $legalEntitySale->branch,
+            'printOrganizations' => $printOrganizations,
+            'documentTitle' => InvoiceNakladnayaFormatter::serviceWorkOrderTitle($docDate, $workOrderNumber),
+            'materialRows' => $materialRows,
+            'serviceRows' => $serviceRows,
+            'totalMaterials' => $totalMaterials,
+            'totalServices' => $totalServices,
+            'grandTotal' => $grandTotal,
+            'amountWordsMaterials' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalMaterials),
+            'amountWordsServices' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $totalServices),
+            'amountWordsGrand' => InvoiceNakladnayaFormatter::amountInWordsKgs((float) $grandTotal),
+            'forPdf' => false,
+        ]);
+    }
+
     public function pdf(Request $request, LegalEntitySale $legalEntitySale)
     {
         $orgId = $this->parseOrganizationQueryId($request);
@@ -333,10 +418,12 @@ class LegalEntitySaleController extends Controller
         $counterpartyId = $request->validated('counterparty_id');
         $counterpartyId = $counterpartyId !== null && $counterpartyId !== '' ? (int) $counterpartyId : null;
         $documentDate = (string) $request->validated('document_date');
+        $comment = trim((string) $request->validated('comment', ''));
+        $comment = $comment !== '' ? $comment : null;
         $lines = $request->input('lines', []);
 
         try {
-            DB::transaction(function () use ($legalEntitySale, $branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $lines) {
+            DB::transaction(function () use ($legalEntitySale, $branchId, $warehouseId, $buyerName, $buyerPin, $counterpartyId, $documentDate, $comment, $lines) {
                 $sale = LegalEntitySale::query()
                     ->whereKey($legalEntitySale->id)
                     ->lockForUpdate()
@@ -367,6 +454,7 @@ class LegalEntitySaleController extends Controller
                     'buyer_pin' => $buyerPin,
                     'counterparty_id' => $counterpartyId,
                     'document_date' => $documentDate,
+                    'comment' => $comment,
                     'esf_queue_goods' => $keepEsfQueueGoods,
                     'esf_queue_services' => $keepEsfQueueServices,
                     'esf_exchange_code' => null,
@@ -504,5 +592,20 @@ class LegalEntitySaleController extends Controller
             'quantity' => '',
             'unit_price' => '',
         ];
+    }
+
+    private function legalEntitySaleLineSum(LegalEntitySaleLine $line): string
+    {
+        if ($line->line_sum !== null && trim((string) $line->line_sum) !== '') {
+            return number_format((float) $line->line_sum, 2, '.', '');
+        }
+
+        $q = (float) $line->quantity;
+        $p = (float) $line->unit_price;
+        if (! is_finite($q) || ! is_finite($p)) {
+            return '0.00';
+        }
+
+        return number_format(round($q * $p, 2), 2, '.', '');
     }
 }

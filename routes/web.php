@@ -117,6 +117,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('p/trade.sale-legal/create', [LegalEntitySaleController::class, 'create'])->name('legal-entity-sales.create');
         Route::get('p/trade.sale-legal/{legalEntitySale}/edit', [LegalEntitySaleController::class, 'edit'])->name('legal-entity-sales.edit');
         Route::get('p/trade.sale-legal/{legalEntitySale}/print', [LegalEntitySaleController::class, 'print'])->name('legal-entity-sales.print');
+        Route::get('p/trade.sale-legal/{legalEntitySale}/work-order', [LegalEntitySaleController::class, 'printWorkOrder'])->name('legal-entity-sales.work-order-print');
         Route::get('p/trade.sale-legal/{legalEntitySale}/pdf', [LegalEntitySaleController::class, 'pdf'])->name('legal-entity-sales.pdf');
         Route::put('p/trade.sale-legal/{legalEntitySale}', [LegalEntitySaleController::class, 'update'])->name('legal-entity-sales.update');
         Route::delete('p/trade.sale-legal/{legalEntitySale}', [LegalEntitySaleController::class, 'destroy'])->name('legal-entity-sales.destroy');

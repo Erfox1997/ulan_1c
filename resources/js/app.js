@@ -806,6 +806,26 @@ document.addEventListener('alpine:init', () => {
                 if (!Number.isFinite(q) || !Number.isFinite(p)) return '';
                 return (q * p).toFixed(2);
             },
+            /** Одна строка под наименованием в подсказке поиска товара (юрлицо / возвраты). */
+            goodsSuggestCompactMeta(item) {
+                if (!item) return '';
+                const parts = [];
+                const sq = item.stock_quantity;
+                if (sq != null && String(sq).trim() !== '') {
+                    const n = parseFloat(String(sq).replace(/\s/g, '').replace(',', '.'));
+                    const st = Number.isFinite(n) ? String(n) : String(sq).trim();
+                    parts.push('ост: ' + st);
+                }
+                const sp = item.sale_price;
+                if (sp != null && String(sp).trim() !== '') {
+                    parts.push('цена: ' + String(sp).trim());
+                }
+                const wp = item.wholesale_price;
+                if (wp != null && String(wp).trim() !== '') {
+                    parts.push('опт: ' + String(wp).trim());
+                }
+                return parts.join(', ');
+            },
             refreshSuggestPosition(el) {
                 if (!el || !el.getBoundingClientRect) return;
                 const r = el.getBoundingClientRect();
@@ -1225,6 +1245,15 @@ document.addEventListener('alpine:init', () => {
                 const orgHeader = esc(this.branchName || '—');
                 const wh = esc(this.warehouseName || '');
                 const buyer = esc(this.buyerName || '');
+                const commentEl = document.getElementById('les_document_comment');
+                const commentRaw =
+                    commentEl && commentEl.value ? String(commentEl.value).trim() : '';
+                const commentRow =
+                    commentRaw !== ''
+                        ? `<div class="meta-row"><span class="lbl">Комментарий:</span> <span style="white-space:pre-wrap;">${esc(
+                              commentRaw
+                          )}</span></div>`
+                        : '';
                 const totalStr = fmtMoney(totalSum);
                 const draftTitle = this.isCustomerReturn
                     ? `Накладная на возврат от клиента (черновик) от ${esc(titleDate)}`
@@ -1264,6 +1293,7 @@ document.addEventListener('alpine:init', () => {
                     <div class="meta-row"><span class="lbl">Организация:</span> ${orgHeader}</div>
                     <div class="meta-row"><span class="lbl">Склад:</span> ${wh || '—'}</div>
                     <div class="meta-row"><span class="lbl">${this.isCustomerReturn ? 'Клиент' : 'Покупатель'}:</span> ${buyer || '—'}</div>
+                    ${commentRow}
                 </div>
                 <table class="grid">
                     <thead><tr>
@@ -2384,6 +2414,7 @@ document.addEventListener('alpine:init', () => {
                 }
                 if (initialCartRaw.length > 0) {
                     this.cart = initialCartRaw.map((row) => ({
+                        line_id: row.line_id != null && row.line_id !== '' ? row.line_id : null,
                         good_id: row.good_id,
                         article_code: row.article_code || '',
                         name: row.name || '',
@@ -2546,7 +2577,7 @@ document.addEventListener('alpine:init', () => {
                             String(r.barcode).trim() !== '' &&
                             String(r.barcode).trim() === qb
                         ) {
-                            this.addProduct(r);
+                            this.addProduct(r, { fromBarcode: true });
                             return;
                         }
                     }
@@ -2561,8 +2592,9 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
             },
-            addProduct(row) {
+            addProduct(row, options = {}) {
                 if (!row || row.id == null) return;
+                const fromBarcode = options.fromBarcode === true;
                 const id = row.id;
                 const idx = this.cart.findIndex((c) => c.good_id === id);
                 const isService = this.rowIsRetailService(row);
@@ -2585,6 +2617,7 @@ document.addEventListener('alpine:init', () => {
                     let price = '';
                     if (row.sale_price != null && row.sale_price !== '') price = String(row.sale_price);
                     this.cart.push({
+                        line_id: null,
                         good_id: id,
                         article_code: row.article_code || '',
                         name: row.name || '',
@@ -2596,7 +2629,9 @@ document.addEventListener('alpine:init', () => {
                     });
                 }
                 this.searchOpen = false;
-                this.query = '';
+                if (fromBarcode) {
+                    this.query = '';
+                }
                 this.results = [];
             },
             async searchCp() {
@@ -3171,15 +3206,33 @@ document.addEventListener('alpine:init', () => {
                 : {};
         const searchUrl = typeof cfg.searchUrl === 'string' ? cfg.searchUrl : '';
         const quickUrl = typeof cfg.quickUrl === 'string' ? cfg.quickUrl : '';
-        const quickKind = cfg.quickKind === 'buyer' ? 'buyer' : 'supplier';
+        const quickKind =
+            cfg.quickKind === 'buyer' ? 'buyer' : cfg.quickKind === 'other' ? 'other' : 'supplier';
         const allowKinds =
             quickKind === 'buyer'
                 ? new Set(['buyer', 'other'])
-                : new Set(['supplier', 'other']);
+                : quickKind === 'other'
+                  ? new Set(['other'])
+                  : new Set(['supplier', 'other']);
         const initialId = parseInt(String(cfg.initialId ?? '0'), 10) || 0;
         const initialLabel = typeof cfg.initialLabel === 'string' ? cfg.initialLabel : '';
-        const quickTitle = quickKind === 'buyer' ? 'Новый клиент' : 'Новый поставщик';
-        const quickBtnAdd = quickKind === 'buyer' ? 'Добавить клиента…' : 'Добавить поставщика…';
+        const quickTitle =
+            typeof cfg.quickTitle === 'string' && cfg.quickTitle.trim() !== ''
+                ? cfg.quickTitle.trim()
+                : quickKind === 'buyer'
+                  ? 'Новый клиент'
+                  : quickKind === 'other'
+                    ? 'Новый контрагент (прочее)'
+                    : 'Новый поставщик';
+        const quickBtnAdd =
+            typeof cfg.quickBtnAdd === 'string' && cfg.quickBtnAdd.trim() !== ''
+                ? cfg.quickBtnAdd.trim()
+                : quickKind === 'buyer'
+                  ? 'Добавить клиента…'
+                  : quickKind === 'other'
+                    ? 'Добавить (прочее)…'
+                    : 'Добавить поставщика…';
+        const requireSelection = cfg.requireSelection !== false;
 
         return {
             counterpartyId: initialId,
@@ -3398,6 +3451,9 @@ document.addEventListener('alpine:init', () => {
                 }
             },
             validateBeforeSubmit(e) {
+                if (!requireSelection) {
+                    return;
+                }
                 if (!this.counterpartyId || this.counterpartyId <= 0) {
                     e.preventDefault();
                     window.alert(

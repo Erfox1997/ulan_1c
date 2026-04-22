@@ -1,5 +1,5 @@
-<x-admin-layout pageTitle="Продажа физлицам (розница)" main-class="bg-slate-100/80 px-3 py-5 sm:px-4 lg:px-6">
-    <div class="mx-auto max-w-6xl space-y-5">
+<x-admin-layout pageTitle="Продажа физлицам (розница)" main-class="min-w-0 w-full bg-slate-100/80 px-3 py-5 sm:px-4 lg:px-6 xl:px-8 2xl:px-10">
+    <div class="w-full min-w-0 max-w-full space-y-5">
         @if (session('status'))
             <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-sm">
                 {{ session('status') }}
@@ -76,15 +76,19 @@
                     checkoutDraftUrl: @json($checkoutDraftUrl ?? ''),
                 };
             </script>
-            <div class="grid gap-5 lg:grid-cols-12 lg:items-start" x-data="retailPosForm()">
+            {{--
+                Две колонки через sm:grid-cols-2 (а не lg:col-span в 12-кол. сетке):
+                иначе ниже breakpoint колонки могут сжиматься странно в flex-контексте админки.
+            --}}
+            <div class="grid w-full min-w-0 max-w-full grid-cols-1 gap-5 sm:grid-cols-2 sm:items-start sm:gap-6" x-data="retailPosForm()">
                 {{-- Поиск --}}
                 {{-- overflow-visible: иначе absolute-выпадающий список обрезается overflow-hidden карточки --}}
-                <div class="relative z-20 lg:col-span-5">
-                    <div class="rounded-2xl border border-emerald-900/10 bg-white shadow-lg shadow-emerald-900/10 ring-1 ring-emerald-900/[0.06]">
+                <div class="relative z-20 min-w-0">
+                    <div class="min-w-0 rounded-2xl border border-emerald-900/10 bg-white shadow-lg shadow-emerald-900/10 ring-1 ring-emerald-900/[0.06]">
                         <div class="rounded-t-2xl border-b border-white/10 px-4 py-3 text-white shadow-md" style="background: linear-gradient(120deg, #059669 0%, #0d9488 50%, #0f766e 100%);">
                             <label for="pos_search" class="text-sm font-bold tracking-tight">Товар или услуга</label>
                         </div>
-                        <div class="relative p-4">
+                        <div class="relative min-w-0 p-4">
                             <input
                                 id="pos_search"
                                 type="search"
@@ -95,7 +99,7 @@
                                 @keydown.escape="searchOpen = false"
                                 autocomplete="off"
                                 placeholder="Название, артикул или штрихкод…"
-                                class="w-full rounded-xl border border-slate-200 bg-slate-50/80 py-3 pl-4 pr-10 text-base text-slate-900 placeholder:text-slate-400 shadow-inner focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+                                class="box-border w-full min-w-0 max-w-full rounded-xl border border-slate-200 bg-slate-50/80 py-3.5 pl-4 pr-10 text-base text-slate-900 placeholder:text-slate-400 shadow-inner focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/25 min-h-[3.25rem]"
                             />
                             <span class="pointer-events-none absolute right-7 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
 
@@ -103,23 +107,23 @@
                                 x-cloak
                                 x-show="searchOpen && (loading || results.length || (query.trim().length >= 2 && !loading))"
                                 @click.outside="searchOpen = false"
-                                class="absolute left-4 right-4 top-full z-50 mt-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
+                                class="absolute left-4 right-4 top-full z-50 mt-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white py-0.5 text-[13px] leading-snug shadow-xl"
                             >
-                                <div x-show="loading" class="px-4 py-3 text-sm text-slate-500">Поиск…</div>
-                                <div x-show="!loading && query.trim().length >= 2 && results.length === 0" class="px-4 py-3 text-sm text-slate-500">
+                                <div x-show="loading" class="px-3 py-2 text-xs text-slate-500">Поиск…</div>
+                                <div x-show="!loading && query.trim().length >= 2 && results.length === 0" class="px-3 py-2 text-xs text-slate-500">
                                     Ничего не найдено
                                 </div>
                                 <template x-for="row in results" :key="row.id">
                                     <button
                                         type="button"
-                                        class="flex w-full flex-col items-start gap-0.5 border-b px-4 py-2.5 text-left transition"
+                                        class="flex w-full flex-col items-start gap-0 border-b px-3 py-2 text-left transition"
                                         :class="goodsRowOutOfStock(row) ? 'border-red-100 bg-red-50 hover:bg-red-100/90' : 'border-slate-50 hover:bg-emerald-50/80'"
                                         @click="addProduct(row)"
                                     >
-                                        <span class="font-medium" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>
-                                        <span class="text-xs font-medium text-teal-700" x-show="row.is_service === true || row.is_service === 1">Услуга</span>
+                                        <span class="font-medium leading-snug" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>
+                                        <span class="text-[11px] font-medium text-teal-700" x-show="row.is_service === true || row.is_service === 1">Услуга</span>
                                         <span
-                                            class="text-xs"
+                                            class="text-[11px] leading-tight"
                                             x-show="warehouseId > 0 && !(row.is_service === true || row.is_service === 1)"
                                             :class="goodsRowOutOfStock(row) ? 'font-medium text-red-700' : 'text-slate-600'"
                                         >
@@ -132,7 +136,7 @@
                                             </span>
                                         </span>
                                         <span
-                                            class="text-xs text-emerald-700"
+                                            class="text-[11px] leading-tight text-emerald-700"
                                             x-show="(row.is_service === true || row.is_service === 1) && (row.stock_quantity == null || row.stock_quantity === '') && row.sale_price != null && row.sale_price !== ''"
                                         >
                                             <span x-text="row.sale_price"></span> сом
@@ -145,11 +149,11 @@
                 </div>
 
                 {{-- Чек --}}
-                <div class="lg:col-span-7">
+                <div class="min-w-0">
                     <form
                         method="POST"
                         action="{{ route('admin.retail-sales.checkout-draft') }}"
-                        class="overflow-hidden rounded-2xl border border-emerald-900/10 bg-white shadow-xl shadow-emerald-900/15 ring-1 ring-emerald-900/[0.05]"
+                        class="min-w-0 overflow-hidden rounded-2xl border border-emerald-900/10 bg-white shadow-xl shadow-emerald-900/15 ring-1 ring-emerald-900/[0.05]"
                         @submit="handleCheckoutDraft($event)"
                     >
                         @csrf
@@ -174,7 +178,7 @@
                                 >
                                     <div class="min-w-0 flex-1">
                                         <p
-                                            class="text-[15px] font-semibold leading-snug"
+                                            class="text-[13px] font-semibold leading-snug"
                                             :class="cartLineStockDanger(line) ? 'text-red-950' : 'text-slate-900'"
                                             x-text="line.name"
                                         ></p>

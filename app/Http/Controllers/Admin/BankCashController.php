@@ -148,7 +148,7 @@ class BankCashController extends Controller
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_INCOME_OTHER)
-            ->with(['ourAccount.organization', 'user'])
+            ->with(['ourAccount.organization', 'counterparty', 'user'])
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)
@@ -170,6 +170,19 @@ class BankCashController extends Controller
         return view('admin.bank.income-other.create', [
             'movement' => null,
             'accounts' => $ledger->accountsForBranch($branchId),
+            'cpField' => array_merge(
+                $this->counterpartyAutocompleteConfig(
+                    $branchId,
+                    'other',
+                    route('admin.counterparties.search', ['for' => 'other']),
+                    null
+                ),
+                [
+                    'requireSelection' => false,
+                    'quickTitle' => 'Контрагент «прочее»',
+                    'quickBtnAdd' => '+ Создать',
+                ]
+            ),
         ]);
     }
 
@@ -189,6 +202,19 @@ class BankCashController extends Controller
         return view('admin.bank.income-other.create', [
             'movement' => $movement,
             'accounts' => $ledger->accountsForBranch($branchId),
+            'cpField' => array_merge(
+                $this->counterpartyAutocompleteConfig(
+                    $branchId,
+                    'other',
+                    route('admin.counterparties.search', ['for' => 'other']),
+                    $movement->counterparty_id !== null ? (int) $movement->counterparty_id : null
+                ),
+                [
+                    'requireSelection' => false,
+                    'quickTitle' => 'Контрагент «прочее»',
+                    'quickBtnAdd' => '+ Создать',
+                ]
+            ),
         ]);
     }
 
@@ -199,12 +225,14 @@ class BankCashController extends Controller
         }
 
         $branchId = (int) auth()->user()->branch_id;
+        $isLoan = $request->validated('income_kind') === 'loan';
         CashMovement::query()->create([
             'branch_id' => $branchId,
             'kind' => CashMovement::KIND_INCOME_OTHER,
             'occurred_on' => $request->validated('occurred_on'),
             'amount' => $request->validated('amount'),
             'our_account_id' => $request->validated('our_account_id'),
+            'counterparty_id' => $isLoan ? $request->validated('counterparty_id') : null,
             'expense_category' => $request->validated('expense_category'),
             'comment' => $request->validated('comment'),
             'user_id' => auth()->id(),
@@ -212,7 +240,7 @@ class BankCashController extends Controller
 
         return redirect()
             ->route('admin.bank.income-other')
-            ->with('status', 'Прочий приход записан.');
+            ->with('status', $isLoan ? 'Поступление займа записано.' : 'Прочий приход записан.');
     }
 
     public function updateIncomeOther(StoreBankCashIncomeOtherRequest $request, int $cashMovement): RedirectResponse
@@ -228,10 +256,12 @@ class BankCashController extends Controller
             ->where('kind', CashMovement::KIND_INCOME_OTHER)
             ->findOrFail($cashMovement);
 
+        $isLoan = $request->validated('income_kind') === 'loan';
         $movement->update([
             'occurred_on' => $request->validated('occurred_on'),
             'amount' => $request->validated('amount'),
             'our_account_id' => $request->validated('our_account_id'),
+            'counterparty_id' => $isLoan ? $request->validated('counterparty_id') : null,
             'expense_category' => $request->validated('expense_category'),
             'comment' => $request->validated('comment'),
         ]);

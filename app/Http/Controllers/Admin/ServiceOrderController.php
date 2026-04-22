@@ -12,8 +12,8 @@ use App\Models\Counterparty;
 use App\Models\Employee;
 use App\Models\Good;
 use App\Models\LegalEntitySale;
-use App\Models\OpeningStockBalance;
 use App\Models\LegalEntitySaleLine;
+use App\Models\OpeningStockBalance;
 use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
 use App\Models\RetailSale;
@@ -166,27 +166,34 @@ class ServiceOrderController extends Controller
         $serviceOrder->load(['lines.good']);
         $serviceOrder->loadMissing(['counterparty', 'customerVehicle']);
 
-        $initialCart = [];
-        foreach ($serviceOrder->lines as $line) {
-            $good = $line->good ?? Good::query()->where('branch_id', $branchId)->find($line->good_id);
-            $stockQty = null;
-            if ($good && ! $good->is_service && $warehouseId > 0) {
-                $bal = OpeningStockBalance::query()
-                    ->where('warehouse_id', $warehouseId)
-                    ->where('good_id', $good->id)
-                    ->first();
-                $stockQty = $bal !== null ? (float) $bal->quantity : 0.0;
+        $oldLines = $request->old('lines');
+        $initialCart = is_array($oldLines) && $oldLines !== []
+            ? $this->serviceOrderInitialCartFromOldInput($branchId, $warehouseId, $oldLines)
+            : [];
+        if ($initialCart === []) {
+            foreach ($serviceOrder->lines as $line) {
+                $good = $line->good ?? Good::query()->where('branch_id', $branchId)->find($line->good_id);
+                $stockQty = null;
+                if ($good && ! $good->is_service && $warehouseId > 0) {
+                    $bal = OpeningStockBalance::query()
+                        ->where('warehouse_id', $warehouseId)
+                        ->where('good_id', $good->id)
+                        ->first();
+                    $stockQty = $bal !== null ? (float) $bal->quantity : 0.0;
+                }
+                $hasPerformer = $line->performer_employee_id !== null && (int) $line->performer_employee_id > 0;
+                $initialCart[] = [
+                    'line_id' => (int) $line->id,
+                    'good_id' => (int) $line->good_id,
+                    'article_code' => (string) $line->article_code,
+                    'name' => (string) $line->name,
+                    'quantity' => $this->formatDecimalStringForInput($line->quantity, 2),
+                    'unit_price' => $this->formatDecimalStringForInput($line->unit_price, 2),
+                    'is_service' => (bool) ($good?->is_service ?? false) || $hasPerformer,
+                    'stock_quantity' => $stockQty,
+                    'performer_employee_id' => $line->performer_employee_id !== null ? (string) $line->performer_employee_id : '',
+                ];
             }
-            $initialCart[] = [
-                'good_id' => (int) $line->good_id,
-                'article_code' => (string) $line->article_code,
-                'name' => (string) $line->name,
-                'quantity' => $this->formatDecimalStringForInput($line->quantity, 2),
-                'unit_price' => $this->formatDecimalStringForInput($line->unit_price, 2),
-                'is_service' => (bool) ($good?->is_service ?? false),
-                'stock_quantity' => $stockQty,
-                'performer_employee_id' => $line->performer_employee_id !== null ? (string) $line->performer_employee_id : '',
-            ];
         }
 
         $linesFromRequests = $request->route()->named('admin.service-sales.requests.lines');
@@ -392,7 +399,7 @@ class ServiceOrderController extends Controller
 
         $q = ServiceOrder::query()
             ->where('branch_id', $branchId)
-            ->with(['lines', 'warehouse', 'user', 'retailSale', 'legalEntitySale']);
+            ->with(['lines', 'warehouse', 'user', 'retailSale', 'legalEntitySale', 'counterparty', 'customerVehicle']);
 
         if ($status === 'awaiting') {
             $q->awaitingFulfillmentQueue();
@@ -654,6 +661,67 @@ class ServiceOrderController extends Controller
                 'unit_price' => $this->formatDecimalStringForInput($line->unit_price, 2),
             ];
         })->values()->all();
+    }
+
+    /**
+     * Позиции заявки из session old() после ошибки валидации — сохраняет мастеров, кол-во и цены из отправленной формы.
+     *
+     * @param  list<mixed>  $oldLines
+     * @return list<array{line_id: int|null, good_id: int, article_code: string, name: string, quantity: string, unit_price: string, is_service: bool, stock_quantity: float|null, performer_employee_id: string}>
+     */
+    private function serviceOrderInitialCartFromOldInput(int $branchId, int $warehouseId, array $oldLines): array
+    {
+        $out = [];
+        foreach ($oldLines as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $code = trim((string) ($row['article_code'] ?? ''));
+            if ($code === '') {
+                continue;
+            }
+            $good = Good::query()
+                ->where('branch_id', $branchId)
+                ->where('article_code', $code)
+                ->first();
+            if ($good === null) {
+                continue;
+            }
+            $stockQty = null;
+            if (! $good->is_service && $warehouseId > 0) {
+                $bal = OpeningStockBalance::query()
+                    ->where('warehouse_id', $warehouseId)
+                    ->where('good_id', $good->id)
+                    ->first();
+                $stockQty = $bal !== null ? (float) $bal->quantity : 0.0;
+            }
+            $performerRaw = $row['performer_employee_id'] ?? null;
+            $performer = $performerRaw !== null && $performerRaw !== '' ? (string) $performerRaw : '';
+
+            $out[] = [
+                'line_id' => null,
+                'good_id' => (int) $good->id,
+                'article_code' => $code,
+                'name' => (string) $good->name,
+                'quantity' => $this->formatDecimalStringForInput($row['quantity'] ?? null, 2),
+                'unit_price' => $this->formatDecimalStringForInput($row['unit_price'] ?? null, 2),
+                'is_service' => (bool) $good->is_service || $performer !== '',
+                'stock_quantity' => $stockQty,
+                'performer_employee_id' => $performer,
+            ];
+        }
+
+        if ($out === []) {
+            return [];
+        }
+        // Пустая строка количества — подставим 1, чтобы ячейка не оставалась пустой.
+        foreach ($out as $i => $line) {
+            if (trim($line['quantity'] ?? '') === '') {
+                $out[$i]['quantity'] = '1';
+            }
+        }
+
+        return $out;
     }
 
     /**
