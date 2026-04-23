@@ -1,5 +1,17 @@
 @php
     $currentKey = request()->route()?->parameter('key');
+    $menuRouteIsNotMatches = function (array $c): bool {
+        if (! isset($c['route_is_not'])) {
+            return false;
+        }
+        foreach ((array) $c['route_is_not'] as $pattern) {
+            if (is_string($pattern) && $pattern !== '' && request()->routeIs($pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    };
     /** @var string $variant `desktop` — как в макете для ПК; `mobile` — только выезжающая панель &lt; md */
     $variant = $variant ?? 'desktop';
     $sectionsHeadingClass = $variant === 'mobile'
@@ -40,11 +52,11 @@
             @endif
 
             @php
-                $childRouteMatches = static function (array $c): bool {
+                $childRouteMatches = function (array $c) use ($menuRouteIsNotMatches): bool {
                     if (isset($c['route_is'])) {
                         $match = request()->routeIs($c['route_is']);
-                        if ($match && isset($c['route_is_not'])) {
-                            $match = ! request()->routeIs($c['route_is_not']);
+                        if ($match && $menuRouteIsNotMatches($c)) {
+                            $match = false;
                         }
 
                         return $match;
@@ -62,11 +74,8 @@
 
                     return ($c['key'] ?? '') === $currentKey;
                 });
-                if (($item['id'] ?? '') === 'stock') {
+                if (($item['id'] ?? '') === 'goods-services') {
                     $groupOpen = $groupOpen || request()->routeIs('admin.stock.*');
-                }
-                if (($item['id'] ?? '') === 'reports') {
-                    $groupOpen = $groupOpen || request()->routeIs('admin.reports.*');
                 }
                 if (($item['id'] ?? '') === 'payroll') {
                     $groupOpen = $groupOpen || request()->routeIs('admin.payroll*');
@@ -96,7 +105,7 @@
                                 ? route($child['route'])
                                 : route('admin.placeholder', ['key' => $child['key']]);
                             $childActive = isset($child['route_is'])
-                                ? (request()->routeIs($child['route_is']) && (! isset($child['route_is_not']) || ! request()->routeIs($child['route_is_not'])))
+                                ? (request()->routeIs($child['route_is']) && ! $menuRouteIsNotMatches($child))
                                 : (isset($child['route'])
                                     ? request()->routeIs($child['route'])
                                     : (($child['key'] ?? '') === $currentKey));
@@ -116,6 +125,9 @@
                                 @if (($child['route'] ?? '') === 'admin.service-sales.requests' && ($serviceOrdersAwaitingFulfillmentCount ?? 0) > 0)
                                     title="Заявок к оформлению: {{ $serviceOrdersAwaitingFulfillmentCount }}"
                                 @endif
+                                @if (($child['route'] ?? '') === 'admin.retail-sales.debts' && ($retailDebtorGroupsCount ?? 0) > 0)
+                                    title="Групп должников с непогашенным долгом: {{ $retailDebtorGroupsCount }}"
+                                @endif
                             >
                                 <span class="min-w-0">{{ $child['label'] }}</span>
                                 @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
@@ -129,6 +141,12 @@
                                         class="shrink-0 rounded-md bg-emerald-500/25 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-emerald-100 ring-1 ring-emerald-400/40"
                                         aria-hidden="true"
                                     >+{{ $serviceOrdersAwaitingFulfillmentCount }}</span>
+                                @endif
+                                @if (($child['route'] ?? '') === 'admin.retail-sales.debts' && ($retailDebtorGroupsCount ?? 0) > 0)
+                                    <span
+                                        class="shrink-0 rounded-md bg-amber-500/30 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-100 ring-1 ring-amber-400/45"
+                                        aria-hidden="true"
+                                    >+{{ $retailDebtorGroupsCount }}</span>
                                 @endif
                             </a>
                         </li>

@@ -11,6 +11,9 @@ class Branch extends Model
         'name',
         'code',
         'is_active',
+        'service_tnved_code',
+        'service_esf_export_name',
+        'universal_tnved_code',
     ];
 
     protected function casts(): array

@@ -2,7 +2,9 @@
 
 namespace App\Services\Esf;
 
+use App\Models\Branch;
 use App\Models\LegalEntitySale;
+use App\Models\LegalEntitySaleLine;
 use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
 use Carbon\CarbonImmutable;
@@ -163,9 +165,8 @@ class EsfXmlGenerator
     }
 
     /**
-     * @param  Collection<int, \App\Models\LegalEntitySaleLine>  $lines
+     * @param  Collection<int, LegalEntitySaleLine>  $lines
      * @param  'all'|'goods'|'services'  $linesKind
-     * @param  bool  $splitReceiptNoteAndCrm
      */
     private function appendOneReceipt(
         DOMDocument $dom,
@@ -192,6 +193,10 @@ class EsfXmlGenerator
         $paymentTypeCode = (string) (($cfg['payment_type_code'][$paymentKind] ?? $cfg['payment_type_code']['cash']) ?? '10');
         $receiptTypeCode = (string) ($cfg['receipt_type_code'] ?? '10');
         $documentTypeCode = (string) ($cfg['document_type_code'] ?? $receiptTypeCode);
+        if ($this->receiptIsServicesExport($linesKind, $lines)) {
+            $receiptTypeCode = (string) ($cfg['receipt_type_code_services'] ?? '20');
+            // Как в ESF_uslugi_fixed_v2.xml: type не меняем (остаётся 10) — иначе Салык ведёт себя как для товара.
+        }
 
         $bankAccountValue = null;
         if ($paymentKind === 'bank' && $paymentAccount !== null && ! $paymentAccount->isCash()) {
@@ -248,6 +253,15 @@ class EsfXmlGenerator
         $vatRate = (float) ($cfg['vat_rate_percent'] ?? 0);
         $totalCost = '0';
 
+        $serviceEsfExportName = null;
+        if ($linesKind === 'services') {
+            $br = Branch::query()->find((int) $sale->branch_id);
+            if ($br !== null) {
+                $t = trim((string) ($br->service_esf_export_name ?? ''));
+                $serviceEsfExportName = $t !== '' ? $t : null;
+            }
+        }
+
         foreach ($lines as $line) {
             $good = $dom->createElement('good');
             $goods->appendChild($good);
@@ -258,7 +272,13 @@ class EsfXmlGenerator
             $totalCost = bcadd($totalCost, $lineSum, 2);
 
             $this->appendText($dom, $good, 'baseCount', $this->formatDecimals($qty, 5));
-            $this->appendText($dom, $good, 'goodsName', (string) $line->name);
+            $goodsName = (string) $line->name;
+            if ($serviceEsfExportName !== null) {
+                $goodsName = $serviceEsfExportName;
+            } elseif ($this->isGoodsLineForEsfShortName($line)) {
+                $goodsName = EsfExportGoodsName::firstTwoWords($goodsName);
+            }
+            $this->appendText($dom, $good, 'goodsName', $goodsName);
 
             $stAmount = '0.00';
             $vatAmount = '0.00';
@@ -313,6 +333,27 @@ class EsfXmlGenerator
         $this->appendText($dom, $receipt, 'type', $documentTypeCode);
         $this->appendText($dom, $receipt, 'vatCode', (string) ($cfg['vat_code'] ?? '100'));
         $this->appendText($dom, $receipt, 'vatDeliveryTypeCode', (string) ($cfg['vat_delivery_type_code'] ?? '102'));
+    }
+
+    /**
+     * @param  'all'|'goods'|'services'  $linesKind
+     * @param  Collection<int, LegalEntitySaleLine>  $lines
+     */
+    private function receiptIsServicesExport(string $linesKind, Collection $lines): bool
+    {
+        if ($linesKind === 'services') {
+            return true;
+        }
+        if ($linesKind !== 'all' || $lines->isEmpty()) {
+            return false;
+        }
+
+        return $lines->every(fn (LegalEntitySaleLine $l): bool => $l->good !== null && $l->good->is_service);
+    }
+
+    private function isGoodsLineForEsfShortName(LegalEntitySaleLine $line): bool
+    {
+        return $line->good !== null && ! $line->good->is_service;
     }
 
     /** Как в test_esf_realization_real.xml: xsi:nil + xmlns:xsi на каждом пустом поле. */

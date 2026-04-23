@@ -78,4 +78,29 @@ class RetailSale extends Model
             ->where('branch_id', auth()->user()->branch_id)
             ->firstOrFail();
     }
+
+    /**
+     * Ключ группировки должников (имя + телефон), как на странице «Должники (физ. лица)».
+     */
+    public function debtorGroupKey(): string
+    {
+        $name = mb_strtolower(trim((string) ($this->debtor_name ?? '')), 'UTF-8');
+        $phone = preg_replace('/\D+/', '', (string) ($this->debtor_phone ?? ''));
+
+        return $name.'|'.$phone;
+    }
+
+    /**
+     * Число уникальных групп должников с ненулевым остатком долга по филиалу.
+     */
+    public static function countDistinctDebtorGroupsForBranch(int $branchId): int
+    {
+        $keys = static::query()
+            ->where('branch_id', $branchId)
+            ->where('debt_amount', '>', 0)
+            ->get(['debtor_name', 'debtor_phone'])
+            ->map(fn (self $s) => $s->debtorGroupKey());
+
+        return $keys->unique()->count();
+    }
 }

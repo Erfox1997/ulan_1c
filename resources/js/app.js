@@ -2792,30 +2792,6 @@ document.addEventListener('alpine:init', () => {
             debtorHints: [],
             debtorHintsOpen: false,
             debtorHintsLoading: false,
-            init() {
-                if (this.draftTotal <= 0) {
-                    return;
-                }
-                if (defaultId !== '') {
-                    const row = this.payments.find(
-                        (p) => String(p.organization_bank_account_id) === String(defaultId),
-                    );
-                    if (row) {
-                        row.amount = this.draftTotal.toLocaleString('ru-RU', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                        });
-
-                        return;
-                    }
-                }
-                if (this.payments.length === 1) {
-                    this.payments[0].amount = this.draftTotal.toLocaleString('ru-RU', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                    });
-                }
-            },
             parseMoney(s) {
                 if (s == null || s === '') {
                     return NaN;
@@ -2936,6 +2912,8 @@ document.addEventListener('alpine:init', () => {
             groupAmount: '',
             groupAccountId: defaultId,
             groupSaleIds: [],
+            detailModalOpen: false,
+            detailSale: null,
             openPay(saleId, debtAmountRaw) {
                 const id = Number(saleId);
                 const url = payUrls[id] ?? payUrls[String(id)];
@@ -2974,6 +2952,108 @@ document.addEventListener('alpine:init', () => {
             },
             closeGroupModal() {
                 this.groupModalOpen = false;
+            },
+            openSaleDetail(sale) {
+                this.detailSale = sale && typeof sale === 'object' ? sale : null;
+                this.detailModalOpen = true;
+            },
+            closeDetailModal() {
+                this.detailModalOpen = false;
+                this.detailSale = null;
+            },
+        };
+    });
+
+    /** Справочник товаров: тот же API, что у розницы (admin.goods.search + exclude_services), выпадающий список как на POS. */
+    Alpine.data('saleGoodsSearch', () => {
+        const c =
+            typeof window !== 'undefined' && window.__saleGoodsInit && typeof window.__saleGoodsInit === 'object'
+                ? window.__saleGoodsInit
+                : {};
+        const searchUrl = typeof c.searchUrl === 'string' ? c.searchUrl : '';
+        const editUrlTemplate = typeof c.editUrlTemplate === 'string' ? c.editUrlTemplate : '';
+        const initialQuery = typeof c.initialQuery === 'string' ? c.initialQuery : '';
+
+        return {
+            query: initialQuery,
+            results: [],
+            loading: false,
+            open: false,
+            buildFetchUrl() {
+                if (searchUrl === '') {
+                    return '';
+                }
+                const q = this.query.trim();
+                try {
+                    const u = new URL(searchUrl, window.location.href);
+                    u.searchParams.set('q', q);
+                    return u.toString();
+                } catch (e) {
+                    const j = searchUrl.includes('?') ? '&' : '?';
+                    return searchUrl + j + 'q=' + encodeURIComponent(q);
+                }
+            },
+            async fetchResults() {
+                const q = this.query.trim();
+                if (q.length < 2) {
+                    this.results = [];
+                    return;
+                }
+                this.loading = true;
+                try {
+                    const u = this.buildFetchUrl();
+                    if (!u) {
+                        this.results = [];
+                        return;
+                    }
+                    const res = await fetch(u, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json();
+                    this.results = Array.isArray(data) ? data : [];
+                } catch (e) {
+                    this.results = [];
+                } finally {
+                    this.loading = false;
+                }
+            },
+            onFocus() {
+                this.open = true;
+                if (this.query.trim().length >= 2) {
+                    this.fetchResults();
+                }
+            },
+            goEdit(row) {
+                if (!row || row.id == null) {
+                    return;
+                }
+                this.open = false;
+                if (editUrlTemplate === '') {
+                    return;
+                }
+                window.location.href = editUrlTemplate.replace('__ID__', String(row.id));
+            },
+            onInputEnter(e) {
+                if (e.key !== 'Enter') {
+                    return;
+                }
+                e.preventDefault();
+                if (this.results.length === 1) {
+                    this.goEdit(this.results[0]);
+                } else if (this.$refs.saleGoodsTableForm && this.query.trim() !== '') {
+                    this.$refs.saleGoodsTableForm.submit();
+                }
+            },
+            formatSalePrice(v) {
+                if (v == null || v === '') {
+                    return '';
+                }
+                const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+                if (!Number.isFinite(n)) {
+                    return '';
+                }
+
+                return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' сом';
             },
         };
     });

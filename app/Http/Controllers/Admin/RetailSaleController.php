@@ -341,7 +341,7 @@ class RetailSaleController extends Controller
             ->get();
 
         $debtGroups = $sales
-            ->groupBy(fn (RetailSale $s) => $this->debtorGroupKey($s))
+            ->groupBy(fn (RetailSale $s) => $s->debtorGroupKey())
             ->sortByDesc(function ($group) {
                 /** @var Collection<int, RetailSale> $group */
                 return $group->max(fn (RetailSale $s) => $s->document_date !== null ? $s->document_date->getTimestamp() : 0);
@@ -453,9 +453,9 @@ class RetailSaleController extends Controller
                     throw new RuntimeException('Нет чеков для оплаты.');
                 }
 
-                $firstKey = $this->debtorGroupKey($sales->first());
+                $firstKey = $sales->first()->debtorGroupKey();
                 foreach ($sales as $sale) {
-                    if ($this->debtorGroupKey($sale) !== $firstKey) {
+                    if ($sale->debtorGroupKey() !== $firstKey) {
                         throw new RuntimeException('Чеки относятся к разным должникам. Обновите страницу.');
                     }
                 }
@@ -526,14 +526,6 @@ class RetailSaleController extends Controller
             ['limit' => $lim > 0 ? $lim : null],
             static fn ($v) => $v !== null && $v !== 0
         ));
-    }
-
-    private function debtorGroupKey(RetailSale $sale): string
-    {
-        $name = mb_strtolower(trim((string) ($sale->debtor_name ?? '')), 'UTF-8');
-        $phone = preg_replace('/\D+/', '', (string) ($sale->debtor_phone ?? ''));
-
-        return $name.'|'.$phone;
     }
 
     public function receipt(RetailSale $retailSale): View

@@ -23,6 +23,7 @@ class Good extends Model
         'oem',
         'factory_number',
         'min_stock',
+        'tnved_code',
     ];
 
     protected function casts(): array
@@ -59,5 +60,20 @@ class Good extends Model
     public function serviceOrderLines(): HasMany
     {
         return $this->hasMany(ServiceOrderLine::class, 'good_id');
+    }
+
+    public function legalEntitySaleLines(): HasMany
+    {
+        return $this->hasMany(LegalEntitySaleLine::class, 'good_id');
+    }
+
+    public function purchaseReceiptLines(): HasMany
+    {
+        return $this->hasMany(PurchaseReceiptLine::class, 'good_id');
+    }
+
+    public function customerReturnLines(): HasMany
+    {
+        return $this->hasMany(CustomerReturnLine::class, 'good_id');
     }
 }

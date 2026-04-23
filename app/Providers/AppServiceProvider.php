@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Models\RetailSale;
 use App\Models\ServiceOrder;
 use App\Models\User;
 use App\Services\BranchAccessService;
@@ -56,10 +57,11 @@ class AppServiceProvider extends ServiceProvider
             $user = auth()->user();
             $base = config('branch_menu', []);
             $menu = ($user && $user->branch_id)
-                ? app(\App\Services\BranchAccessService::class)->filterMenuForUser($user, $base)
+                ? app(BranchAccessService::class)->filterMenuForUser($user, $base)
                 : $base;
             $goodsCharacteristicsIncompleteCount = 0;
             $serviceOrdersAwaitingFulfillmentCount = 0;
+            $retailDebtorGroupsCount = 0;
             if ($user && $user->branch_id) {
                 $branchId = (int) $user->branch_id;
                 $request = request();
@@ -83,11 +85,21 @@ class AppServiceProvider extends ServiceProvider
                     );
                 }
                 $serviceOrdersAwaitingFulfillmentCount = (int) $request->attributes->get($attrKeyOrders);
+
+                $attrKeyDebtors = 'retail_debtor_groups_count';
+                if (! $request->attributes->has($attrKeyDebtors)) {
+                    $request->attributes->set(
+                        $attrKeyDebtors,
+                        RetailSale::countDistinctDebtorGroupsForBranch($branchId)
+                    );
+                }
+                $retailDebtorGroupsCount = (int) $request->attributes->get($attrKeyDebtors);
             }
             $view->with([
                 'menu' => $menu,
                 'goodsCharacteristicsIncompleteCount' => $goodsCharacteristicsIncompleteCount,
                 'serviceOrdersAwaitingFulfillmentCount' => $serviceOrdersAwaitingFulfillmentCount,
+                'retailDebtorGroupsCount' => $retailDebtorGroupsCount,
             ]);
         });
     }

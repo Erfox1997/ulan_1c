@@ -27,9 +27,11 @@ use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\RetailSaleController;
+use App\Http\Controllers\Admin\SaleGoodsController;
 use App\Http\Controllers\Admin\SaleServiceController;
 use App\Http\Controllers\Admin\ServiceOrderController;
 use App\Http\Controllers\Admin\StockInventoryController;
+use App\Http\Controllers\Admin\TnVedGkedController;
 use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SuperAdmin\BranchAdminController;
@@ -138,6 +140,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('p/trade.esf/{legalEntitySale}/queue/clear', [EsfController::class, 'unqueueFromEsf'])->name('esf.unqueue');
         Route::get('p/trade.esf/{legalEntitySale}/xml', [EsfController::class, 'downloadXml'])->name('esf.xml');
         Route::post('p/trade.esf/xml-merge', [EsfController::class, 'downloadXmlMerge'])->name('esf.xml-merge');
+        Route::post('p/trade.esf/lines-excel/preview', [EsfController::class, 'previewEsfLinesExcel'])->name('esf.lines-excel-preview');
         Route::post('p/trade.esf/lines-excel', [EsfController::class, 'downloadEsfLinesExcel'])->name('esf.lines-excel');
         Route::post('p/trade.esf/{legalEntitySale}/submitted', [EsfController::class, 'markSubmitted'])->name('esf.submitted');
         Route::post('p/trade.esf/submitted-bulk', [EsfController::class, 'markSubmittedBulk'])->name('esf.submitted.bulk');
@@ -178,6 +181,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::put('p/trade.sale-services/{service}', [SaleServiceController::class, 'update'])->whereNumber('service')->name('sale-services.update');
         Route::delete('p/trade.sale-services/{service}', [SaleServiceController::class, 'destroy'])->whereNumber('service')->name('sale-services.destroy');
         Route::get('p/trade.sale-services', [SaleServiceController::class, 'index'])->name('sale-services.index');
+        Route::get('p/trade.sale-goods/create', [SaleGoodsController::class, 'create'])->name('sale-goods.create');
+        Route::post('p/trade.sale-goods', [SaleGoodsController::class, 'store'])->name('sale-goods.store');
+        Route::post('p/trade.sale-goods/import', [SaleGoodsController::class, 'import'])->name('sale-goods.import');
+        Route::get('p/trade.sale-goods/sample-import.xlsx', [SaleGoodsController::class, 'sampleImport'])->name('sale-goods.sample-import');
+        Route::get('p/trade.sale-goods/{good}/edit', [SaleGoodsController::class, 'edit'])->whereNumber('good')->name('sale-goods.edit');
+        Route::put('p/trade.sale-goods/{good}', [SaleGoodsController::class, 'update'])->whereNumber('good')->name('sale-goods.update');
+        Route::delete('p/trade.sale-goods/{good}', [SaleGoodsController::class, 'destroy'])->whereNumber('good')->name('sale-goods.destroy');
+        Route::get('p/trade.sale-goods', [SaleGoodsController::class, 'index'])->name('sale-goods.index');
         Route::get('p/trade.sale-physical/history', [RetailSaleController::class, 'history'])->name('retail-sales.history');
         Route::get('p/trade.sale-physical/checkout', [RetailSaleController::class, 'checkout'])->name('retail-sales.checkout');
         Route::get('p/trade.sale-physical/debtor-hints', [RetailSaleController::class, 'debtorHints'])->name('retail-sales.debtor-hints');
@@ -247,6 +258,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('purchase-requests', [PurchaseRequestController::class, 'index'])->name('purchase-requests.index');
         Route::post('purchase-requests/export/excel', [PurchaseRequestController::class, 'exportExcel'])->name('purchase-requests.export.excel');
         Route::post('purchase-requests/export/pdf', [PurchaseRequestController::class, 'exportPdf'])->name('purchase-requests.export.pdf');
+        Route::get('purchase-requests/{purchaseRequest}/edit', [PurchaseRequestController::class, 'edit'])->name('purchase-requests.edit');
+        Route::put('purchase-requests/{purchaseRequest}', [PurchaseRequestController::class, 'update'])->name('purchase-requests.update');
+        Route::delete('purchase-requests/{purchaseRequest}', [PurchaseRequestController::class, 'destroy'])->name('purchase-requests.destroy');
         Route::get('purchase-requests/{purchaseRequest}', [PurchaseRequestController::class, 'show'])->name('purchase-requests.show');
         Route::post('purchase-requests', [PurchaseRequestController::class, 'store'])->name('purchase-requests.store');
 
@@ -300,6 +314,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::put('p/payroll.penalties/{penalty}', [EmployeePenaltyController::class, 'update'])->name('payroll.penalties.update');
         Route::delete('p/payroll.penalties/{penalty}', [EmployeePenaltyController::class, 'destroy'])->name('payroll.penalties.destroy');
         Route::get('p/payroll.penalties', [EmployeePenaltyController::class, 'index'])->name('payroll.penalties.index');
+
+        Route::get('p/accounting.tn-ved-gked-codes', [TnVedGkedController::class, 'index'])->name('accounting.tn-ved-gked-codes');
+        Route::get('p/accounting.tn-ved-gked-codes/universal/preview', [TnVedGkedController::class, 'previewUniversal'])->name('accounting.tn-ved-gked-codes.universal-preview');
+        Route::post('p/accounting.tn-ved-gked-codes/universal/apply', [TnVedGkedController::class, 'applyUniversal'])->name('accounting.tn-ved-gked-codes.universal-apply');
+        Route::post('p/accounting.tn-ved-gked-codes/rules', [TnVedGkedController::class, 'storeRule'])->name('accounting.tn-ved-gked-codes.rules.store');
+        Route::delete('p/accounting.tn-ved-gked-codes/rules/{tnvedKeywordRule}', [TnVedGkedController::class, 'destroyRule'])->name('accounting.tn-ved-gked-codes.rules.destroy');
+        Route::get('p/accounting.tn-ved-gked-codes/rules/{tnvedKeywordRule}/preview', [TnVedGkedController::class, 'previewRule'])->name('accounting.tn-ved-gked-codes.rules.preview');
+        Route::post('p/accounting.tn-ved-gked-codes/rules/{tnvedKeywordRule}/apply', [TnVedGkedController::class, 'applyRule'])->name('accounting.tn-ved-gked-codes.rules.apply');
+        Route::post('p/accounting.tn-ved-gked-codes/service-tnved', [TnVedGkedController::class, 'updateServiceTnved'])->name('accounting.tn-ved-gked-codes.service-tnved');
 
         Route::get('/p/{key}', [PlaceholderController::class, 'show'])->name('placeholder')->where('key', '[a-z0-9.-]+');
     });

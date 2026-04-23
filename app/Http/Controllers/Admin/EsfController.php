@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Branch;
 use App\Models\LegalEntitySale;
 use App\Models\Organization;
 use App\Models\OrganizationBankAccount;
+use App\Services\Esf\EsfExportGoodsName;
 use App\Services\Esf\EsfXmlGenerator;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -353,6 +356,32 @@ class EsfController extends Controller
         return $this->redirectToEsfIndex($request)->with('status', $msg);
     }
 
+    public function previewEsfLinesExcel(Request $request): JsonResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $request->validate([
+            'excel_items' => ['required', 'array', 'min:1', 'max:200'],
+            'excel_items.*' => ['string', 'regex:/^\d+:(goods|services)$/'],
+        ]);
+        $raw = array_values(array_unique($request->input('excel_items', [])));
+        $built = $this->buildEsfLinesExcelRows($branchId, $raw);
+        if (! $built['ok']) {
+            return response()->json(['message' => $built['error']], 422);
+        }
+        $missing = 0;
+        foreach ($built['rows'] as $row) {
+            if (($row['code'] ?? '') === '') {
+                $missing++;
+            }
+        }
+
+        return response()->json([
+            'missing' => $missing,
+            'total' => count($built['rows']),
+            'kind' => $built['kind'],
+        ]);
+    }
+
     public function downloadEsfLinesExcel(Request $request): StreamedResponse|RedirectResponse
     {
         $branchId = (int) auth()->user()->branch_id;
@@ -363,75 +392,12 @@ class EsfController extends Controller
         ]);
 
         $raw = array_values(array_unique($request->input('excel_items', [])));
-        if ($raw === []) {
-            return $this->redirectToEsfIndex($request)->with('error', 'Ничего не выбрано для выгрузки в Excel.');
+        $built = $this->buildEsfLinesExcelRows($branchId, $raw);
+        if (! $built['ok']) {
+            return $this->redirectToEsfIndex($request)->with('error', $built['error']);
         }
-
-        $pairs = [];
-        foreach ($raw as $s) {
-            $parts = explode(':', (string) $s, 2);
-            if (count($parts) !== 2) {
-                return $this->redirectToEsfIndex($request)->with('error', 'Некорректный выбор строк.');
-
-            }
-            $pairs[] = ['id' => (int) $parts[0], 'kind' => $parts[1]];
-        }
-
-        $kinds = array_unique(array_column($pairs, 'kind'));
-        if (count($kinds) !== 1) {
-            return $this->redirectToEsfIndex($request)->with(
-                'error',
-                'В одном Excel нельзя смешивать товары и услуги. Отметьте только строки «Товары» или только «Услуги».'
-            );
-        }
-        $linesKind = (string) $kinds[0];
-        if (! in_array($linesKind, ['goods', 'services'], true)) {
-            return $this->redirectToEsfIndex($request)->with('error', 'Некорректный вид строк.');
-
-        }
-
-        $idList = array_values(array_unique(array_map(fn (array $p) => $p['id'], $pairs)));
-        sort($idList, SORT_NUMERIC);
-
-        $rows = [];
-        foreach ($idList as $id) {
-            $sale = LegalEntitySale::query()
-                ->where('branch_id', $branchId)
-                ->whereKey($id)
-                ->with('lines.good')
-                ->first();
-            if ($sale === null) {
-                return $this->redirectToEsfIndex($request)->with('error', 'Документ № '.$id.' не найден в этой филиальной базе.');
-            }
-            foreach ($sale->lines as $line) {
-                $g = $line->good;
-                if ($g === null) {
-                    continue;
-                }
-                if ($linesKind === 'goods' && $g->is_service) {
-                    continue;
-                }
-                if ($linesKind === 'services' && ! $g->is_service) {
-                    continue;
-                }
-                $name = $line->name !== null && (string) $line->name !== '' ? (string) $line->name : (string) $g->name;
-                $unit = $line->unit !== null && (string) $line->unit !== '' ? (string) $line->unit : (string) ($g->unit ?? '');
-                if ($name === '' && $unit === '') {
-                    continue;
-                }
-                if ($name === '' && $unit !== '') {
-                    $name = '—';
-                }
-                $rows[] = [
-                    'name' => $name,
-                    'unit' => $unit,
-                ];
-            }
-        }
-
-        if ($rows === []) {
-            return $this->redirectToEsfIndex($request)->with('error', 'По отмеченным документам нет подходящих позиций для списка.');
-        }
+        $rows = $built['rows'];
+        $linesKind = $built['kind'];
 
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
@@ -447,7 +413,7 @@ class EsfController extends Controller
         foreach ($rows as $row) {
             $sheet->setCellValue('A'.$r, $row['name']);
             $sheet->setCellValue('B'.$r, $row['unit']);
-            $sheet->setCellValue('C'.$r, '');
+            $sheet->setCellValue('C'.$r, $row['code'] ?? '');
             $r++;
         }
 
@@ -463,6 +429,106 @@ class EsfController extends Controller
         }, $fileName, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ]);
+    }
+
+    /**
+     * @param  list<string>  $raw
+     * @return array{ok: true, kind: 'goods'|'services', rows: list<array{name: string, unit: string, code: string}>}|array{ok: false, error: string}
+     */
+    private function buildEsfLinesExcelRows(int $branchId, array $raw): array
+    {
+        if ($raw === []) {
+            return ['ok' => false, 'error' => 'Ничего не выбрано для выгрузки в Excel.'];
+        }
+
+        $pairs = [];
+        foreach ($raw as $s) {
+            $parts = explode(':', (string) $s, 2);
+            if (count($parts) !== 2) {
+                return ['ok' => false, 'error' => 'Некорректный выбор строк.'];
+            }
+            $pairs[] = ['id' => (int) $parts[0], 'kind' => $parts[1]];
+        }
+
+        $kinds = array_unique(array_column($pairs, 'kind'));
+        if (count($kinds) !== 1) {
+            return [
+                'ok' => false,
+                'error' => 'В одном Excel нельзя смешивать товары и услуги. Отметьте только строки «Товары» или только «Услуги».',
+            ];
+        }
+        $linesKind = (string) $kinds[0];
+        if (! in_array($linesKind, ['goods', 'services'], true)) {
+            return ['ok' => false, 'error' => 'Некорректный вид строк.'];
+        }
+
+        $idList = array_values(array_unique(array_map(fn (array $p) => $p['id'], $pairs)));
+        sort($idList, SORT_NUMERIC);
+
+        $serviceEsfExportName = '';
+        if ($linesKind === 'services') {
+            $b = Branch::query()->find($branchId);
+            $serviceEsfExportName = $b !== null
+                ? trim((string) ($b->service_esf_export_name ?? ''))
+                : '';
+        }
+
+        $rows = [];
+        foreach ($idList as $id) {
+            $sale = LegalEntitySale::query()
+                ->where('branch_id', $branchId)
+                ->whereKey($id)
+                ->with('lines.good')
+                ->first();
+            if ($sale === null) {
+                return ['ok' => false, 'error' => 'Документ № '.$id.' не найден в этой филиальной базе.'];
+            }
+            foreach ($sale->lines as $line) {
+                $g = $line->good;
+                if ($g === null) {
+                    continue;
+                }
+                if ($linesKind === 'goods' && $g->is_service) {
+                    continue;
+                }
+                if ($linesKind === 'services' && ! $g->is_service) {
+                    continue;
+                }
+                $name = $line->name !== null && (string) $line->name !== '' ? (string) $line->name : (string) $g->name;
+                if ($linesKind === 'services') {
+                    $unit = (string) (config('esf.services_excel_unit') ?? 'шт');
+                } else {
+                    $unit = $line->unit !== null && (string) $line->unit !== '' ? (string) $line->unit : (string) ($g->unit ?? '');
+                }
+                if ($name === '' && $unit === '') {
+                    continue;
+                }
+                if ($name === '' && $unit !== '') {
+                    $name = '—';
+                }
+                if ($linesKind === 'services' && $serviceEsfExportName !== '') {
+                    $name = $serviceEsfExportName;
+                } elseif ($linesKind === 'goods') {
+                    $name = EsfExportGoodsName::firstTwoWords($name);
+                }
+                $code = trim((string) ($g->tnved_code ?? ''));
+                $rows[] = [
+                    'name' => $name,
+                    'unit' => $unit,
+                    'code' => $code,
+                ];
+            }
+        }
+
+        if ($rows === []) {
+            return ['ok' => false, 'error' => 'По отмеченным документам нет подходящих позиций для списка.'];
+        }
+
+        return [
+            'ok' => true,
+            'kind' => $linesKind,
+            'rows' => $rows,
+        ];
     }
 
     private function redirectToEsfIndex(Request $request): RedirectResponse
@@ -565,16 +631,8 @@ class EsfController extends Controller
         }
         $splitReceiptNoteAndCrm = $profile['mixed'];
 
-        $randomExchange = (bool) config('esf.random_exchange_code_each_download', true);
-        if ($randomExchange) {
-            $exchangeCode = (string) Str::uuid();
-        } else {
-            if (blank($legalEntitySale->esf_exchange_code)) {
-                $legalEntitySale->forceFill(['esf_exchange_code' => (string) Str::uuid()])->save();
-                $legalEntitySale->refresh();
-            }
-            $exchangeCode = (string) $legalEntitySale->esf_exchange_code;
-        }
+        // Новый exchangeCode при каждой выгрузке — иначе портал ГНС: «код обмена уже существует в базе».
+        $exchangeCode = (string) Str::uuid();
 
         try {
             $xml = $this->esfXmlGenerator->build(

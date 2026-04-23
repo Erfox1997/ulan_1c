@@ -84,13 +84,21 @@
                                     <th class="whitespace-nowrap px-4 py-3">Кто создал</th>
                                     <th class="whitespace-nowrap px-4 py-3 text-right">Позиций</th>
                                     <th class="min-w-[12rem] px-4 py-3">Комментарий</th>
-                                    <th class="whitespace-nowrap px-4 py-3"></th>
+                                    <th class="whitespace-nowrap px-4 py-3 text-right">Удалить</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100">
                                 @forelse ($paginator as $row)
-                                    <tr class="align-top hover:bg-emerald-50/35">
-                                        <td class="px-2 py-3 text-center align-middle">
+                                    <tr
+                                        class="align-top cursor-pointer hover:bg-emerald-50/35"
+                                        role="link"
+                                        tabindex="0"
+                                        title="Редактировать заявку"
+                                        data-edit-url="{{ route('admin.purchase-requests.edit', $row) }}"
+                                        onclick="if (!event.target.closest('td[data-pr-stop-row]')) { window.location=this.dataset.editUrl; }"
+                                        onkeydown='if (event.key!=="Enter" && event.key!==" ") return; if (event.target.closest("td[data-pr-stop-row]")) return; event.preventDefault(); window.location=this.dataset.editUrl;'
+                                    >
+                                        <td class="px-2 py-3 text-center align-middle" data-pr-stop-row>
                                             <input
                                                 type="checkbox"
                                                 name="ids[]"
@@ -108,11 +116,13 @@
                                         <td class="max-w-md px-4 py-3 text-slate-600">
                                             {{ $row->note ? \Illuminate\Support\Str::limit($row->note, 120) : '—' }}
                                         </td>
-                                        <td class="whitespace-nowrap px-4 py-3 text-right">
-                                            <a
-                                                href="{{ route('admin.purchase-requests.show', $row) }}"
-                                                class="text-sm font-semibold text-emerald-700 hover:text-emerald-900"
-                                            >Подробнее</a>
+                                        <td class="whitespace-nowrap px-4 py-3 text-right" data-pr-stop-row>
+                                            <button
+                                                type="submit"
+                                                form="pr-delete-form-{{ $row->id }}"
+                                                class="text-sm font-semibold text-rose-700 hover:text-rose-900"
+                                                onclick="return confirm('Удалить заявку № {{ $row->id }}?');"
+                                            >Удалить</button>
                                         </td>
                                     </tr>
                                 @empty
@@ -124,6 +134,18 @@
                         </table>
                     </div>
                 </form>
+                @foreach ($paginator as $row)
+                    <form
+                        id="pr-delete-form-{{ $row->id }}"
+                        method="POST"
+                        action="{{ route('admin.purchase-requests.destroy', $row) }}"
+                        class="hidden"
+                        aria-hidden="true"
+                    >
+                        @csrf
+                        @method('DELETE')
+                    </form>
+                @endforeach
                 @if ($paginator->lastPage() > 1)
                     <div class="bg-slate-50/90 px-4 py-3 text-sm text-slate-700">
                         {{ $paginator->links() }}

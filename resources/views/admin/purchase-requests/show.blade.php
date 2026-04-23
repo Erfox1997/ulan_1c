@@ -20,12 +20,29 @@
                     </p>
                 @endif
             </div>
-            <a
-                href="{{ route('admin.purchase-requests.index') }}"
-                class="inline-flex shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-900/5 hover:bg-slate-50"
-            >
-                ← К списку заявок
-            </a>
+            <div class="flex flex-wrap items-center gap-2">
+                <a
+                    href="{{ route('admin.purchase-requests.edit', $purchaseRequest) }}"
+                    class="inline-flex shrink-0 items-center justify-center rounded-xl border border-emerald-200/90 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-900 shadow-sm ring-1 ring-slate-900/5 hover:bg-emerald-100/90"
+                >Изменить</a>
+                <form
+                    method="POST"
+                    action="{{ route('admin.purchase-requests.destroy', $purchaseRequest) }}"
+                    class="inline"
+                    onsubmit="return confirm('Удалить заявку № {{ $purchaseRequest->id }}?');"
+                >
+                    @csrf
+                    @method('DELETE')
+                    <button
+                        type="submit"
+                        class="inline-flex shrink-0 items-center justify-center rounded-xl border border-rose-200/90 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-900 shadow-sm ring-1 ring-rose-900/10 hover:bg-rose-100/90"
+                    >Удалить</button>
+                </form>
+                <a
+                    href="{{ route('admin.purchase-requests.index') }}"
+                    class="inline-flex shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-900/5 hover:bg-slate-50"
+                >← К списку</a>
+            </div>
         </div>
 
         <div

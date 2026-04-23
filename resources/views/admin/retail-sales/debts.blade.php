@@ -5,7 +5,7 @@
     <div
         class="mx-auto max-w-6xl space-y-5"
         x-data="retailDebtsPage(@js(['defaultAccountId' => $defaultAccountId, 'limit' => $limit, 'payUrls' => $payUrls, 'groupPayUrl' => $groupPayUrl]))"
-        @keydown.escape.window="if (groupModalOpen) { closeGroupModal() } else if (modalOpen) { closeModal() }"
+        @keydown.escape.window="if (modalOpen) { closeModal() } else if (groupModalOpen) { closeGroupModal() } else if (detailModalOpen) { closeDetailModal() }"
     >
         @if (session('status'))
             <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-sm">
@@ -101,7 +101,37 @@
                                 </thead>
                                 <tbody>
                                     @foreach ($groupSales as $sale)
-                                        <tr class="align-middle hover:bg-slate-50/90">
+                                        @php
+                                            $detailPayload = [
+                                                'id' => $sale->id,
+                                                'documentDate' => $sale->document_date->format('d.m.Y'),
+                                                'warehouse' => $sale->warehouse->name ?? '—',
+                                                'totalFmt' => $fmt($sale->total_amount),
+                                                'debtFmt' => $fmt($sale->debt_amount),
+                                                'receiptUrl' => route('admin.retail-sales.receipt', $sale),
+                                                'lines' => $sale->lines->map(function ($l) use ($fmt) {
+                                                    $qtyLabel = rtrim(rtrim((string) $l->quantity, '0'), '.');
+                                                    if ($qtyLabel === '') {
+                                                        $qtyLabel = '0';
+                                                    }
+                                                    $unit = trim((string) ($l->unit ?? ''));
+                                                    $art = trim((string) ($l->article_code ?? ''));
+
+                                                    return [
+                                                        'name' => $l->name ?? '—',
+                                                        'article' => $art !== '' ? $art : null,
+                                                        'qtyLabel' => $unit !== '' ? $qtyLabel.' '.$unit : $qtyLabel,
+                                                        'unitPriceFmt' => $l->unit_price !== null ? $fmt($l->unit_price) : '—',
+                                                        'lineSumFmt' => $l->line_sum !== null ? $fmt($l->line_sum) : '—',
+                                                    ];
+                                                })->values()->all(),
+                                            ];
+                                        @endphp
+                                        <tr
+                                            class="align-middle cursor-pointer hover:bg-slate-50/90"
+                                            title="Состав чека — нажмите по строке"
+                                            @click="openSaleDetail(@js($detailPayload))"
+                                        >
                                             <td class="border border-slate-200 px-2 py-2.5 font-mono text-slate-800 sm:px-3">{{ $sale->id }}</td>
                                             <td class="whitespace-nowrap border border-slate-200 px-2 py-2.5 sm:px-3">{{ $sale->document_date->format('d.m.Y') }}</td>
                                             <td class="border border-slate-200 px-2 py-2.5 text-slate-700 sm:px-3">{{ $sale->warehouse->name ?? '—' }}</td>
@@ -111,7 +141,7 @@
                                                 {{ $sale->debtor_comment ? \Illuminate\Support\Str::limit($sale->debtor_comment, 160) : '—' }}
                                             </td>
                                             @if ($paymentAccountsPayload !== [])
-                                                <td class="border border-slate-200 px-2 py-2 text-center sm:px-3">
+                                                <td class="border border-slate-200 px-2 py-2 text-center sm:px-3" @click.stop>
                                                     <button
                                                         type="button"
                                                         class="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
@@ -211,6 +241,109 @@
                         </button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        {{-- Состав чека: что купил --}}
+        <div
+            x-show="detailModalOpen"
+            x-cloak
+            class="fixed inset-0 z-[200] flex items-center justify-center p-4"
+            x-transition:enter="ease-out duration-200"
+            x-transition:enter-start="opacity-0"
+            x-transition:enter-end="opacity-100"
+            x-transition:leave="ease-in duration-150"
+            x-transition:leave-start="opacity-100"
+            x-transition:leave-end="opacity-0"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="retail-debt-detail-title"
+        >
+            <div class="absolute inset-0 bg-slate-900/55 backdrop-blur-[1px]" @click="closeDetailModal()" aria-hidden="true"></div>
+            <div
+                class="relative z-10 max-h-[min(90vh,40rem)] w-full max-w-2xl overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl ring-1 ring-slate-900/10"
+                @click.stop
+                x-transition:enter="ease-out duration-200"
+                x-transition:enter-start="opacity-0 scale-95"
+                x-transition:enter-end="opacity-100 scale-100"
+            >
+                <div class="sticky top-0 z-10 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-emerald-50/80 px-5 py-4">
+                    <h2 id="retail-debt-detail-title" class="text-lg font-bold text-slate-900">Состав чека</h2>
+                    <p class="mt-1 text-sm text-slate-600" x-show="detailSale">
+                        Чек № <span class="font-mono font-semibold text-slate-800" x-text="detailSale && detailSale.id"></span>
+                        <span class="text-slate-400">·</span>
+                        <span x-text="detailSale && detailSale.documentDate"></span>
+                    </p>
+                </div>
+                <div class="space-y-4 px-5 py-4" x-show="detailSale">
+                    <div class="grid gap-2 text-sm sm:grid-cols-2">
+                        <p class="text-slate-600">
+                            Склад: <span class="font-medium text-slate-900" x-text="detailSale && detailSale.warehouse"></span>
+                        </p>
+                        <p class="text-slate-600 sm:text-right">
+                            Сумма чека: <span class="font-semibold tabular-nums text-slate-900" x-text="detailSale && detailSale.totalFmt"></span> сом
+                        </p>
+                        <p class="text-slate-600 sm:col-span-2 sm:text-left">
+                            Остаток долга: <span class="font-bold tabular-nums text-rose-800" x-text="detailSale && detailSale.debtFmt"></span> сом
+                        </p>
+                    </div>
+                    <div
+                        class="overflow-x-auto rounded-xl border border-slate-200"
+                        x-show="detailSale && detailSale.lines && detailSale.lines.length > 0"
+                    >
+                        <table class="min-w-full border-collapse text-left text-sm">
+                            <thead>
+                                <tr class="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                    <th class="border-b border-slate-200 px-3 py-2">Наименование</th>
+                                    <th class="whitespace-nowrap border-b border-slate-200 px-2 py-2 sm:px-3">Кол-во</th>
+                                    <th class="whitespace-nowrap border-b border-slate-200 px-2 py-2 text-right sm:px-3">Цена</th>
+                                    <th class="whitespace-nowrap border-b border-slate-200 px-2 py-2 text-right sm:px-3">Сумма</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="(line, li) in (detailSale && detailSale.lines) ? detailSale.lines : []" :key="li">
+                                    <tr class="align-top border-b border-slate-100 last:border-b-0">
+                                        <td class="px-3 py-2.5">
+                                            <span class="font-medium text-slate-900" x-text="line.name"></span>
+                                            <span
+                                                class="mt-0.5 block text-xs text-slate-500"
+                                                x-show="line.article"
+                                                x-text="line.article ? 'Арт.: ' + line.article : ''"
+                                            ></span>
+                                        </td>
+                                        <td class="whitespace-nowrap px-2 py-2.5 tabular-nums text-slate-800 sm:px-3" x-text="line.qtyLabel"></td>
+                                        <td class="whitespace-nowrap px-2 py-2.5 text-right tabular-nums text-slate-800 sm:px-3" x-text="line.unitPriceFmt"></td>
+                                        <td class="whitespace-nowrap px-2 py-2.5 text-right tabular-nums font-semibold text-slate-900 sm:px-3" x-text="line.lineSumFmt"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p
+                        class="rounded-lg border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-center text-sm text-slate-500"
+                        x-show="detailSale && (!detailSale.lines || detailSale.lines.length === 0)"
+                    >
+                        Позиции в чеке не найдены.
+                    </p>
+                </div>
+                <div class="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <a
+                        x-show="detailSale && detailSale.receiptUrl"
+                        :href="detailSale && detailSale.receiptUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 sm:w-auto"
+                    >
+                        Печать чека (как в магазине)
+                    </a>
+                    <button
+                        type="button"
+                        class="w-full rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:w-auto"
+                        @click="closeDetailModal()"
+                    >
+                        Закрыть
+                    </button>
+                </div>
             </div>
         </div>
 

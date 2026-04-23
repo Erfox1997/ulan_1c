@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StorePurchaseRequestRequest;
+use App\Http\Requests\UpdatePurchaseRequestRequest;
 use App\Models\OpeningStockBalance;
 use App\Models\PurchaseRequest;
 use App\Models\PurchaseRequestLine;
@@ -16,6 +17,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PurchaseRequestController extends Controller
@@ -118,7 +120,7 @@ class PurchaseRequestController extends Controller
         ]);
     }
 
-    public function exportPdf(Request $request): \Symfony\Component\HttpFoundation\Response
+    public function exportPdf(Request $request): Response
     {
         $branchId = (int) auth()->user()->branch_id;
         $ids = $this->validatedPurchaseRequestIds($request, $branchId);
@@ -170,6 +172,63 @@ class PurchaseRequestController extends Controller
             'pageTitle' => 'Заявка № '.$purchaseRequest->id,
             'purchaseRequest' => $purchaseRequest,
         ]);
+    }
+
+    public function edit(PurchaseRequest $purchaseRequest): View
+    {
+        $purchaseRequest->load([
+            'lines' => function ($q) {
+                $q->orderBy('id');
+            },
+            'lines.good',
+            'lines.warehouse',
+        ]);
+
+        return view('admin.purchase-requests.edit', [
+            'pageTitle' => 'Редактирование заявки № '.$purchaseRequest->id,
+            'purchaseRequest' => $purchaseRequest,
+        ]);
+    }
+
+    public function update(UpdatePurchaseRequestRequest $request, PurchaseRequest $purchaseRequest): RedirectResponse
+    {
+        $validated = $request->validated();
+        $note = isset($validated['note']) ? trim((string) $validated['note']) : '';
+        $note = $note === '' ? null : $note;
+        $lines = $validated['lines'];
+
+        DB::transaction(function () use ($purchaseRequest, $note, $lines): void {
+            $purchaseRequest->update(['note' => $note]);
+
+            foreach ($lines as $row) {
+                if (! empty($row['remove'])) {
+                    PurchaseRequestLine::query()
+                        ->where('purchase_request_id', $purchaseRequest->id)
+                        ->whereKey((int) $row['id'])
+                        ->delete();
+                } else {
+                    PurchaseRequestLine::query()
+                        ->where('purchase_request_id', $purchaseRequest->id)
+                        ->whereKey((int) $row['id'])
+                        ->update([
+                            'quantity_requested' => (float) $row['quantity'],
+                        ]);
+                }
+            }
+        });
+
+        return redirect()
+            ->route('admin.purchase-requests.show', $purchaseRequest)
+            ->with('status', 'Заявка обновлена.');
+    }
+
+    public function destroy(PurchaseRequest $purchaseRequest): RedirectResponse
+    {
+        $purchaseRequest->delete();
+
+        return redirect()
+            ->route('admin.purchase-requests.index')
+            ->with('status', 'Заявка удалена.');
     }
 
     public function store(StorePurchaseRequestRequest $request): RedirectResponse

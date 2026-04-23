@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<receipts>
+  <receipt>
+    <amountToBePaid xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <assessedContributionsAmount xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <bankAccount xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <closingBalances xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <contractorBankAccount xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <contractorName>ИП Асаналиев</contractorName>
+    <contractorPin>21706199700221</contractorPin>
+    <correctedReceiptCode xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <correctedReceiptCreationDate xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <correctionReasonCode xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <correctionReasonName xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <createdDate>2026-04-23</createdDate>
+    <currencyCode>417</currencyCode>
+    <currencyName>Сом</currencyName>
+    <deliveryContractDate>2026-04-23T00:00:00+06:00</deliveryContractDate>
+    <deliveryContractNumber/>
+    <deliveryDate>2026-04-23</deliveryDate>
+    <documentStatusName>Новый</documentStatusName>
+    <exchangeCode>751fdfc0-99fb-42a3-bf03-9ea764162175</exchangeCode>
+    <exchangeRate>1.0000</exchangeRate>
+    <finesAmount xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <foreignName>ИП Асаналиев</foreignName>
+    <goods>
+      <good>
+        <baseCount>1.00000</baseCount>
+        <goodsName>техническое обслуживание</goodsName>
+        <price>50000.00000</price>
+        <stAmount>0.00</stAmount>
+        <stCode>50</stCode>
+        <vatAmount>0.00</vatAmount>
+      </good>
+    </goods>
+    <invoiceDate xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <invoiceDeliveryTypeCode>399</invoiceDeliveryTypeCode>
+    <invoiceNumber xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <isIndustry>false</isIndustry>
+    <isPriceWithoutTaxes>false</isPriceWithoutTaxes>
+    <isResident>true</isResident>
+    <markGoods xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <note>Реализация №5 (услуги)</note>
+    <openingBalances xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <ownedCrmReceiptCode>LES-5-S</ownedCrmReceiptCode>
+    <paidAmount xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <paymentTypeCode>10</paymentTypeCode>
+    <personalAccountNumber xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <receiptTypeCode>20</receiptTypeCode>
+    <sellerBranchPin xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"/>
+    <totalCost>50000.00</totalCost>
+    <type>10</type>
+    <vatCode>100</vatCode>
+    <vatDeliveryTypeCode>102</vatDeliveryTypeCode>
+  </receipt>
+</receipts>

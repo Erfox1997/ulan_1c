@@ -109,9 +109,17 @@ class StoreLegalEntitySaleRequest extends FormRequest
                         ->first();
                     $avail = $balance !== null ? (float) $balance->quantity : 0.0;
                     if ($avail + 1e-9 < $qNum) {
+                        $availText = rtrim(rtrim((string) $avail, '0'), '.');
+                        if ($availText === '' || $availText === '-') {
+                            $availText = '0';
+                        }
+                        $goodName = trim((string) ($good->name ?? ''));
+                        $itemLabel = $goodName !== ''
+                            ? '«'.$code.'», наименование: «'.$goodName.'»'
+                            : '«'.$code.'»';
                         $v->errors()->add(
                             "lines.{$i}.quantity",
-                            'На складе недостаточно «'.$code.'» (доступно: '.rtrim(rtrim((string) $avail, '0'), '.').').'
+                            'На складе недостаточно '.$itemLabel.' (доступно: '.$availText.').'
                         );
                     }
                 }

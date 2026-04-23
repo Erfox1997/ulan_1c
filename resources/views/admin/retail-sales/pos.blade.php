@@ -47,10 +47,6 @@
                         <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
                     @endforeach
                 </select>
-                <a
-                    href="{{ route('admin.retail-sales.history', array_filter(['warehouse_id' => $selectedWarehouseId], static fn ($v) => (int) $v > 0)) }}"
-                    class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm ring-1 ring-slate-900/5 transition hover:border-emerald-300 hover:bg-emerald-50/80 hover:text-emerald-900"
-                >История продаж</a>
             </form>
         </div>
 

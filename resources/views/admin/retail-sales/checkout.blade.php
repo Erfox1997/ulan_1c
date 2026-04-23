@@ -88,7 +88,6 @@
                                 @focus="$event.target.select()"
                                 @mouseup="$event.preventDefault()"
                                 class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-right text-sm font-bold tabular-nums"
-                                placeholder="0,00"
                             />
                         </div>
                     </div>

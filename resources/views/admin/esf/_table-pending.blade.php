@@ -1,5 +1,6 @@
 @php
     $esfFilter = $esfFilter ?? ['date_from' => '', 'date_to' => ''];
+    $esfLinesExcelPreviewUrl = route('admin.esf.lines-excel-preview');
     $mergeFormId = 'esf-pending-merge-form';
     $bulkSubmittedFormId = 'esf-pending-bulk-submitted-form';
     $bulkUnqueueFormId = 'esf-pending-bulk-unqueue-form';
@@ -533,7 +534,9 @@
         }
     }
 
-    function esfSubmitPendingExcel(mergeFormId, formId) {
+    const esfLinesExcelPreviewUrl = {!! json_encode($esfLinesExcelPreviewUrl) !!};
+
+    async function esfSubmitPendingExcel(mergeFormId, formId) {
         const mergeForm = document.getElementById(mergeFormId);
         const f = document.getElementById(formId);
         if (!mergeForm || !f) {
@@ -565,6 +568,38 @@
             h.value = cb.value;
             mount.appendChild(h);
         });
+        const formData = new FormData(f);
+        try {
+            const res = await fetch(esfLinesExcelPreviewUrl, {
+                method: 'POST',
+                body: formData,
+                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+            });
+            const data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+                const msg = data && data.message
+                    ? data.message
+                    : (res.status === 422 && data && data.errors
+                        ? Object.values(data.errors).flat().join(' ')
+                        : 'Не удалось подготовить выгрузку.');
+                window.alert(msg);
+                return;
+            }
+            if (data.missing > 0) {
+                const codeLabel = data.kind === 'services' ? 'ГКЭД' : 'ТНВЭД';
+                const text =
+                    'У ' + data.missing + ' из ' + data.total + ' позиций нет кода ' + codeLabel + '. ' +
+                    'Добавьте коды в «ТНВЭД / ГКЭД коды» (Бухгалтерия).\\n\\n' +
+                    'Скачать Excel всё равно? (у позиций без кода в файле ячейка будет пустой).';
+                if (!window.confirm(text)) {
+                    return;
+                }
+            }
+        } catch (e) {
+            window.alert('Сеть: не удалось проверить позиции. Повторите.');
+            return;
+        }
         f.submit();
     }
 
