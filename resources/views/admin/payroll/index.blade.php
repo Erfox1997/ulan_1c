@@ -71,17 +71,49 @@
                 Нет сотрудников. Добавьте их в «Настройки → Сотрудники».
             </div>
         @else
+            @php
+                $contractEmployees = $employees->where('salary_contract_separate', true);
+                $showManualForm = $contractEmployees->isNotEmpty() && ! ($periodInvalid ?? false);
+            @endphp
+            <form
+                id="payroll-manual-accruals"
+                method="POST"
+                action="{{ route('admin.payroll.manual-accruals') }}"
+                class="hidden"
+                aria-hidden="true"
+            >
+                @csrf
+                <input type="hidden" name="period_from" value="{{ $periodFrom }}" />
+                <input type="hidden" name="period_to" value="{{ $periodTo }}" />
+            </form>
             <div class="overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-md ring-1 ring-slate-900/[0.04]">
-                <div class="border-b border-slate-100 px-4 py-3 sm:px-5">
+                <div class="flex flex-col gap-2 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                     <h2 class="text-sm font-bold text-slate-900">Сотрудники</h2>
+                    @if ($showManualForm)
+                        <button
+                            type="submit"
+                            form="payroll-manual-accruals"
+                            class="w-full shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100 sm:w-auto"
+                        >
+                            Сохранить суммы по договору
+                        </button>
+                    @endif
                 </div>
+                @if ($showManualForm)
+                    <p class="border-b border-slate-100 bg-slate-50/50 px-4 py-2 text-xs text-slate-600 sm:px-5">
+                        Сумма за период — только у сотрудников с галочкой «отдельная зарплата по договору» в карточке; входит в «к выплате» вместе с окладом и процентами, минус авансы и штрафы.
+                    </p>
+                @endif
                 <div class="overflow-x-auto">
-                    <table class="w-full min-w-[36rem] text-left text-sm">
+                    <table class="w-full min-w-[42rem] text-left text-sm">
                         <thead class="border-b border-slate-200 bg-slate-50/95 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                             <tr>
                                 <th class="px-4 py-2.5 sm:px-5">Сотрудник</th>
                                 <th class="px-2 py-2.5 whitespace-nowrap">Статус</th>
                                 <th class="px-2 py-2.5 text-right whitespace-nowrap">К выплате</th>
+                                @if ($showManualForm)
+                                    <th class="px-2 py-2.5 text-right whitespace-nowrap">По договору</th>
+                                @endif
                                 <th class="w-28 px-2 py-2.5 text-right sm:w-36"></th>
                             </tr>
                         </thead>
@@ -91,6 +123,7 @@
                                     $net = $netByEmployeeId->get($emp->id);
                                     $payout = $payoutByEmployeeId->get($emp->id);
                                     $hasPayout = $payout !== null;
+                                    $manualRow = $manualByEmployeeId->get($emp->id);
                                 @endphp
                                 <tr class="hover:bg-emerald-50/50">
                                     <td class="px-4 py-3 align-top sm:px-5">
@@ -126,6 +159,25 @@
                                             </span>
                                         @endif
                                     </td>
+                                    @if ($showManualForm)
+                                        <td class="px-2 py-3 align-middle text-right">
+                                            @if ($emp->salary_contract_separate)
+                                                <input
+                                                    type="text"
+                                                    inputmode="decimal"
+                                                    name="amounts[{{ $emp->id }}]"
+                                                    form="payroll-manual-accruals"
+                                                    value="{{ old('amounts.'.$emp->id, $manualRow !== null ? $manualRow->amount : '') }}"
+                                                    class="w-[6.5rem] rounded-lg border border-slate-200 px-2 py-1.5 text-right text-sm tabular-nums text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/25"
+                                                    placeholder="0"
+                                                    @focus="$event.target.select()"
+                                                    @click="$event.target.select()"
+                                                />
+                                            @else
+                                                <span class="text-slate-300">—</span>
+                                            @endif
+                                        </td>
+                                    @endif
                                     <td class="px-2 py-3 align-middle text-right">
                                         @if (! ($periodInvalid ?? false) && $hasPayout)
                                             <form

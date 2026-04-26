@@ -24,6 +24,11 @@
                     <dd class="tabular-nums font-medium">{{ $fmtMoney($employee->salary_percent_services) }}%</dd>
                 </div>
             </dl>
+            @if ($employee->salary_contract_separate)
+                <div class="mt-3 border-t border-dashed border-slate-200 pt-3">
+                    <p class="text-xs font-semibold text-emerald-900/90">Отдельная зарплата по договору</p>
+                </div>
+            @endif
             @if ($employee->user_id === null)
                 <p class="mt-4 rounded-lg border border-amber-200/90 bg-amber-50/90 px-3 py-2 text-xs text-amber-950">
                     Нет привязки к учётной записи — оборот розницы для % с товаров не считается.
@@ -55,6 +60,12 @@
                     <dt>Начислено % с услуг</dt>
                     <dd class="tabular-nums">{{ $fmtMoney($cr['services_commission']) }}</dd>
                 </div>
+                @if (($cr['manual_contract'] ?? 0) > 0)
+                    <div class="flex justify-between gap-3 text-slate-800">
+                        <dt>По договору (за период)</dt>
+                        <dd class="tabular-nums">{{ $fmtMoney($cr['manual_contract']) }}</dd>
+                    </div>
+                @endif
                 <div class="flex justify-between gap-3 text-rose-800/95">
                     <dt>Авансы</dt>
                     <dd class="tabular-nums">− {{ $fmtMoney($cr['advances']) }}</dd>

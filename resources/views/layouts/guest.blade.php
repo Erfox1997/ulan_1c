@@ -15,14 +15,17 @@
         @vite(['resources/css/app.css', 'resources/js/app.js'])
     </head>
     <body class="font-sans text-gray-900 antialiased">
-        <div class="min-h-screen flex flex-col sm:justify-center items-center pt-6 sm:pt-0 bg-gray-100">
-            <div>
-                <a href="/">
-                    <x-application-logo class="w-20 h-20 fill-current text-gray-500" />
+        <div class="min-h-screen flex flex-col sm:justify-center items-center pt-8 pb-10 sm:pt-0 sm:pb-0 px-4 bg-gradient-to-br from-slate-100 via-slate-50 to-emerald-50/60">
+            <div class="text-center">
+                <a href="/" class="inline-flex flex-col items-center gap-1 group">
+                    <span class="text-2xl sm:text-3xl font-semibold text-slate-800 tracking-tight group-hover:text-emerald-800 transition-colors">
+                        {{ config('app.name', 'Laravel') }}
+                    </span>
                 </a>
             </div>
 
-            <div class="w-full sm:max-w-md mt-6 px-6 py-4 bg-white shadow-md overflow-hidden sm:rounded-lg">
+            <div class="w-full sm:max-w-md mt-8 px-6 py-8 sm:px-8 sm:py-9 bg-white/90 backdrop-blur-sm border border-slate-200/80 shadow-[0_20px_50px_-15px_rgba(15,23,42,0.15)] overflow-hidden rounded-2xl
+                [&_input]:transition-colors [&_input]:focus:border-emerald-500 [&_input]:focus:ring-emerald-500/30">
                 {{ $slot }}
             </div>
         </div>

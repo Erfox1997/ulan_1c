@@ -2,6 +2,7 @@
     'salaryFixed' => null,
     'salaryGoods' => null,
     'salaryServices' => null,
+    'salaryContractSeparate' => false,
 ])
 <div class="grid gap-4 sm:grid-cols-3">
     <div>
@@ -38,4 +39,17 @@
         />
     </div>
 </div>
-<p class="mt-2 text-xs text-slate-500">Проценты — от 0 до 100. Расчёт зарплаты по продажам можно подключить в учёте отдельно.</p>
+<div class="mt-4 rounded-lg border border-slate-200/90 bg-slate-50/80 px-3 py-3">
+    <label class="flex cursor-pointer items-center gap-3">
+        <input type="hidden" name="salary_contract_separate" value="0" />
+        <input
+            type="checkbox"
+            name="salary_contract_separate"
+            value="1"
+            class="h-4 w-4 shrink-0 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500/30"
+            @checked((string) old('salary_contract_separate', $salaryContractSeparate ? '1' : '0') === '1')
+        />
+        <span class="text-xs font-semibold text-slate-800">Отдельная зарплата по договору</span>
+    </label>
+</div>
+<p class="mt-2 text-xs text-slate-500">Проценты — от 0 до 100.</p>

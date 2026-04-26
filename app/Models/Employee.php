@@ -33,6 +33,7 @@ class Employee extends Model
         'salary_fixed',
         'salary_percent_goods',
         'salary_percent_services',
+        'salary_contract_separate',
     ];
 
     protected function casts(): array
@@ -41,6 +42,7 @@ class Employee extends Model
             'salary_fixed' => 'decimal:2',
             'salary_percent_goods' => 'decimal:2',
             'salary_percent_services' => 'decimal:2',
+            'salary_contract_separate' => 'boolean',
         ];
     }
 

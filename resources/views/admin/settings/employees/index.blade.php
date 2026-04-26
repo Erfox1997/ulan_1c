@@ -35,6 +35,7 @@
                             <th class="px-4 py-2.5 text-right">Оклад</th>
                             <th class="px-4 py-2.5 text-right">% товары</th>
                             <th class="px-4 py-2.5 text-right">% услуги</th>
+                            <th class="px-4 py-2.5">Отд. по дог.</th>
                             <th class="px-4 py-2.5"></th>
                         </tr>
                     </thead>
@@ -54,13 +55,20 @@
                                 <td class="px-4 py-2.5 text-right tabular-nums">{{ $fmtMoney($e->salary_fixed) }}</td>
                                 <td class="px-4 py-2.5 text-right tabular-nums">{{ $fmtPct($e->salary_percent_goods) }}</td>
                                 <td class="px-4 py-2.5 text-right tabular-nums">{{ $fmtPct($e->salary_percent_services) }}</td>
+                                <td class="px-4 py-2.5 text-xs text-slate-600">
+                                    @if ($e->salary_contract_separate)
+                                        <span class="font-semibold text-emerald-800">Да</span>
+                                    @else
+                                        —
+                                    @endif
+                                </td>
                                 <td class="px-4 py-2.5 text-right">
                                     <a href="{{ route('admin.settings.employees.edit', $e) }}" class="text-sm font-medium text-emerald-700 hover:text-emerald-900">Изменить</a>
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" class="px-4 py-10 text-center text-sm text-slate-500">Сотрудников пока нет.</td>
+                                <td colspan="9" class="px-4 py-10 text-center text-sm text-slate-500">Сотрудников пока нет.</td>
                             </tr>
                         @endforelse
                     </tbody>

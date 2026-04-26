@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Employee;
 use App\Models\EmployeeAdvance;
 use App\Models\EmployeePenalty;
+use App\Models\PayrollManualAccrual;
 use App\Models\RetailSale;
 use App\Models\ServiceOrder;
 use App\Models\ServiceOrderLine;
@@ -28,6 +29,7 @@ class PayrollCalculationService
      *   services_commission: float,
      *   advances: float,
      *   penalties: float,
+     *   manual_contract: float,
      *   accrual: float,
      *   net: float
      * }>
@@ -42,6 +44,13 @@ class PayrollCalculationService
             ->with('user')
             ->orderBy('full_name')
             ->get();
+
+        $manualByEmployeeId = PayrollManualAccrual::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('period_from', $fromStr)
+            ->whereDate('period_to', $toStr)
+            ->get()
+            ->keyBy('employee_id');
 
         $out = [];
 
@@ -85,7 +94,13 @@ class PayrollCalculationService
                 ->whereBetween('entry_date', [$fromStr, $toStr])
                 ->sum('amount');
 
-            $accrual = round($fixed + $goodsCommission + $servicesCommission, 2);
+            $manualContract = 0.0;
+            if ($employee->salary_contract_separate) {
+                $manualRow = $manualByEmployeeId->get($employee->id);
+                $manualContract = $manualRow !== null ? (float) $manualRow->amount : 0.0;
+            }
+
+            $accrual = round($fixed + $goodsCommission + $servicesCommission + $manualContract, 2);
             $net = round($accrual - $advances - $penalties, 2);
 
             $out[] = [
@@ -97,6 +112,7 @@ class PayrollCalculationService
                 'services_commission' => $servicesCommission,
                 'advances' => round($advances, 2),
                 'penalties' => round($penalties, 2),
+                'manual_contract' => round($manualContract, 2),
                 'accrual' => $accrual,
                 'net' => $net,
             ];

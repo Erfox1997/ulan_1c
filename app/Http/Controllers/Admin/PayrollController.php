@@ -10,6 +10,7 @@ use App\Models\Employee;
 use App\Models\EmployeeAdvance;
 use App\Models\EmployeePenalty;
 use App\Models\Organization;
+use App\Models\PayrollManualAccrual;
 use App\Models\PayrollPayout;
 use App\Services\CashLedgerService;
 use App\Services\PayrollCalculationService;
@@ -46,6 +47,7 @@ class PayrollController extends Controller
 
         $netByEmployeeId = collect();
         $payoutByEmployeeId = collect();
+        $manualByEmployeeId = collect();
 
         $employees = Employee::query()
             ->where('branch_id', $branchId)
@@ -65,6 +67,13 @@ class PayrollController extends Controller
                 ->whereDate('period_to', $periodToCarbon->toDateString())
                 ->get()
                 ->keyBy('employee_id');
+
+            $manualByEmployeeId = PayrollManualAccrual::query()
+                ->where('branch_id', $branchId)
+                ->whereDate('period_from', $periodFromCarbon->toDateString())
+                ->whereDate('period_to', $periodToCarbon->toDateString())
+                ->get()
+                ->keyBy('employee_id');
         }
 
         return view('admin.payroll.index', [
@@ -78,7 +87,75 @@ class PayrollController extends Controller
             'employees' => $employees,
             'netByEmployeeId' => $netByEmployeeId,
             'payoutByEmployeeId' => $payoutByEmployeeId,
+            'manualByEmployeeId' => $manualByEmployeeId,
         ]);
+    }
+
+    public function saveManualAccruals(Request $request): RedirectResponse
+    {
+        $this->ensureCanManageBranchStaff();
+
+        $branchId = (int) auth()->user()->branch_id;
+
+        $validated = $request->validate([
+            'period_from' => ['required', 'date'],
+            'period_to' => ['required', 'date', 'after_or_equal:period_from'],
+            'amounts' => ['nullable', 'array'],
+            'amounts.*' => ['nullable', 'numeric', 'min:0'],
+        ]);
+
+        $from = Carbon::parse($validated['period_from'])->toDateString();
+        $to = Carbon::parse($validated['period_to'])->toDateString();
+
+        $contractIds = Employee::query()
+            ->where('branch_id', $branchId)
+            ->where('salary_contract_separate', true)
+            ->pluck('id');
+
+        $amounts = $validated['amounts'] ?? [];
+
+        DB::transaction(function () use ($branchId, $from, $to, $contractIds, $amounts): void {
+            foreach ($contractIds as $employeeId) {
+                $raw = $amounts[(string) $employeeId] ?? $amounts[$employeeId] ?? null;
+                if ($raw === null || $raw === '') {
+                    PayrollManualAccrual::query()
+                        ->where('branch_id', $branchId)
+                        ->where('employee_id', $employeeId)
+                        ->whereDate('period_from', $from)
+                        ->whereDate('period_to', $to)
+                        ->delete();
+
+                    continue;
+                }
+                $amt = round((float) $raw, 2);
+                if ($amt <= 0) {
+                    PayrollManualAccrual::query()
+                        ->where('branch_id', $branchId)
+                        ->where('employee_id', $employeeId)
+                        ->whereDate('period_from', $from)
+                        ->whereDate('period_to', $to)
+                        ->delete();
+
+                    continue;
+                }
+                PayrollManualAccrual::query()->updateOrCreate(
+                    [
+                        'branch_id' => $branchId,
+                        'employee_id' => $employeeId,
+                        'period_from' => $from,
+                        'period_to' => $to,
+                    ],
+                    ['amount' => $amt]
+                );
+            }
+        });
+
+        return redirect()
+            ->route('admin.payroll', [
+                'period_from' => $from,
+                'period_to' => $to,
+            ])
+            ->with('status', 'Суммы по договору за период сохранены.');
     }
 
     public function revokePayout(Request $request, Employee $employee): RedirectResponse

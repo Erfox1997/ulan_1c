@@ -66,6 +66,7 @@ class EmployeeController extends Controller
             'salary_fixed' => ['nullable', 'numeric', 'min:0'],
             'salary_percent_goods' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'salary_percent_services' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'salary_contract_separate' => ['boolean'],
         ]);
 
         DB::transaction(function () use ($validated, $branchId) {
@@ -88,6 +89,7 @@ class EmployeeController extends Controller
                 'salary_fixed' => $validated['salary_fixed'] ?? null,
                 'salary_percent_goods' => $validated['salary_percent_goods'] ?? null,
                 'salary_percent_services' => $validated['salary_percent_services'] ?? null,
+                'salary_contract_separate' => (bool) ($validated['salary_contract_separate'] ?? false),
             ]);
         });
 
@@ -131,6 +133,7 @@ class EmployeeController extends Controller
             'salary_fixed' => ['nullable', 'numeric', 'min:0'],
             'salary_percent_goods' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'salary_percent_services' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'salary_contract_separate' => ['boolean'],
         ]);
 
         DB::transaction(function () use ($validated, $employee) {
@@ -150,6 +153,7 @@ class EmployeeController extends Controller
                 'salary_fixed' => $validated['salary_fixed'] ?? null,
                 'salary_percent_goods' => $validated['salary_percent_goods'] ?? null,
                 'salary_percent_services' => $validated['salary_percent_services'] ?? null,
+                'salary_contract_separate' => (bool) ($validated['salary_contract_separate'] ?? false),
             ]);
         });
 

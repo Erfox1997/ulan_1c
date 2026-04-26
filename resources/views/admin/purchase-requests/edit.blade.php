@@ -83,12 +83,14 @@
                                         </td>
                                         <td class="whitespace-nowrap px-3 py-2.5 text-right">
                                             <input
-                                                type="number"
+                                                type="text"
+                                                inputmode="decimal"
                                                 name="lines[{{ $i }}][quantity]"
                                                 value="{{ old('lines.'.$i.'.quantity', $line->quantity_requested) }}"
-                                                step="any"
-                                                min="0.0000001"
+                                                autocomplete="off"
                                                 class="w-28 rounded-lg border border-slate-200 px-2 py-1 text-right text-sm tabular-nums text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                @focus="$event.target.select()"
+                                                @click="$event.target.select()"
                                             />
                                         </td>
                                         <td class="px-3 py-2.5 text-center">

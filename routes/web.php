@@ -297,6 +297,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::get('p/payroll.placeholder', fn () => redirect()->route('admin.payroll', [], 301));
         Route::get('p/payroll', [PayrollController::class, 'index'])->name('payroll');
+        Route::post('p/payroll/manual-accruals', [PayrollController::class, 'saveManualAccruals'])->name('payroll.manual-accruals');
         Route::get('p/payroll/{employee}', [PayrollController::class, 'show'])->name('payroll.show');
         Route::post('p/payroll/{employee}/payout', [PayrollController::class, 'payoutForEmployee'])->name('payroll.payout-employee');
         Route::get('p/payroll/{employee}/pay-slip', [PayrollController::class, 'paySlip'])->name('payroll.pay-slip');

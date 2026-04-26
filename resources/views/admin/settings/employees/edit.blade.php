@@ -110,6 +110,7 @@
                     'salaryFixed' => old('salary_fixed', $employee->salary_fixed),
                     'salaryGoods' => old('salary_percent_goods', $employee->salary_percent_goods),
                     'salaryServices' => old('salary_percent_services', $employee->salary_percent_services),
+                    'salaryContractSeparate' => (string) old('salary_contract_separate', $employee->salary_contract_separate ? '1' : '0') === '1',
                 ])
 
                 <div class="flex flex-wrap gap-3">

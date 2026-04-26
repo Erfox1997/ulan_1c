@@ -165,6 +165,9 @@
             </tr>
         </thead>
         <tbody>
+            @if (($cr['manual_contract'] ?? 0) > 0)
+                <tr><td>В т.ч. по договору (за период)</td><td class="num">{{ $fmt($cr['manual_contract']) }}</td></tr>
+            @endif
             <tr><td>Начислено всего</td><td class="num">{{ $fmt($cr['accrual']) }}</td></tr>
             <tr><td>Удержано (авансы)</td><td class="num">− {{ $fmt($cr['advances']) }}</td></tr>
             <tr><td>Удержано (штрафы)</td><td class="num">− {{ $fmt($cr['penalties']) }}</td></tr>
