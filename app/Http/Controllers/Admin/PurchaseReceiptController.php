@@ -8,7 +8,9 @@ use App\Models\Organization;
 use App\Models\PurchaseReceipt;
 use App\Models\PurchaseReceiptLine;
 use App\Models\Warehouse;
+use App\Services\ArticleSequenceService;
 use App\Services\OpeningBalanceService;
+use App\Support\PurchaseReceiptLineDraft;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -19,7 +21,8 @@ use RuntimeException;
 class PurchaseReceiptController extends Controller
 {
     public function __construct(
-        private readonly OpeningBalanceService $openingBalanceService
+        private readonly OpeningBalanceService $openingBalanceService,
+        private readonly ArticleSequenceService $articleSequence,
     ) {}
 
     public function index(): View
@@ -93,7 +96,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
-                    'category' => (string) ($line['category'] ?? ''),
+                    'markup_percent' => (string) ($line['markup_percent'] ?? ''),
                     'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                     'quantity' => (string) ($line['quantity'] ?? ''),
                     'unit_price' => isset($line['unit_price']) ? (string) $line['unit_price'] : '',
@@ -139,7 +142,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
-                    'category' => (string) ($line['category'] ?? ''),
+                    'markup_percent' => (string) ($line['markup_percent'] ?? ''),
                     'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                     'quantity' => (string) ($line['quantity'] ?? ''),
                     'unit_price' => isset($line['unit_price']) ? (string) $line['unit_price'] : '',
@@ -157,7 +160,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) $line->article_code,
                     'name' => (string) $line->name,
                     'barcode' => $good?->barcode ? (string) $good->barcode : '',
-                    'category' => $good?->category ? (string) $good->category : '',
+                    'markup_percent' => self::impliedMarkupPercentHint($line->unit_price, $line->sale_price),
                     'unit' => trim((string) ($line->unit ?? '')) ?: 'шт.',
                     'quantity' => (string) $line->quantity,
                     'unit_price' => $line->unit_price !== null ? (string) $line->unit_price : '',
@@ -193,9 +196,10 @@ class PurchaseReceiptController extends Controller
         $supplierName = trim((string) $request->validated('supplier_name', ''));
         $documentDate = (string) $request->validated('document_date');
 
-        $lines = $request->input('lines', []);
+        $linesInput = $request->input('lines', []);
 
-        DB::transaction(function () use ($branchId, $warehouseId, $supplierName, $documentDate, $lines) {
+        DB::transaction(function () use ($branchId, $warehouseId, $supplierName, $documentDate, $linesInput) {
+            $lines = $this->assignMissingPurchaseLineArticleCodes($branchId, $linesInput);
             $receipt = PurchaseReceipt::query()->create([
                 'branch_id' => $branchId,
                 'warehouse_id' => $warehouseId,
@@ -294,10 +298,11 @@ class PurchaseReceiptController extends Controller
         $warehouseId = (int) $request->validated('warehouse_id');
         $supplierName = trim((string) $request->validated('supplier_name', ''));
         $documentDate = (string) $request->validated('document_date');
-        $lines = $request->input('lines', []);
+        $linesInput = $request->input('lines', []);
 
         try {
-            DB::transaction(function () use ($purchaseReceipt, $branchId, $warehouseId, $supplierName, $documentDate, $lines) {
+            DB::transaction(function () use ($purchaseReceipt, $branchId, $warehouseId, $supplierName, $documentDate, $linesInput) {
+                $lines = $this->assignMissingPurchaseLineArticleCodes($branchId, $linesInput);
                 $receipt = PurchaseReceipt::query()
                     ->whereKey($purchaseReceipt->id)
                     ->lockForUpdate()
@@ -383,6 +388,43 @@ class PurchaseReceiptController extends Controller
     }
 
     /**
+     * Для сохранённых строк без артикула резервируются номера (как в UI «Артикулы»).
+     *
+     * @param  list<mixed>  $lines
+     * @return list<mixed>
+     */
+    private function assignMissingPurchaseLineArticleCodes(int $branchId, array $lines): array
+    {
+        $need = 0;
+        foreach ($lines as $line) {
+            if (! is_array($line) || PurchaseReceiptLineDraft::isGhost($line)) {
+                continue;
+            }
+            if (trim((string) ($line['article_code'] ?? '')) !== '') {
+                continue;
+            }
+            $need++;
+        }
+        if ($need === 0) {
+            return $lines;
+        }
+
+        $codes = $this->articleSequence->reserveNextArticleCodes($branchId, $need);
+        $i = 0;
+        foreach ($lines as $k => $line) {
+            if (! is_array($line) || PurchaseReceiptLineDraft::isGhost($line)) {
+                continue;
+            }
+            if (trim((string) ($line['article_code'] ?? '')) !== '') {
+                continue;
+            }
+            $lines[$k]['article_code'] = $codes[$i++];
+        }
+
+        return $lines;
+    }
+
+    /**
      * @param  list<mixed>  $lines
      */
     private function appendLinesToReceipt(PurchaseReceipt $receipt, int $branchId, int $warehouseId, array $lines): void
@@ -400,7 +442,7 @@ class PurchaseReceiptController extends Controller
                 'article_code' => $code,
                 'name' => trim((string) ($line['name'] ?? '')),
                 'barcode' => trim((string) ($line['barcode'] ?? '')),
-                'category' => trim((string) ($line['category'] ?? '')),
+                'category' => '',
                 'quantity' => $line['quantity'] ?? '',
                 'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                 'unit_price' => $line['unit_price'] ?? null,
@@ -442,11 +484,32 @@ class PurchaseReceiptController extends Controller
             'article_code' => '',
             'name' => '',
             'barcode' => '',
-            'category' => '',
+            'markup_percent' => '',
             'unit' => 'шт.',
             'quantity' => '',
             'unit_price' => '',
             'sale_price' => '',
         ];
+    }
+
+    /**
+     * Подсказка «наценки» в форме редактирования: из сохранённых закупки и продажи.
+     */
+    private static function impliedMarkupPercentHint(mixed $unitPrice, mixed $salePrice): string
+    {
+        if ($unitPrice === null || $salePrice === null || $unitPrice === '' || $salePrice === '') {
+            return '';
+        }
+        $u = (float) str_replace([' ', ','], ['', '.'], (string) $unitPrice);
+        $s = (float) str_replace([' ', ','], ['', '.'], (string) $salePrice);
+        if ($u <= 0.0 || ! is_finite($u) || ! is_finite($s)) {
+            return '';
+        }
+        $m = ($s / $u - 1) * 100;
+        if (! is_finite($m)) {
+            return '';
+        }
+
+        return (string) round($m, 4);
     }
 }

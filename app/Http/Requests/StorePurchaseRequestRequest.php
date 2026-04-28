@@ -12,6 +12,28 @@ class StorePurchaseRequestRequest extends FormRequest
         return auth()->check() && auth()->user()->branch_id;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $items = $this->input('items');
+        if (! is_array($items)) {
+            return;
+        }
+        foreach ($items as $i => $item) {
+            if (! is_array($item) || ! isset($item['quantity'])) {
+                continue;
+            }
+            $q = $item['quantity'];
+            if (! is_string($q)) {
+                continue;
+            }
+            $q = str_replace(["\xc2\xa0"], '', $q);
+            $q = str_replace(' ', '', $q);
+            $q = str_replace(',', '.', $q);
+            $items[$i]['quantity'] = $q;
+        }
+        $this->merge(['items' => $items]);
+    }
+
     public function rules(): array
     {
         $branchId = (int) $this->user()->branch_id;

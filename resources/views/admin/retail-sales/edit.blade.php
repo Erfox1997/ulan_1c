@@ -221,7 +221,13 @@
                         </p>
                     </div>
 
-                    <div class="flex flex-col gap-4 border-t border-emerald-200/60 bg-gradient-to-b from-white to-emerald-50/30 px-4 py-5 sm:flex-row sm:items-center sm:justify-end sm:px-6">
+                    <div class="flex flex-col gap-3 border-t border-emerald-200/60 bg-gradient-to-b from-white to-emerald-50/30 px-4 py-5 sm:flex-row sm:items-center sm:justify-end sm:gap-4 sm:px-6">
+                        <a
+                            href="{{ $historyUrl }}"
+                            class="inline-flex w-full items-center justify-center rounded-xl border-2 border-slate-200/95 bg-white px-8 py-3.5 text-[15px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200/80 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400/30 focus:ring-offset-2 sm:w-auto sm:min-w-[10rem]"
+                        >
+                            Отмена
+                        </a>
                         <button
                             type="submit"
                             class="retail-pos-submit inline-flex w-full items-center justify-center rounded-xl px-8 py-3.5 text-[15px] font-bold tracking-wide shadow-lg transition focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 sm:w-auto sm:min-w-[15rem] disabled:opacity-50"

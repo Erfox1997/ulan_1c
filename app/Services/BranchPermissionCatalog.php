@@ -48,12 +48,20 @@ class BranchPermissionCatalog
                 if (isset($child['route_is'])) {
                     $routeIs = $child['route_is'];
                     $patterns = is_array($routeIs) ? $routeIs : [$routeIs];
-                    foreach ($patterns as $p) {
-                        if (! is_string($p) || $p === '') {
-                            continue;
-                        }
-                        $items[] = ['group' => $group, 'label' => $label, 'pattern' => $p];
+                    $patterns = array_values(array_filter($patterns, fn ($p) => is_string($p) && $p !== ''));
+                    if ($patterns === []) {
+                        continue;
                     }
+                    // Несколько шаблонов с одной подписью (как «Зарплата») — один чекбокс, канонический ключ права.
+                    if (count($patterns) > 1) {
+                        $canonical = in_array('admin.payroll', $patterns, true)
+                            ? 'admin.payroll'
+                            : $patterns[0];
+                        $items[] = ['group' => $group, 'label' => $label, 'pattern' => $canonical];
+
+                        continue;
+                    }
+                    $items[] = ['group' => $group, 'label' => $label, 'pattern' => $patterns[0]];
 
                     continue;
                 }
@@ -75,6 +83,13 @@ class BranchPermissionCatalog
                 }
             }
         }
+
+        // Дополнительные права, не совпадающие с пунктами меню 1:1.
+        $items[] = [
+            'group' => 'Закупки и продажи',
+            'label' => 'Мастер: правка оформленных заявок',
+            'pattern' => 'admin.service-sales.requests.edit-fulfilled',
+        ];
 
         $uniq = [];
         $out = [];

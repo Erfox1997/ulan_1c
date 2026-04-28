@@ -128,6 +128,9 @@
                                 @if (($child['route'] ?? '') === 'admin.retail-sales.debts' && ($retailDebtorGroupsCount ?? 0) > 0)
                                     title="Групп должников с непогашенным долгом: {{ $retailDebtorGroupsCount }}"
                                 @endif
+                                @if (($child['route'] ?? '') === 'admin.purchase-requests.index' && ($purchaseRequestsCount ?? 0) > 0)
+                                    title="Заявок на закупку в филиале: {{ $purchaseRequestsCount }}"
+                                @endif
                             >
                                 <span class="min-w-0">{{ $child['label'] }}</span>
                                 @if (($child['route'] ?? '') === 'admin.reports.goods-characteristics' && ($goodsCharacteristicsIncompleteCount ?? 0) > 0)
@@ -147,6 +150,12 @@
                                         class="shrink-0 rounded-md bg-amber-500/30 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-100 ring-1 ring-amber-400/45"
                                         aria-hidden="true"
                                     >+{{ $retailDebtorGroupsCount }}</span>
+                                @endif
+                                @if (($child['route'] ?? '') === 'admin.purchase-requests.index' && ($purchaseRequestsCount ?? 0) > 0)
+                                    <span
+                                        class="shrink-0 rounded-md bg-teal-500/25 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-teal-100 ring-1 ring-teal-400/40"
+                                        aria-hidden="true"
+                                    >+{{ $purchaseRequestsCount }}</span>
                                 @endif
                             </a>
                         </li>

@@ -4,6 +4,19 @@ import Alpine from 'alpinejs';
 
 window.Alpine = Alpine;
 
+/** Остаток из API (строка с запятой/пробелами). Не число → null. */
+function parseGoodsStockQuantityRaw(v) {
+    if (v == null || v === '') return null;
+    const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Нулевой или отрицательный остаток — визуально «нет в наличии». */
+function goodsStockQtyIsSoldOut(raw) {
+    const n = parseGoodsStockQuantityRaw(raw);
+    return n !== null && n <= 0;
+}
+
 document.addEventListener('alpine:init', () => {
     Alpine.data('organizationBankRows', (initialAccounts, defaultIndex) => ({
         accounts:
@@ -67,7 +80,7 @@ document.addEventListener('alpine:init', () => {
             article_code: '',
             name: '',
             barcode: '',
-            category: '',
+            markup_percent: '',
             unit: 'шт.',
             quantity: '',
             unit_price: '',
@@ -96,7 +109,7 @@ document.addEventListener('alpine:init', () => {
             article_code: r.article_code ?? '',
             name: r.name ?? '',
             barcode: r.barcode ?? '',
-            category: r.category ?? '',
+            markup_percent: r.markup_percent ?? '',
             unit: r.unit ?? 'шт.',
             quantity: r.quantity ?? '',
             unit_price: r.unit_price ?? '',
@@ -107,22 +120,21 @@ document.addEventListener('alpine:init', () => {
         const goodsSearchUrl = typeof u.goodsSearch === 'string' ? u.goodsSearch : '';
         const counterpartySearchUrl = typeof u.counterpartySearch === 'string' ? u.counterpartySearch : '';
         const counterpartyQuickUrl = typeof u.counterpartyQuick === 'string' ? u.counterpartyQuick : '';
-        const categorySearchUrl = typeof u.categoriesSearch === 'string' ? u.categoriesSearch : '';
         const branchName = typeof init.branchName === 'string' ? init.branchName : '';
         const warehouseName = typeof init.warehouseName === 'string' ? init.warehouseName : '';
 
         return {
         lines,
         selectedRow: 0,
-        moreOpen: false,
         warehouseId,
         supplierName: typeof initialSupplierName === 'string' ? initialSupplierName : '',
         goodsSearchUrl,
         counterpartySearchUrl,
         counterpartyQuickUrl,
-        categorySearchUrl,
         branchName,
         warehouseName,
+        copyFeedbackGoodId: null,
+        copyFeedbackTimer: null,
         nameSuggestRow: null,
         nameSuggestItems: [],
         nameSuggestLoading: false,
@@ -140,13 +152,37 @@ document.addEventListener('alpine:init', () => {
         cpQuickLegalForm: 'osoo',
         cpQuickSaving: false,
         cpQuickError: '',
-        categorySuggestRow: null,
-        categorySuggestItems: [],
-        categorySuggestLoading: false,
-        categorySuggestNoHits: false,
-        categorySuggestTimer: null,
-        categorySuggestBlurTimer: null,
-        categorySuggestPos: { top: 0, left: 0, width: 260 },
+        parsePurchaseNum(v) {
+            const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+            return Number.isFinite(n) ? n : NaN;
+        },
+        applySaleFromMarkup(index) {
+            const row = this.lines[index];
+            if (!row) return;
+            const purchase = this.parsePurchaseNum(row.unit_price);
+            const markup = this.parsePurchaseNum(row.markup_percent);
+            if (!Number.isFinite(purchase) || purchase < 0) return;
+            if (!Number.isFinite(markup)) return;
+            row.sale_price = (purchase * (1 + markup / 100)).toFixed(2);
+        },
+        bulkMarkupPercent: '',
+        applyBulkMarkupToAllLines() {
+            const raw = String(this.bulkMarkupPercent ?? '').trim();
+            if (raw === '') {
+                window.alert('Введите процент наценки (например 30).');
+                return;
+            }
+            const m = this.parsePurchaseNum(raw);
+            if (!Number.isFinite(m)) {
+                window.alert('Укажите число, например 30 или 12,5.');
+                return;
+            }
+            const normalized = raw.replace(/\s/g, '');
+            this.lines.forEach((row, index) => {
+                row.markup_percent = normalized;
+                this.applySaleFromMarkup(index);
+            });
+        },
         lineSum(row) {
             const q = parseFloat(String(row.quantity ?? '').replace(/\s/g, '').replace(',', '.'));
             const p = parseFloat(String(row.unit_price ?? '').replace(/\s/g, '').replace(',', '.'));
@@ -171,6 +207,9 @@ document.addEventListener('alpine:init', () => {
             const c = item.opening_unit_cost;
             return (q != null && q !== '') || (c != null && c !== '');
         },
+        goodsStockQtySoldOut(v) {
+            return goodsStockQtyIsSoldOut(v);
+        },
         refreshSuggestPosition(el) {
             if (!el || !el.getBoundingClientRect) return;
             const r = el.getBoundingClientRect();
@@ -187,16 +226,9 @@ document.addEventListener('alpine:init', () => {
             if (left + w > window.innerWidth - 8) left = Math.max(8, window.innerWidth - w - 8);
             this.cpSuggestPos = { top: r.bottom + 4, left, width: w };
         },
-        refreshCategorySuggestPosition(el) {
-            if (!el || !el.getBoundingClientRect) return;
-            const r = el.getBoundingClientRect();
-            const w = Math.max(r.width, 240);
-            let left = r.left;
-            if (left + w > window.innerWidth - 8) left = Math.max(8, window.innerWidth - w - 8);
-            this.categorySuggestPos = { top: r.bottom + 4, left, width: w };
-        },
         nameSuggestClose() {
             clearTimeout(this.nameSuggestTimer);
+            this.clearCopyFeedback();
             this.nameSuggestItems = [];
             this.nameSuggestRow = null;
             this.nameSuggestLoading = false;
@@ -210,17 +242,10 @@ document.addEventListener('alpine:init', () => {
             this.cpQuickOpen = false;
             this.cpQuickError = '';
         },
-        categorySuggestClose() {
-            clearTimeout(this.categorySuggestTimer);
-            this.categorySuggestItems = [];
-            this.categorySuggestRow = null;
-            this.categorySuggestLoading = false;
-            this.categorySuggestNoHits = false;
-        },
         closeAllSuggests() {
             this.nameSuggestClose();
             this.counterpartySuggestClose();
-            this.categorySuggestClose();
+            this.headerGoodClose();
         },
         showCpDropdown() {
             if (this.cpQuickOpen) {
@@ -234,8 +259,8 @@ document.addEventListener('alpine:init', () => {
         },
         onNameFocus(index, event) {
             clearTimeout(this.nameSuggestBlurTimer);
+            this.headerGoodClose();
             this.counterpartySuggestClose();
-            this.categorySuggestClose();
             this.selectedRow = index;
             this.refreshSuggestPosition(event.target);
         },
@@ -244,6 +269,7 @@ document.addEventListener('alpine:init', () => {
         },
         onNameInput(index, event) {
             const el = event.target;
+            this.headerGoodClose();
             this.refreshSuggestPosition(el);
             const q = (el.value || '').trim();
             clearTimeout(this.nameSuggestTimer);
@@ -279,77 +305,12 @@ document.addEventListener('alpine:init', () => {
                 }
             }, 280);
         },
-        onCategoryFocus(index, event) {
-            clearTimeout(this.categorySuggestBlurTimer);
-            this.nameSuggestClose();
-            this.counterpartySuggestClose();
-            this.selectedRow = index;
-            const el = event.target;
-            this.refreshCategorySuggestPosition(el);
-            clearTimeout(this.categorySuggestTimer);
-            this.categorySuggestRow = index;
-            this.runCategoryFetch(index, el);
-        },
-        onCategoryBlur() {
-            this.categorySuggestBlurTimer = setTimeout(() => this.categorySuggestClose(), 180);
-        },
-        onCategoryInput(index, event) {
-            const el = event.target;
-            this.refreshCategorySuggestPosition(el);
-            clearTimeout(this.categorySuggestTimer);
-            this.nameSuggestClose();
-            this.counterpartySuggestClose();
-            this.categorySuggestRow = index;
-            this.categorySuggestTimer = setTimeout(() => this.runCategoryFetch(index, el), 250);
-        },
-        async runCategoryFetch(index, el) {
-            this.categorySuggestLoading = true;
-            this.categorySuggestNoHits = false;
-            this.categorySuggestItems = [];
-            if (!this.categorySearchUrl) {
-                this.categorySuggestItems = [];
-                this.categorySuggestLoading = false;
-                this.categorySuggestNoHits = true;
-                return;
-            }
-            const q = (el.value || '').trim();
-            try {
-                const url = this.categorySearchUrl + '?q=' + encodeURIComponent(q);
-                const res = await fetch(url, {
-                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                });
-                if (!res.ok) throw new Error('search');
-                const data = await res.json();
-                if (this.categorySuggestRow !== index) return;
-                this.categorySuggestItems = Array.isArray(data) ? data.filter((x) => typeof x === 'string' && x.trim() !== '') : [];
-                this.categorySuggestNoHits = this.categorySuggestItems.length === 0;
-            } catch (e) {
-                this.categorySuggestItems = [];
-                this.categorySuggestNoHits = false;
-            } finally {
-                this.categorySuggestLoading = false;
-                this.$nextTick(() => this.refreshCategorySuggestPosition(el));
-            }
-        },
-        pickCategoryFromSuggest(label) {
-            clearTimeout(this.categorySuggestBlurTimer);
-            const index = this.categorySuggestRow;
-            if (index === null || label == null || label === '') return;
-            const row = this.lines[index];
-            if (!row) return;
-            row.category = String(label);
-            this.categorySuggestClose();
-        },
-        pickGoodFromSuggest(item) {
-            clearTimeout(this.nameSuggestBlurTimer);
-            const index = this.nameSuggestRow;
-            if (index === null || !item) return;
-            const row = this.lines[index];
-            if (!row) return;
+        fillLineFromPurchaseGood(row, item) {
+            if (!row || !item) return;
             row.name = item.name || '';
             row.article_code = item.article_code || '';
             row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
-            row.category = item.category != null && item.category !== '' ? String(item.category) : '';
+            row.markup_percent = '';
             row.unit = item.unit && String(item.unit).trim() ? String(item.unit).trim() : 'шт.';
             if (item.opening_unit_cost != null && item.opening_unit_cost !== '') {
                 row.unit_price = String(item.opening_unit_cost);
@@ -357,12 +318,243 @@ document.addEventListener('alpine:init', () => {
             if (item.sale_price != null && item.sale_price !== '') {
                 row.sale_price = String(item.sale_price);
             }
+            const cost = this.parsePurchaseNum(row.unit_price);
+            const sale = this.parsePurchaseNum(row.sale_price);
+            if (Number.isFinite(cost) && cost > 0 && Number.isFinite(sale)) {
+                const m = (sale / cost - 1) * 100;
+                if (Number.isFinite(m)) {
+                    row.markup_percent = (Math.round(m * 100) / 100).toString();
+                }
+            }
+        },
+        pickGoodFromSuggest(item) {
+            clearTimeout(this.nameSuggestBlurTimer);
+            const index = this.nameSuggestRow;
+            if (index === null || !item) return;
+            const row = this.lines[index];
+            if (!row) return;
+            this.fillLineFromPurchaseGood(row, item);
             this.nameSuggestClose();
+        },
+        headerGoodQuery: '',
+        headerGoodOpen: false,
+        headerGoodLoading: false,
+        headerGoodItems: [],
+        headerGoodNoHits: false,
+        headerGoodTimer: null,
+        headerGoodBlurTimer: null,
+        repositionOpenSuggests() {
+            const ni = this.nameSuggestRow;
+            if (
+                ni !== null &&
+                (this.nameSuggestLoading || this.nameSuggestItems.length > 0 || this.nameSuggestNoHits)
+            ) {
+                const inp = document.querySelector(`input[name="lines[${ni}][name]"]`);
+                if (inp) this.refreshSuggestPosition(inp);
+            }
+            if (this.showCpDropdown()) {
+                const sup = document.getElementById('supplier_name');
+                if (sup) this.refreshCpSuggestPosition(sup);
+            }
+        },
+        clearCopyFeedback() {
+            clearTimeout(this.copyFeedbackTimer);
+            this.copyFeedbackTimer = null;
+            this.copyFeedbackGoodId = null;
+        },
+        headerGoodClose(clearQuery = true) {
+            clearTimeout(this.headerGoodTimer);
+            clearTimeout(this.headerGoodBlurTimer);
+            this.clearCopyFeedback();
+            if (clearQuery) {
+                this.headerGoodQuery = '';
+            }
+            this.headerGoodItems = [];
+            this.headerGoodLoading = false;
+            this.headerGoodNoHits = false;
+            this.headerGoodOpen = false;
+        },
+        onHeaderGoodFocus(event) {
+            clearTimeout(this.headerGoodBlurTimer);
+            this.nameSuggestClose();
+            const el = event.target;
+            this.headerGoodOpen = true;
+            const q = (el.value || '').trim();
+            if (q.length >= 2) {
+                this.$nextTick(() => this.runHeaderGoodFetch(el));
+            }
+        },
+        onHeaderGoodBlur() {
+            this.headerGoodBlurTimer = setTimeout(() => {
+                this.headerGoodOpen = false;
+            }, 180);
+        },
+        onHeaderGoodInput(event) {
+            const el = event.target;
+            const q = (el.value || '').trim();
+            clearTimeout(this.headerGoodTimer);
+            this.nameSuggestClose();
+            if (q.length < 2) {
+                this.headerGoodItems = [];
+                this.headerGoodLoading = false;
+                this.headerGoodNoHits = false;
+                return;
+            }
+            this.headerGoodOpen = true;
+            this.headerGoodLoading = true;
+            this.headerGoodNoHits = false;
+            this.headerGoodItems = [];
+            this.headerGoodTimer = setTimeout(() => this.runHeaderGoodFetch(el), 280);
+        },
+        async runHeaderGoodFetch(el) {
+            const q = (this.headerGoodQuery || '').trim();
+            if (q.length < 2) return;
+            try {
+                let url = this.goodsSearchUrl + '?q=' + encodeURIComponent(q);
+                if (this.warehouseId > 0) {
+                    url += '&warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                }
+                const res = await fetch(url, {
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!res.ok) throw new Error('search');
+                const data = await res.json();
+                this.headerGoodItems = Array.isArray(data) ? data : [];
+                this.headerGoodNoHits = this.headerGoodItems.length === 0;
+            } catch (e) {
+                this.headerGoodItems = [];
+                this.headerGoodNoHits = false;
+            } finally {
+                this.headerGoodLoading = false;
+            }
+        },
+        purchaseLineLooksBlank(row) {
+            if (!row) return false;
+            const t = (v) => String(v ?? '').trim();
+            if (t(row.name)) return false;
+            if (t(row.article_code)) return false;
+            if (t(row.barcode)) return false;
+            if (t(row.markup_percent)) return false;
+            if (t(row.quantity)) return false;
+            if (t(row.unit_price)) return false;
+            if (t(row.sale_price)) return false;
+            const uNorm = t(row.unit)
+                .toLowerCase()
+                .replace(/\./g, '')
+                .replace(/\s/g, '');
+            if (uNorm !== '' && uNorm !== 'шт') return false;
+            return true;
+        },
+        applyNewPurchaseLineOrPush(row) {
+            if (
+                this.lines.length === 1 &&
+                this.purchaseLineLooksBlank(this.lines[0])
+            ) {
+                Object.assign(this.lines[0], row);
+                this.selectedRow = 0;
+                return;
+            }
+            this.lines.push(row);
+            this.selectedRow = this.lines.length - 1;
+        },
+        appendLineFromCatalogItem(item) {
+            clearTimeout(this.headerGoodBlurTimer);
+            if (!item) return;
+            const row = emptyLine();
+            this.fillLineFromPurchaseGood(row, item);
+            this.applyNewPurchaseLineOrPush(row);
+            this.headerGoodClose(false);
+            this.nameSuggestClose();
+            const anchor = document.querySelector('[data-pr-header-good-input]');
+            if (anchor && anchor.focus) {
+                anchor.focus();
+            }
+        },
+        appendLineFromHeaderFreeText() {
+            clearTimeout(this.headerGoodBlurTimer);
+            const q = (this.headerGoodQuery || '').trim();
+            if (q.length < 2) return;
+            const row = emptyLine();
+            row.name = q;
+            this.applyNewPurchaseLineOrPush(row);
+            this.headerGoodClose(false);
+            this.nameSuggestClose();
+            const anchor = document.querySelector('[data-pr-header-good-input]');
+            if (anchor && anchor.focus) {
+                anchor.focus();
+            }
+        },
+        closeNameSuggestKeepingTypedName() {
+            const i = this.nameSuggestRow;
+            if (i !== null && this.lines[i]) {
+                const n = String(this.lines[i].name ?? '').trim();
+                this.lines[i].name = n;
+            }
+            this.nameSuggestClose();
+        },
+        onHeaderGoodEnter(e) {
+            e.preventDefault();
+            if (this.headerGoodLoading) {
+                return;
+            }
+            if (this.headerGoodItems.length === 1) {
+                this.appendLineFromCatalogItem(this.headerGoodItems[0]);
+                return;
+            }
+            const q = (this.headerGoodQuery || '').trim();
+            if (q.length >= 2 && this.headerGoodItems.length === 0) {
+                this.appendLineFromHeaderFreeText();
+            }
+        },
+        copyGoodName(item, event) {
+            if (event) {
+                event.stopPropagation();
+                event.preventDefault();
+            }
+            if (!item || item.name == null) return;
+            const t = String(item.name);
+            if (!t.trim()) return;
+            const afterCopy = () => {
+                clearTimeout(this.copyFeedbackTimer);
+                if (item.id != null && item.id !== '') {
+                    this.copyFeedbackGoodId = item.id;
+                    this.copyFeedbackTimer = setTimeout(() => {
+                        this.copyFeedbackGoodId = null;
+                        this.copyFeedbackTimer = null;
+                    }, 2200);
+                }
+            };
+            const fallbackExec = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = t;
+                    ta.setAttribute('readonly', '');
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+
+                    return ok;
+                } catch (_) {
+                    return false;
+                }
+            };
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                navigator.clipboard.writeText(t).then(afterCopy).catch(() => {
+                    if (fallbackExec()) {
+                        afterCopy();
+                    }
+                });
+            } else if (fallbackExec()) {
+                afterCopy();
+            }
         },
         onSupplierFocus(event) {
             clearTimeout(this.cpSuggestBlurTimer);
+            this.headerGoodClose();
             this.nameSuggestClose();
-            this.categorySuggestClose();
             this.refreshCpSuggestPosition(event.target);
         },
         onSupplierBlur() {
@@ -386,8 +578,8 @@ document.addEventListener('alpine:init', () => {
                 this.counterpartySuggestClose();
                 return;
             }
+            this.headerGoodClose();
             this.nameSuggestClose();
-            this.categorySuggestClose();
             this.cpSuggestLoading = true;
             this.cpSuggestNoHits = false;
             this.cpSuggestItems = [];
@@ -516,27 +708,6 @@ document.addEventListener('alpine:init', () => {
             });
             if (n === 0) window.alert('Нет строк с пустым штрихкодом.');
         },
-        async genArticlesEmptyOnly() {
-            const emptyRows = this.lines.filter((r) => (r.article_code || '').trim() === '');
-            if (emptyRows.length === 0) {
-                window.alert('Нет строк с пустым артикулом.');
-                return;
-            }
-            if (typeof window.reserveBranchArticleCodes !== 'function') {
-                window.alert('Генератор артикулов не загружен. Обновите страницу.');
-                return;
-            }
-            try {
-                const codes = await window.reserveBranchArticleCodes(emptyRows.length);
-                let idx = 0;
-                this.lines.forEach((row) => {
-                    if ((row.article_code || '').trim() !== '') return;
-                    row.article_code = codes[idx++];
-                });
-            } catch (e) {
-                window.alert(e && e.message ? e.message : 'Не удалось получить артикулы с сервера.');
-            }
-        },
         addRow() {
             this.closeAllSuggests();
             this.lines.push(emptyLine());
@@ -546,8 +717,16 @@ document.addEventListener('alpine:init', () => {
             if (this.lines.length <= 1) return;
             this.lines.splice(this.selectedRow, 1);
             this.selectedRow = Math.min(this.selectedRow, this.lines.length - 1);
-            this.moreOpen = false;
             this.closeAllSuggests();
+        },
+        clearSelectedRow() {
+            this.closeAllSuggests();
+            const row = this.lines[this.selectedRow];
+            if (!row) return;
+            const fresh = emptyLine();
+            Object.keys(fresh).forEach((k) => {
+                row[k] = fresh[k];
+            });
         },
         moveUp() {
             const i = this.selectedRow;
@@ -581,9 +760,9 @@ document.addEventListener('alpine:init', () => {
             } else {
                 titleDate = rawDate || '—';
             }
-            const rows = this.lines.filter((r) => (r.article_code || '').trim() !== '');
+            const rows = this.lines.filter((r) => String(r.name || '').trim() !== '');
             if (rows.length === 0) {
-                window.alert('Добавьте хотя бы одну строку с артикулом.');
+                window.alert('Добавьте хотя бы одну строку с наименованием.');
                 return;
             }
             const esc = (s) =>
@@ -783,6 +962,15 @@ document.addEventListener('alpine:init', () => {
             counterpartyQuickUrl,
             branchName,
             warehouseName,
+            lesHeaderQuery: '',
+            lesHeaderOpen: false,
+            lesHeaderLoading: false,
+            lesHeaderItems: [],
+            lesHeaderNoHits: false,
+            lesHeaderTimer: null,
+            lesHeaderBlurTimer: null,
+            lesHeaderCopyFeedbackGoodId: null,
+            lesHeaderCopyFeedbackTimer: null,
             nameSuggestRow: null,
             nameSuggestItems: [],
             nameSuggestLoading: false,
@@ -808,23 +996,31 @@ document.addEventListener('alpine:init', () => {
             },
             /** Одна строка под наименованием в подсказке поиска товара (юрлицо / возвраты). */
             goodsSuggestCompactMeta(item) {
-                if (!item) return '';
-                const parts = [];
+                const p = this.goodsSuggestMetaParts(item);
+                return p.map((x) => x.label + ' ' + x.value).join(', ');
+            },
+            /** Подпись + значение для оформления отдельными span (жирные подписи «ост / цена / опт»). */
+            goodsSuggestMetaParts(item) {
+                if (!item) return [];
+                const out = [];
                 const sq = item.stock_quantity;
                 if (sq != null && String(sq).trim() !== '') {
                     const n = parseFloat(String(sq).replace(/\s/g, '').replace(',', '.'));
                     const st = Number.isFinite(n) ? String(n) : String(sq).trim();
-                    parts.push('ост: ' + st);
+                    out.push({ label: 'ост', value: st, danger: goodsStockQtyIsSoldOut(sq) });
                 }
                 const sp = item.sale_price;
                 if (sp != null && String(sp).trim() !== '') {
-                    parts.push('цена: ' + String(sp).trim());
+                    out.push({ label: 'цена', value: String(sp).trim() });
                 }
                 const wp = item.wholesale_price;
                 if (wp != null && String(wp).trim() !== '') {
-                    parts.push('опт: ' + String(wp).trim());
+                    out.push({ label: 'опт', value: String(wp).trim() });
                 }
-                return parts.join(', ');
+                return out;
+            },
+            goodsStockQtySoldOut(v) {
+                return goodsStockQtyIsSoldOut(v);
             },
             refreshSuggestPosition(el) {
                 if (!el || !el.getBoundingClientRect) return;
@@ -857,9 +1053,215 @@ document.addEventListener('alpine:init', () => {
                 this.cpQuickOpen = false;
                 this.cpQuickError = '';
             },
+            lesHeaderGoodsClose(clearQuery = true) {
+                clearTimeout(this.lesHeaderTimer);
+                clearTimeout(this.lesHeaderBlurTimer);
+                clearTimeout(this.lesHeaderCopyFeedbackTimer);
+                this.lesHeaderCopyFeedbackTimer = null;
+                this.lesHeaderCopyFeedbackGoodId = null;
+                if (clearQuery) {
+                    this.lesHeaderQuery = '';
+                }
+                this.lesHeaderItems = [];
+                this.lesHeaderLoading = false;
+                this.lesHeaderNoHits = false;
+                this.lesHeaderOpen = false;
+            },
+            copyLesHeaderGoodName(item, event) {
+                if (event) {
+                    event.stopPropagation();
+                    event.preventDefault();
+                }
+                if (!item || item.name == null) return;
+                const t = String(item.name);
+                if (!t.trim()) return;
+                const afterCopy = () => {
+                    clearTimeout(this.lesHeaderCopyFeedbackTimer);
+                    if (item.id != null && item.id !== '') {
+                        this.lesHeaderCopyFeedbackGoodId = item.id;
+                        this.lesHeaderCopyFeedbackTimer = setTimeout(() => {
+                            this.lesHeaderCopyFeedbackGoodId = null;
+                            this.lesHeaderCopyFeedbackTimer = null;
+                        }, 2200);
+                    }
+                };
+                const fallbackExec = () => {
+                    try {
+                        const ta = document.createElement('textarea');
+                        ta.value = t;
+                        ta.setAttribute('readonly', '');
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        const ok = document.execCommand('copy');
+                        document.body.removeChild(ta);
+
+                        return ok;
+                    } catch (_) {
+                        return false;
+                    }
+                };
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    navigator.clipboard.writeText(t).then(afterCopy).catch(() => {
+                        if (fallbackExec()) {
+                            afterCopy();
+                        }
+                    });
+                } else if (fallbackExec()) {
+                    afterCopy();
+                }
+            },
+            lesLineLooksBlank(row) {
+                if (!row) return false;
+                const t = (v) => String(v ?? '').trim();
+                if (t(row.name)) return false;
+                if (t(row.article_code)) return false;
+                if (t(row.barcode)) return false;
+                if (t(row.category)) return false;
+                if (t(row.quantity)) return false;
+                if (t(row.unit_price)) return false;
+                if (t(row.wholesale_price)) return false;
+                const uNorm = t(row.unit)
+                    .toLowerCase()
+                    .replace(/\./g, '')
+                    .replace(/\s/g, '');
+                if (uNorm !== '' && uNorm !== 'шт') return false;
+                return true;
+            },
+            applyNewLesLineOrPush(row) {
+                if (this.lines.length === 1 && this.lesLineLooksBlank(this.lines[0])) {
+                    Object.assign(this.lines[0], row);
+                    this.selectedRow = 0;
+                    return;
+                }
+                this.lines.push(row);
+                this.selectedRow = this.lines.length - 1;
+            },
+            fillLesLineFromCatalogItem(row, item) {
+                if (!row || !item) return;
+                row.name = item.name || '';
+                row.article_code = item.article_code || '';
+                row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
+                row.category = item.category != null && item.category !== '' ? String(item.category) : '';
+                row.unit = item.unit && String(item.unit).trim() ? String(item.unit).trim() : 'шт.';
+                row.wholesale_price =
+                    item.wholesale_price != null && item.wholesale_price !== ''
+                        ? String(item.wholesale_price)
+                        : '';
+                if (item.sale_price != null && item.sale_price !== '') {
+                    row.unit_price = String(item.sale_price);
+                }
+            },
+            appendLesLineFromCatalogItem(item) {
+                clearTimeout(this.lesHeaderBlurTimer);
+                if (!item) return;
+                const row = emptyLine();
+                this.fillLesLineFromCatalogItem(row, item);
+                this.applyNewLesLineOrPush(row);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                this.lesHeaderGoodsClose(false);
+                const anchor = document.querySelector('[data-les-header-good-input]');
+                if (anchor && anchor.focus) anchor.focus();
+            },
+            appendLesLineFromHeaderFreeText() {
+                clearTimeout(this.lesHeaderBlurTimer);
+                const q = (this.lesHeaderQuery || '').trim();
+                if (q.length < 2) return;
+                const row = emptyLine();
+                row.name = q;
+                this.applyNewLesLineOrPush(row);
+                this.lesHeaderGoodsClose(false);
+                const anchor = document.querySelector('[data-les-header-good-input]');
+                if (anchor && anchor.focus) anchor.focus();
+            },
+            onLesHeaderGoodsFocus(event) {
+                clearTimeout(this.lesHeaderBlurTimer);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                const el = event.target;
+                this.lesHeaderOpen = true;
+                const q = (el.value || '').trim();
+                if (q.length >= 2) {
+                    this.$nextTick(() => this.runLesHeaderGoodsFetch(el));
+                }
+            },
+            onLesHeaderGoodsBlur() {
+                this.lesHeaderBlurTimer = setTimeout(() => {
+                    this.lesHeaderOpen = false;
+                }, 180);
+            },
+            onLesHeaderGoodsInput(event) {
+                const el = event.target;
+                const q = (el.value || '').trim();
+                clearTimeout(this.lesHeaderTimer);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                if (q.length < 2) {
+                    this.lesHeaderItems = [];
+                    this.lesHeaderLoading = false;
+                    this.lesHeaderNoHits = false;
+                    return;
+                }
+                this.lesHeaderOpen = true;
+                this.lesHeaderLoading = true;
+                this.lesHeaderNoHits = false;
+                this.lesHeaderItems = [];
+                this.lesHeaderTimer = setTimeout(() => this.runLesHeaderGoodsFetch(el), 280);
+            },
+            async runLesHeaderGoodsFetch(el) {
+                const q = (this.lesHeaderQuery || '').trim();
+                if (q.length < 2) return;
+                try {
+                    let url = this.goodsSearchUrl + '?q=' + encodeURIComponent(q);
+                    if (this.warehouseId > 0) {
+                        url += '&warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                    }
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) throw new Error('search');
+                    const data = await res.json();
+                    this.lesHeaderItems = Array.isArray(data) ? data : [];
+                    this.lesHeaderNoHits = this.lesHeaderItems.length === 0;
+                } catch (e) {
+                    this.lesHeaderItems = [];
+                    this.lesHeaderNoHits = false;
+                } finally {
+                    this.lesHeaderLoading = false;
+                }
+            },
+            onLesHeaderGoodsEnter(e) {
+                e.preventDefault();
+                if (this.lesHeaderLoading) {
+                    return;
+                }
+                if (this.lesHeaderItems.length === 1) {
+                    this.appendLesLineFromCatalogItem(this.lesHeaderItems[0]);
+                    return;
+                }
+                const q = (this.lesHeaderQuery || '').trim();
+                if (q.length >= 2 && this.lesHeaderItems.length === 0) {
+                    this.appendLesLineFromHeaderFreeText();
+                }
+            },
+            repositionLesLineNameSuggest() {
+                const ni = this.nameSuggestRow;
+                if (
+                    ni !== null &&
+                    (this.nameSuggestLoading || this.nameSuggestItems.length > 0 || this.nameSuggestNoHits)
+                ) {
+                    const inp =
+                        document.querySelector(`input[name="lines[${ni}][name]"]`) ||
+                        document.querySelector(`input[name="lines[${ni}][barcode]"]`);
+                    if (inp) this.refreshSuggestPosition(inp);
+                }
+            },
             closeAllSuggests() {
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
+                this.lesHeaderGoodsClose();
             },
             showCpDropdown() {
                 if (this.cpQuickOpen) {
@@ -873,6 +1275,7 @@ document.addEventListener('alpine:init', () => {
             },
             onNameFocus(index, event) {
                 clearTimeout(this.nameSuggestBlurTimer);
+                this.lesHeaderGoodsClose();
                 this.counterpartySuggestClose();
                 this.selectedRow = index;
                 this.refreshSuggestPosition(event.target);
@@ -891,6 +1294,7 @@ document.addEventListener('alpine:init', () => {
             },
             onNameInput(index, event) {
                 const el = event.target;
+                this.lesHeaderGoodsClose();
                 this.refreshSuggestPosition(el);
                 const q = (el.value || '').trim();
                 clearTimeout(this.nameSuggestTimer);
@@ -932,18 +1336,7 @@ document.addEventListener('alpine:init', () => {
                 if (index === null || !item) return;
                 const row = this.lines[index];
                 if (!row) return;
-                row.name = item.name || '';
-                row.article_code = item.article_code || '';
-                row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
-                row.category = item.category != null && item.category !== '' ? String(item.category) : '';
-                row.unit = item.unit && String(item.unit).trim() ? String(item.unit).trim() : 'шт.';
-                row.wholesale_price =
-                    item.wholesale_price != null && item.wholesale_price !== ''
-                        ? String(item.wholesale_price)
-                        : '';
-                if (item.sale_price != null && item.sale_price !== '') {
-                    row.unit_price = String(item.sale_price);
-                }
+                this.fillLesLineFromCatalogItem(row, item);
                 this.nameSuggestClose();
             },
             async applyWholesalePrices() {
@@ -1014,6 +1407,7 @@ document.addEventListener('alpine:init', () => {
             onBuyerFocus(event) {
                 clearTimeout(this.cpSuggestBlurTimer);
                 this.nameSuggestClose();
+                this.lesHeaderGoodsClose();
                 this.refreshCpSuggestPosition(event.target);
             },
             onBuyerBlur() {
@@ -1038,6 +1432,7 @@ document.addEventListener('alpine:init', () => {
                     return;
                 }
                 this.nameSuggestClose();
+                this.lesHeaderGoodsClose();
                 this.cpSuggestLoading = true;
                 this.cpSuggestNoHits = false;
                 this.cpSuggestItems = [];
@@ -1636,11 +2031,44 @@ document.addEventListener('alpine:init', () => {
             cpQuickLegalForm: 'osoo',
             cpQuickSaving: false,
             cpQuickError: '',
+            prtHeaderQuery: '',
+            prtHeaderOpen: false,
+            prtHeaderLoading: false,
+            prtHeaderItems: [],
+            prtHeaderNoHits: false,
+            prtHeaderTimer: null,
+            prtHeaderBlurTimer: null,
+            prtHeaderCopyFeedbackGoodId: null,
+            prtHeaderCopyFeedbackTimer: null,
             lineSum(row) {
                 const q = parseFloat(String(row.quantity ?? '').replace(/\s/g, '').replace(',', '.'));
                 const p = parseFloat(String(row.unit_price ?? '').replace(/\s/g, '').replace(',', '.'));
                 if (!Number.isFinite(q) || !Number.isFinite(p)) return '';
                 return (q * p).toFixed(2);
+            },
+            /** Одна строка под наименованием в подсказке поиска товара — для чипов в шапке. */
+            goodsSuggestCompactMeta(item) {
+                const p = this.goodsSuggestMetaParts(item);
+                return p.map((x) => x.label + ' ' + x.value).join(', ');
+            },
+            goodsSuggestMetaParts(item) {
+                if (!item) return [];
+                const out = [];
+                const sq = item.stock_quantity;
+                if (sq != null && String(sq).trim() !== '') {
+                    const n = parseFloat(String(sq).replace(/\s/g, '').replace(',', '.'));
+                    const st = Number.isFinite(n) ? String(n) : String(sq).trim();
+                    out.push({ label: 'ост', value: st, danger: goodsStockQtyIsSoldOut(sq) });
+                }
+                const sp = item.sale_price;
+                if (sp != null && String(sp).trim() !== '') {
+                    out.push({ label: 'цена', value: String(sp).trim() });
+                }
+                const wp = item.wholesale_price;
+                if (wp != null && String(wp).trim() !== '') {
+                    out.push({ label: 'опт', value: String(wp).trim() });
+                }
+                return out;
             },
             formatGoodsStockQty(v) {
                 if (v == null || v === '') return '';
@@ -1660,6 +2088,197 @@ document.addEventListener('alpine:init', () => {
                 const c = item.opening_unit_cost;
                 const s = item.sale_price;
                 return (q != null && q !== '') || (c != null && c !== '') || (s != null && s !== '');
+            },
+            goodsStockQtySoldOut(v) {
+                return goodsStockQtyIsSoldOut(v);
+            },
+            prtHeaderGoodsClose(clearQuery = true) {
+                clearTimeout(this.prtHeaderTimer);
+                clearTimeout(this.prtHeaderBlurTimer);
+                clearTimeout(this.prtHeaderCopyFeedbackTimer);
+                this.prtHeaderCopyFeedbackTimer = null;
+                this.prtHeaderCopyFeedbackGoodId = null;
+                if (clearQuery) {
+                    this.prtHeaderQuery = '';
+                }
+                this.prtHeaderItems = [];
+                this.prtHeaderLoading = false;
+                this.prtHeaderNoHits = false;
+                this.prtHeaderOpen = false;
+            },
+            copyPrtHeaderGoodName(item, event) {
+                if (event) {
+                    event.stopPropagation();
+                    event.preventDefault();
+                }
+                if (!item || item.name == null) return;
+                const t = String(item.name);
+                if (!t.trim()) return;
+                const afterCopy = () => {
+                    clearTimeout(this.prtHeaderCopyFeedbackTimer);
+                    if (item.id != null && item.id !== '') {
+                        this.prtHeaderCopyFeedbackGoodId = item.id;
+                        this.prtHeaderCopyFeedbackTimer = setTimeout(() => {
+                            this.prtHeaderCopyFeedbackGoodId = null;
+                            this.prtHeaderCopyFeedbackTimer = null;
+                        }, 2200);
+                    }
+                };
+                const fallbackExec = () => {
+                    try {
+                        const ta = document.createElement('textarea');
+                        ta.value = t;
+                        ta.setAttribute('readonly', '');
+                        ta.style.position = 'fixed';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        const ok = document.execCommand('copy');
+                        document.body.removeChild(ta);
+
+                        return ok;
+                    } catch (_) {
+                        return false;
+                    }
+                };
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    navigator.clipboard.writeText(t).then(afterCopy).catch(() => {
+                        if (fallbackExec()) {
+                            afterCopy();
+                        }
+                    });
+                } else if (fallbackExec()) {
+                    afterCopy();
+                }
+            },
+            prtLineLooksBlank(row) {
+                if (!row) return false;
+                const t = (v) => String(v ?? '').trim();
+                if (t(row.name)) return false;
+                if (t(row.article_code)) return false;
+                if (t(row.barcode)) return false;
+                if (t(row.category)) return false;
+                if (t(row.quantity)) return false;
+                if (t(row.unit_price)) return false;
+                const uNorm = t(row.unit)
+                    .toLowerCase()
+                    .replace(/\./g, '')
+                    .replace(/\s/g, '');
+                if (uNorm !== '' && uNorm !== 'шт') return false;
+                return true;
+            },
+            applyNewPrtLineOrPush(row) {
+                if (this.lines.length === 1 && this.prtLineLooksBlank(this.lines[0])) {
+                    Object.assign(this.lines[0], row);
+                    this.selectedRow = 0;
+                    return;
+                }
+                this.lines.push(row);
+                this.selectedRow = this.lines.length - 1;
+            },
+            fillPrtLineFromCatalogItem(row, item) {
+                if (!row || !item) return;
+                row.name = item.name || '';
+                row.article_code = item.article_code || '';
+                row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
+                row.category = item.category != null && item.category !== '' ? String(item.category) : '';
+                row.unit = item.unit && String(item.unit).trim() ? String(item.unit).trim() : 'шт.';
+                if (item.sale_price != null && item.sale_price !== '') {
+                    row.unit_price = String(item.sale_price);
+                }
+            },
+            appendPrtLineFromCatalogItem(item) {
+                clearTimeout(this.prtHeaderBlurTimer);
+                if (!item) return;
+                const row = emptyLine();
+                this.fillPrtLineFromCatalogItem(row, item);
+                this.applyNewPrtLineOrPush(row);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                this.prtHeaderGoodsClose(false);
+                const anchor = document.querySelector('[data-prt-header-good-input]');
+                if (anchor && anchor.focus) anchor.focus();
+            },
+            appendPrtLineFromHeaderFreeText() {
+                clearTimeout(this.prtHeaderBlurTimer);
+                const q = (this.prtHeaderQuery || '').trim();
+                if (q.length < 2) return;
+                const row = emptyLine();
+                row.name = q;
+                this.applyNewPrtLineOrPush(row);
+                this.prtHeaderGoodsClose(false);
+                const anchor = document.querySelector('[data-prt-header-good-input]');
+                if (anchor && anchor.focus) anchor.focus();
+            },
+            onPrtHeaderGoodsFocus(event) {
+                clearTimeout(this.prtHeaderBlurTimer);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                const el = event.target;
+                this.prtHeaderOpen = true;
+                const q = (el.value || '').trim();
+                if (q.length >= 2) {
+                    this.$nextTick(() => this.runPrtHeaderGoodsFetch(el));
+                }
+            },
+            onPrtHeaderGoodsBlur() {
+                this.prtHeaderBlurTimer = setTimeout(() => {
+                    this.prtHeaderOpen = false;
+                }, 180);
+            },
+            onPrtHeaderGoodsInput(event) {
+                const el = event.target;
+                const q = (el.value || '').trim();
+                clearTimeout(this.prtHeaderTimer);
+                this.nameSuggestClose();
+                this.counterpartySuggestClose();
+                if (q.length < 2) {
+                    this.prtHeaderItems = [];
+                    this.prtHeaderLoading = false;
+                    this.prtHeaderNoHits = false;
+                    return;
+                }
+                this.prtHeaderOpen = true;
+                this.prtHeaderLoading = true;
+                this.prtHeaderNoHits = false;
+                this.prtHeaderItems = [];
+                this.prtHeaderTimer = setTimeout(() => this.runPrtHeaderGoodsFetch(el), 280);
+            },
+            async runPrtHeaderGoodsFetch(el) {
+                const q = (this.prtHeaderQuery || '').trim();
+                if (q.length < 2) return;
+                try {
+                    let url = this.goodsSearchUrl + '?q=' + encodeURIComponent(q);
+                    if (this.warehouseId > 0) {
+                        url += '&warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                    }
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) throw new Error('search');
+                    const data = await res.json();
+                    this.prtHeaderItems = Array.isArray(data) ? data : [];
+                    this.prtHeaderNoHits = this.prtHeaderItems.length === 0;
+                } catch (e) {
+                    this.prtHeaderItems = [];
+                    this.prtHeaderNoHits = false;
+                } finally {
+                    this.prtHeaderLoading = false;
+                }
+            },
+            onPrtHeaderGoodsEnter(e) {
+                e.preventDefault();
+                if (this.prtHeaderLoading) {
+                    return;
+                }
+                if (this.prtHeaderItems.length === 1) {
+                    this.appendPrtLineFromCatalogItem(this.prtHeaderItems[0]);
+                    return;
+                }
+                const q = (this.prtHeaderQuery || '').trim();
+                if (q.length >= 2 && this.prtHeaderItems.length === 0) {
+                    this.appendPrtLineFromHeaderFreeText();
+                }
             },
             refreshSuggestPosition(el) {
                 if (!el || !el.getBoundingClientRect) return;
@@ -1695,6 +2314,7 @@ document.addEventListener('alpine:init', () => {
             closeAllSuggests() {
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
+                this.prtHeaderGoodsClose();
             },
             showCpDropdown() {
                 if (this.cpQuickOpen) {
@@ -1708,6 +2328,7 @@ document.addEventListener('alpine:init', () => {
             },
             onNameFocus(index, event) {
                 clearTimeout(this.nameSuggestBlurTimer);
+                this.prtHeaderGoodsClose();
                 this.counterpartySuggestClose();
                 this.selectedRow = index;
                 this.refreshSuggestPosition(event.target);
@@ -1724,6 +2345,7 @@ document.addEventListener('alpine:init', () => {
                     this.nameSuggestClose();
                     return;
                 }
+                this.prtHeaderGoodsClose();
                 this.counterpartySuggestClose();
                 this.nameSuggestRow = index;
                 this.nameSuggestLoading = true;
@@ -1771,6 +2393,7 @@ document.addEventListener('alpine:init', () => {
             onSupplierFocus(event) {
                 clearTimeout(this.cpSuggestBlurTimer);
                 this.nameSuggestClose();
+                this.prtHeaderGoodsClose();
                 this.refreshCpSuggestPosition(event.target);
             },
             onSupplierBlur() {
@@ -1795,6 +2418,7 @@ document.addEventListener('alpine:init', () => {
                     return;
                 }
                 this.nameSuggestClose();
+                this.prtHeaderGoodsClose();
                 this.cpSuggestLoading = true;
                 this.cpSuggestNoHits = false;
                 this.cpSuggestItems = [];

@@ -23,31 +23,37 @@
                 </p>
             </div>
         @else
-            <div
-                class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
-            >
-                <form
-                    method="GET"
-                    action="{{ route('admin.purchase-returns.create') }}"
-                    class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5"
-                >
-                    <x-input-label for="prt_warehouse_create" value="Склад документа *" />
-                    <select
-                        id="prt_warehouse_create"
-                        name="warehouse_id"
-                        class="mt-2 block w-full max-w-md rounded-xl border border-slate-200/90 bg-white py-2.5 pl-3 pr-10 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
-                        onchange="this.form.submit()"
-                    >
-                        @foreach ($warehouses as $w)
-                            <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
-                        @endforeach
-                    </select>
-                </form>
-            </div>
-
             @include('admin.purchase-receipts.partials.form-document-styles')
 
-            @if ($selectedWarehouseId !== 0)
+            @if ((int) $selectedWarehouseId === 0)
+                <div
+                    class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
+                >
+                    <form
+                        method="GET"
+                        action="{{ route('admin.purchase-returns.create') }}"
+                        class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5"
+                    >
+                        <x-input-label for="prt_warehouse_create" value="Склад документа *" />
+                        <select
+                            id="prt_warehouse_create"
+                            name="warehouse_id"
+                            class="mt-2 block w-full max-w-md rounded-xl border border-slate-200/90 bg-white py-2.5 pl-3 pr-10 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+                            onchange="this.form.submit()"
+                        >
+                            @foreach ($warehouses as $w)
+                                <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
+                            @endforeach
+                        </select>
+                    </form>
+                </div>
+
+                <div
+                    class="rounded-2xl border border-slate-200/90 bg-gradient-to-b from-slate-50/80 to-white px-4 py-6 text-sm text-slate-600 shadow-sm ring-1 ring-slate-100/80"
+                >
+                    Выберите склад в форме выше, чтобы открыть таблицу строк документа.
+                </div>
+            @else
                 @php
                     $prtFormUrls = [
                         'goodsSearch' => route('admin.goods.search'),
@@ -65,13 +71,44 @@
                         warehouseName: @json($warehouses->firstWhere('id', $selectedWarehouseId)?->name ?? ''),
                     };
                 </script>
-                <form
-                    method="POST"
-                    action="{{ route('admin.purchase-returns.store') }}"
+                {{-- POST и GET формы не должны быть вложены: иначе браузер «ломает» DOM и Alpine не видит таблицу. --}}
+                <div
                     class="space-y-6"
-                    @keydown.escape.window="closeAllSuggests()"
                     x-data="purchaseReturnForm()"
+                    @keydown.escape.window="closeAllSuggests()"
                 >
+                    <div
+                        class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
+                    >
+                        <div class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5">
+                            <div class="flex flex-wrap items-end gap-x-5 gap-y-4">
+                                <form
+                                    method="GET"
+                                    action="{{ route('admin.purchase-returns.create') }}"
+                                    class="w-full shrink-0 sm:w-auto sm:min-w-[11rem] sm:max-w-[15rem]"
+                                >
+                                    <x-input-label for="prt_warehouse_document" value="Склад документа *" />
+                                    <select
+                                        id="prt_warehouse_document"
+                                        name="warehouse_id"
+                                        class="mt-2 block w-full rounded-xl border border-slate-200/90 bg-white py-2.5 pl-3 pr-10 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+                                        onchange="this.form.submit()"
+                                    >
+                                        @foreach ($warehouses as $w)
+                                            <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
+                                        @endforeach
+                                    </select>
+                                </form>
+                                @include('admin.purchase-returns.partials.header-goods-search-inner')
+                            </div>
+                        </div>
+                    </div>
+
+                    <form
+                        method="POST"
+                        action="{{ route('admin.purchase-returns.store') }}"
+                        class="w-full space-y-6"
+                    >
                     @csrf
                     <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
 
@@ -324,13 +361,15 @@
                                     @mousedown.prevent="pickGoodFromSuggest(item)"
                                 >
                                     <span class="font-medium text-slate-900" x-text="item.name"></span>
-                                    <span class="font-mono text-[11px] text-slate-500" x-text="item.article_code"></span>
                                     <div
                                         class="mt-0.5 flex flex-wrap gap-1.5"
                                         x-show="goodsSuggestHasReturnHint(item)"
                                     >
                                         <span
-                                            class="inline-flex max-w-full items-center rounded-lg border border-emerald-200/85 bg-gradient-to-r from-emerald-50/95 to-sky-50/50 px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-teal-900 shadow-sm"
+                                            class="inline-flex max-w-full items-center rounded-lg border px-1.5 py-0.5 text-[10px] font-semibold leading-tight shadow-sm"
+                                            :class="goodsStockQtySoldOut(item.stock_quantity)
+                                                ? 'border-red-200/85 bg-gradient-to-r from-red-50/95 to-orange-50/40 text-red-800'
+                                                : 'border-emerald-200/85 bg-gradient-to-r from-emerald-50/95 to-sky-50/50 text-teal-900'"
                                             x-show="item.stock_quantity != null && item.stock_quantity !== ''"
                                             x-text="'Остаток: ' + formatGoodsStockQty(item.stock_quantity) + (item.unit ? ' ' + item.unit : '')"
                                         ></span>
@@ -361,12 +400,7 @@
                             </div>
                         </div>
                     </div>
-                </form>
-            @else
-                <div
-                    class="rounded-2xl border border-slate-200/90 bg-gradient-to-b from-slate-50/80 to-white px-4 py-6 text-sm text-slate-600 shadow-sm ring-1 ring-slate-100/80"
-                >
-                    Выберите склад в форме выше, чтобы открыть таблицу строк документа.
+                    </form>
                 </div>
             @endif
         @endif

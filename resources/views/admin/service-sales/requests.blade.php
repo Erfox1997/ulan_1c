@@ -11,6 +11,7 @@
         'fulfilled' => 'Оформлены',
         'all' => 'Все',
     ];
+    $canEditFulfilled = $mayAccessRoute('admin.service-sales.requests.edit-fulfilled');
 @endphp
 <x-admin-layout pageTitle="Заявки на продажу" main-class="bg-slate-100/80 px-3 py-4 sm:px-4 lg:px-6">
     <div class="mx-auto max-w-6xl space-y-4">
@@ -101,6 +102,10 @@
                                             @method('DELETE')
                                         </form>
                                     @endif
+                                    @php
+                                        $linesRoute = $mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines';
+                                        $linesAvailable = $mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines');
+                                    @endphp
                                     <select
                                         class="service-order-actions-select ml-auto block w-full max-w-[11rem] cursor-pointer rounded-lg border border-slate-200 bg-white py-1.5 pl-2 pr-7 text-left text-xs font-semibold text-slate-800 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                         data-order-id="{{ $order->id }}"
@@ -110,14 +115,22 @@
                                         <option value="print" data-url="{{ route('admin.service-sales.requests.print', $order) }}">Печать</option>
                                         @if ($order->isAwaitingFulfillment())
                                             <option value="edit" data-url="{{ route('admin.service-sales.requests.edit', $order) }}">Изменить данные</option>
-                                            @if ($mayAccessRoute('admin.service-sales.requests.lines') || $mayAccessRoute('admin.service-sales.sell.lines'))
+                                            @if ($linesAvailable)
                                                 <option
                                                     value="lines"
-                                                    data-url="{{ route($mayAccessRoute('admin.service-sales.requests.lines') ? 'admin.service-sales.requests.lines' : 'admin.service-sales.sell.lines', $order) }}"
+                                                    data-url="{{ route($linesRoute, $order) }}"
                                                 >Изменить позиции</option>
                                             @endif
                                             <option value="fulfill" data-url="{{ route('admin.service-sales.requests.show', $order) }}">Оформить</option>
                                             <option value="delete">Удалить</option>
+                                        @elseif ($order->status === \App\Models\ServiceOrder::STATUS_FULFILLED && $canEditFulfilled)
+                                            <option value="edit" data-url="{{ route('admin.service-sales.requests.edit', $order) }}">Изменить данные</option>
+                                            @if ($linesAvailable)
+                                                <option
+                                                    value="lines"
+                                                    data-url="{{ route($linesRoute, $order) }}"
+                                                >Изменить позиции</option>
+                                            @endif
                                         @endif
                                     </select>
                                 </td>

@@ -475,13 +475,15 @@
                                                 <td class="whitespace-nowrap px-3 py-2 text-right align-top tabular-nums text-slate-800" x-text="fmtQty(line.stock_qty)"></td>
                                                 <td class="whitespace-nowrap px-3 py-2 text-right align-top">
                                                     <input
-                                                        type="number"
-                                                        step="any"
-                                                        min="0.0000001"
+                                                        type="text"
+                                                        inputmode="decimal"
+                                                        autocomplete="off"
                                                         required
                                                         class="w-28 rounded-lg border border-slate-200 px-2 py-1 text-right tabular-nums text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
                                                         :name="'items[' + idx + '][quantity]'"
                                                         x-model="line.qtyStr"
+                                                        x-on:focus="$event.target.select()"
+                                                        x-on:mouseup.prevent
                                                     />
                                                 </td>
                                             </tr>

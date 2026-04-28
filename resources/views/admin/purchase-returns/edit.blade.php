@@ -404,9 +404,9 @@
                                 @mousedown.prevent="pickGoodFromSuggest(item)"
                             >
                                 <span class="text-slate-900" x-text="item.name"></span>
-                                <span class="font-mono text-[11px] text-slate-500" x-text="item.article_code"></span>
                                 <span
-                                    class="text-[10px] text-slate-600"
+                                    class="text-[10px]"
+                                    :class="goodsStockQtySoldOut(item.stock_quantity) ? 'font-medium text-red-700' : 'text-slate-600'"
                                     x-show="item.stock_quantity != null && item.stock_quantity !== ''"
                                     x-text="'Остаток на складе: ' + item.stock_quantity"
                                 ></span>

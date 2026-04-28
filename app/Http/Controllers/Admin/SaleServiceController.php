@@ -10,6 +10,7 @@ use App\Models\Good;
 use App\Services\OpeningBalanceService;
 use App\Services\SaleServiceImportService;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -18,22 +19,53 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SaleServiceController extends Controller
 {
+    private const PER_PAGE = 80;
+
     public function __construct(
         private readonly OpeningBalanceService $openingBalanceService
     ) {}
 
-    public function index(): View
+    public function index(Request $request): View
     {
         $branchId = (int) auth()->user()->branch_id;
+        $q = trim((string) $request->query('q', ''));
 
-        $services = Good::query()
+        $query = Good::query()
             ->where('branch_id', $branchId)
-            ->where('is_service', true)
+            ->where('is_service', true);
+
+        if ($q !== '') {
+            $like = '%'.$this->escapeLikePattern($q).'%';
+            $query->where(function ($w) use ($like) {
+                $w->where('name', 'like', $like)
+                    ->orWhere('article_code', 'like', $like)
+                    ->orWhere('barcode', 'like', $like)
+                    ->orWhere('category', 'like', $like)
+                    ->orWhere('oem', 'like', $like)
+                    ->orWhere('factory_number', 'like', $like);
+            });
+        }
+
+        $services = $query
             ->orderBy('name')
-            ->get();
+            ->paginate(self::PER_PAGE)
+            ->withQueryString();
+
+        $placeholderId = 9_999_999_002;
+        $editUrlTemplate = str_replace(
+            (string) $placeholderId,
+            '__ID__',
+            route('admin.sale-services.edit', ['service' => $placeholderId], true)
+        );
 
         return view('admin.sale-services.index', [
             'services' => $services,
+            'searchQuery' => $q,
+            'servicesSearchConfig' => [
+                'searchUrl' => route('admin.goods.search', ['services_only' => true]),
+                'editUrlTemplate' => $editUrlTemplate,
+                'initialQuery' => $q,
+            ],
         ]);
     }
 
@@ -181,5 +213,10 @@ class SaleServiceController extends Controller
         }
 
         throw new \RuntimeException('Не удалось сгенерировать код услуги.');
+    }
+
+    private function escapeLikePattern(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $value);
     }
 }

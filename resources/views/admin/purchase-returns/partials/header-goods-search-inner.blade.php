@@ -1,0 +1,91 @@
+{{-- Поиск номенклатуры справа от выбора склада (возврат поставщику). --}}
+<div class="relative min-w-[min(100%,14rem)] max-w-6xl flex-1" x-ref="prtHeaderGoodColumn">
+    <label
+        for="prt_header_good_q"
+        class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+    >Наименование товара</label>
+    <div class="relative z-[10040]">
+        <input
+            id="prt_header_good_q"
+            type="search"
+            data-prt-header-good-input
+            x-model="prtHeaderQuery"
+            @focus="onPrtHeaderGoodsFocus($event)"
+            @input="onPrtHeaderGoodsInput($event)"
+            @keydown.enter="onPrtHeaderGoodsEnter($event)"
+            @blur="onPrtHeaderGoodsBlur()"
+            autocomplete="off"
+            placeholder="от 2 символов, Enter — в список"
+            class="block w-full rounded-xl border border-slate-200/90 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+        />
+        <span class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
+        <template x-if="prtHeaderOpen && (prtHeaderLoading || prtHeaderQuery.trim() !== '')">
+            <div
+                x-cloak
+                class="absolute left-0 right-0 top-full z-[10050] mt-1 max-h-[min(24rem,70vh)] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl ring-1 ring-slate-300/90"
+                role="listbox"
+                @mousedown.prevent
+            >
+                <div x-show="prtHeaderLoading" class="px-3 py-2 text-xs text-slate-500">Поиск…</div>
+                <div
+                    x-show="!prtHeaderLoading && prtHeaderQuery.trim().length < 2 && prtHeaderQuery.trim() !== ''"
+                    class="px-3 py-2 text-xs text-amber-800/90"
+                >Введите не менее 2 символов</div>
+                <div
+                    x-show="!prtHeaderLoading && prtHeaderQuery.trim().length >= 2 && prtHeaderItems.length === 0"
+                    class="border-b border-slate-100 px-3 py-2"
+                >
+                    <button
+                        type="button"
+                        class="w-full rounded-lg border border-emerald-300/90 bg-emerald-50 px-3 py-2 text-center text-[12px] font-semibold leading-snug text-emerald-950 shadow-sm hover:bg-emerald-100/95"
+                        @mousedown.prevent.stop
+                        @click.prevent.stop="appendPrtLineFromHeaderFreeText()"
+                    >
+                        Добавить новый товар
+                    </button>
+                </div>
+                <template x-for="item in prtHeaderItems" :key="item.id">
+                    <div
+                        role="option"
+                        class="flex w-full items-stretch border-b border-slate-50 last:border-b-0 hover:bg-emerald-50/80"
+                    >
+                        <button
+                            type="button"
+                            class="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2 text-left text-xs"
+                            @mousedown.prevent="appendPrtLineFromCatalogItem(item)"
+                        >
+                            <span class="font-medium text-slate-900" x-text="item.name"></span>
+                            @include('admin.partials.goods-suggest-meta-pills')
+                        </button>
+                        <button
+                            type="button"
+                            class="flex min-w-[3.75rem] shrink-0 flex-col items-center justify-center gap-0.5 border-l px-1.5 py-2 text-center text-xs transition-colors"
+                            :class="String(prtHeaderCopyFeedbackGoodId) === String(item.id) ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-white text-slate-400 hover:bg-slate-50 hover:text-teal-700'"
+                            :title="String(prtHeaderCopyFeedbackGoodId) === String(item.id) ? 'Скопировано в буфер обмена' : 'Копировать наименование'"
+                            :aria-label="String(prtHeaderCopyFeedbackGoodId) === String(item.id) ? 'Скопировано' : 'Копировать наименование'"
+                            @mousedown.prevent.stop
+                            @click.prevent.stop="copyPrtHeaderGoodName(item, $event)"
+                        >
+                            <span x-show="String(prtHeaderCopyFeedbackGoodId) !== String(item.id)" class="inline-flex shrink-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="h-4 w-4" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                            </span>
+                            <span
+                                x-show="String(prtHeaderCopyFeedbackGoodId) === String(item.id)"
+                                class="flex flex-col items-center gap-0.5"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <span class="max-w-[4rem] text-center text-[10px] font-semibold leading-tight text-emerald-800">Скопировано</span>
+                            </span>
+                        </button>
+                    </div>
+                </template>
+            </div>
+        </template>
+    </div>
+</div>

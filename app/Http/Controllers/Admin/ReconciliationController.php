@@ -16,6 +16,7 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -23,6 +24,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -44,7 +46,7 @@ class ReconciliationController extends Controller
         return view('admin.reconciliation.index', $resolved);
     }
 
-    public function exportPdf(Request $request): RedirectResponse|\Illuminate\Http\Response
+    public function exportPdf(Request $request): RedirectResponse|Response
     {
         $resolved = $this->prepareReconciliationPage($request);
         if ($resolved instanceof RedirectResponse) {
@@ -95,6 +97,13 @@ class ReconciliationController extends Controller
             ? Counterparty::query()->where('branch_id', $branchId)->find($counterpartyId)
             : null;
 
+        if ($counterparty !== null && $counterparty->kind === Counterparty::KIND_OTHER) {
+            return redirect()->route('admin.reconciliation.index', array_merge(
+                $request->only(['date_from', 'date_to']),
+                ['mode' => $mode],
+            ));
+        }
+
         if ($counterparty !== null && ! $this->counterpartyMatchesMode($counterparty, $mode)) {
             $alt = $mode === self::MODE_BUYERS ? self::MODE_SELLERS : self::MODE_BUYERS;
             if ($this->counterpartyMatchesMode($counterparty, $alt)) {
@@ -141,6 +150,13 @@ class ReconciliationController extends Controller
         $buyerPeriodPurchasesNet = '0';
         $supplierPurchasesPeriod = '0';
         $supplierReturnsPeriod = '0';
+        $buyerSaleCount = 0;
+        $buyerReturnCount = 0;
+        $buyerAvgSale = '0';
+        $supplierPurchasesGross = '0';
+        $supplierPurchaseCount = 0;
+        $supplierReturnCount = 0;
+        $supplierAvgPurchase = '0';
 
         if ($counterparty !== null) {
             $data = $this->reconciliationForCounterparty($branchId, $counterparty, $from, $to);
@@ -157,6 +173,13 @@ class ReconciliationController extends Controller
             $buyerPeriodPurchasesNet = $data['buyerPeriodPurchasesNet'];
             $supplierPurchasesPeriod = $data['supplierPurchasesPeriod'];
             $supplierReturnsPeriod = $data['supplierReturnsPeriod'];
+            $buyerSaleCount = $data['buyerSaleCount'];
+            $buyerReturnCount = $data['buyerReturnCount'];
+            $buyerAvgSale = $data['buyerAvgSale'];
+            $supplierPurchasesGross = $data['supplierPurchasesGross'];
+            $supplierPurchaseCount = $data['supplierPurchaseCount'];
+            $supplierReturnCount = $data['supplierReturnCount'];
+            $supplierAvgPurchase = $data['supplierAvgPurchase'];
         } else {
             foreach ($counterparties as $cp) {
                 $data = $this->reconciliationForCounterparty($branchId, $cp, $from, $to);
@@ -202,6 +225,13 @@ class ReconciliationController extends Controller
             'buyerPeriodPurchasesNet' => $buyerPeriodPurchasesNet,
             'supplierPurchasesPeriod' => $supplierPurchasesPeriod,
             'supplierReturnsPeriod' => $supplierReturnsPeriod ?? '0',
+            'buyerSaleCount' => $buyerSaleCount,
+            'buyerReturnCount' => $buyerReturnCount,
+            'buyerAvgSale' => $buyerAvgSale,
+            'supplierPurchasesGross' => $supplierPurchasesGross,
+            'supplierPurchaseCount' => $supplierPurchaseCount,
+            'supplierReturnCount' => $supplierReturnCount,
+            'supplierAvgPurchase' => $supplierAvgPurchase,
         ];
 
         return $this->enrichReconciliationDisplay($payload);
@@ -493,7 +523,7 @@ class ReconciliationController extends Controller
         return -1 * abs($this->excelMoney($v));
     }
 
-    private function applySheetBorders(\PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet, int $headerRow, int $lastRow): void
+    private function applySheetBorders(Worksheet $sheet, int $headerRow, int $lastRow): void
     {
         if ($lastRow < $headerRow) {
             return;
@@ -548,6 +578,18 @@ class ReconciliationController extends Controller
         $supplierPurchasesGross = $this->sumSupplierPurchasesInPeriod($branchId, $supplierAliases, $from, $to);
         $supplierReturnsPeriod = $this->sumSupplierReturnsInPeriod($branchId, $supplierAliases, $from, $to);
 
+        $buyerSaleCount = $this->countBuyerSalesInPeriod($branchId, $buyerAliases, $from, $to);
+        $buyerReturnCount = $this->countBuyerReturnsInPeriod($branchId, $buyerAliases, $from, $to);
+        $buyerAvgSale = $buyerSaleCount > 0
+            ? bcdiv($buyerSalesPeriod, (string) $buyerSaleCount, 2)
+            : '0';
+
+        $supplierPurchaseCount = $this->countSupplierPurchasesInPeriod($branchId, $supplierAliases, $from, $to);
+        $supplierReturnCount = $this->countSupplierReturnsInPeriod($branchId, $supplierAliases, $from, $to);
+        $supplierAvgPurchase = $supplierPurchaseCount > 0
+            ? bcdiv($supplierPurchasesGross, (string) $supplierPurchaseCount, 2)
+            : '0';
+
         return [
             'buyerRows' => $buyerRows,
             'supplierRows' => $supplierRows,
@@ -560,8 +602,15 @@ class ReconciliationController extends Controller
             'buyerPeriodPurchasesNet' => bcsub($buyerSalesPeriod, $buyerReturnsPeriod, 2),
             'buyerSalesPeriod' => $buyerSalesPeriod,
             'buyerReturnsPeriod' => $buyerReturnsPeriod,
+            'buyerSaleCount' => $buyerSaleCount,
+            'buyerReturnCount' => $buyerReturnCount,
+            'buyerAvgSale' => $buyerAvgSale,
             'supplierPurchasesPeriod' => bcsub($supplierPurchasesGross, $supplierReturnsPeriod, 2),
+            'supplierPurchasesGross' => $supplierPurchasesGross,
             'supplierReturnsPeriod' => $supplierReturnsPeriod,
+            'supplierPurchaseCount' => $supplierPurchaseCount,
+            'supplierReturnCount' => $supplierReturnCount,
+            'supplierAvgPurchase' => $supplierAvgPurchase,
         ];
     }
 
@@ -579,7 +628,7 @@ class ReconciliationController extends Controller
     }
 
     /**
-     * Список контрагентов для вкладки: по полю «Тип» в справочнике (покупатель / поставщик / прочее в обоих).
+     * Список контрагентов для вкладки: только покупатель или только поставщик (тип «Прочее» не показывается).
      *
      * @return Collection<int, Counterparty>
      */
@@ -591,9 +640,9 @@ class ReconciliationController extends Controller
             ->orderBy('name');
 
         if ($mode === self::MODE_BUYERS) {
-            $q->whereIn('kind', [Counterparty::KIND_BUYER, Counterparty::KIND_OTHER]);
+            $q->where('kind', Counterparty::KIND_BUYER);
         } else {
-            $q->whereIn('kind', [Counterparty::KIND_SUPPLIER, Counterparty::KIND_OTHER]);
+            $q->where('kind', Counterparty::KIND_SUPPLIER);
         }
 
         return $q->get();
@@ -601,10 +650,6 @@ class ReconciliationController extends Controller
 
     private function counterpartyMatchesMode(Counterparty $counterparty, string $mode): bool
     {
-        if ($counterparty->kind === Counterparty::KIND_OTHER) {
-            return true;
-        }
-
         if ($mode === self::MODE_BUYERS) {
             return $counterparty->kind === Counterparty::KIND_BUYER;
         }
@@ -702,6 +747,99 @@ class ReconciliationController extends Controller
         }
 
         return $total;
+    }
+
+    /** Число документов с ненулевой суммой строк (как в таблице сверки). */
+    private function countBuyerSalesInPeriod(int $branchId, array $buyerAliases, Carbon $from, Carbon $to): int
+    {
+        if ($buyerAliases === []) {
+            return 0;
+        }
+
+        $sales = LegalEntitySale::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('buyer_name', $buyerAliases)
+            ->whereBetween('document_date', [$from->toDateString(), $to->toDateString()])
+            ->with('lines')
+            ->get();
+
+        $n = 0;
+        foreach ($sales as $sale) {
+            if (bccomp($this->sumLines($sale->lines), '0', 2) !== 0) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    private function countBuyerReturnsInPeriod(int $branchId, array $buyerAliases, Carbon $from, Carbon $to): int
+    {
+        if ($buyerAliases === []) {
+            return 0;
+        }
+
+        $returns = CustomerReturn::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('buyer_name', $buyerAliases)
+            ->whereBetween('document_date', [$from->toDateString(), $to->toDateString()])
+            ->with('lines')
+            ->get();
+
+        $n = 0;
+        foreach ($returns as $ret) {
+            if (bccomp($this->sumLines($ret->lines), '0', 2) !== 0) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    private function countSupplierPurchasesInPeriod(int $branchId, array $supplierAliases, Carbon $from, Carbon $to): int
+    {
+        if ($supplierAliases === []) {
+            return 0;
+        }
+
+        $docs = PurchaseReceipt::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('supplier_name', $supplierAliases)
+            ->whereBetween('document_date', [$from->toDateString(), $to->toDateString()])
+            ->with('lines')
+            ->get();
+
+        $n = 0;
+        foreach ($docs as $doc) {
+            if (bccomp($this->sumLines($doc->lines), '0', 2) !== 0) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    private function countSupplierReturnsInPeriod(int $branchId, array $supplierAliases, Carbon $from, Carbon $to): int
+    {
+        if ($supplierAliases === []) {
+            return 0;
+        }
+
+        $docs = PurchaseReturn::query()
+            ->where('branch_id', $branchId)
+            ->whereIn('supplier_name', $supplierAliases)
+            ->whereBetween('document_date', [$from->toDateString(), $to->toDateString()])
+            ->with('lines')
+            ->get();
+
+        $n = 0;
+        foreach ($docs as $doc) {
+            if (bccomp($this->sumLines($doc->lines), '0', 2) !== 0) {
+                $n++;
+            }
+        }
+
+        return $n;
     }
 
     private function sumIncomeClientInPeriod(int $branchId, int $counterpartyId, Carbon $from, Carbon $to): string

@@ -97,8 +97,8 @@ class BranchAccessService
             return collect($patterns)->contains(fn (string $p) => $p === 'placeholder:'.$key);
         }
 
-        // Выплата зарплаты и карточка сотрудника — тот же доступ, что и к странице «Зарплата».
-        if (in_array($routeName, ['admin.payroll.payout', 'admin.payroll.show', 'admin.payroll.payout-employee', 'admin.payroll.pay-slip', 'admin.payroll.revoke-payout'], true) && in_array('admin.payroll', $patterns, true)) {
+        // Раздел «Зарплата» (не авансы и не штрафы): паттерн admin.payroll или старые точечные права из каталога.
+        if ($this->routeIsPayrollSalaryModule($routeName) && $this->patternsGrantPayrollSalaryModule($patterns)) {
             return true;
         }
 
@@ -107,6 +107,48 @@ class BranchAccessService
                 continue;
             }
             if (Str::is($p, $routeName)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Маршруты модуля «Зарплата» уровня списка/начислений/выплат (без авансов и штрафов).
+     */
+    private function routeIsPayrollSalaryModule(string $routeName): bool
+    {
+        if ($routeName === 'admin.payroll') {
+            return true;
+        }
+
+        return Str::startsWith($routeName, 'admin.payroll.')
+            && ! Str::startsWith($routeName, 'admin.payroll.advances.')
+            && ! Str::startsWith($routeName, 'admin.payroll.penalties.');
+    }
+
+    /**
+     * @param  list<string>  $patterns
+     */
+    private function patternsGrantPayrollSalaryModule(array $patterns): bool
+    {
+        foreach ($patterns as $p) {
+            if (Str::startsWith($p, 'placeholder:')) {
+                continue;
+            }
+            if ($p === 'admin.payroll') {
+                return true;
+            }
+            // Раньше в каталоге были отдельные галочки на те же маршруты — сохраняем совместимость.
+            if (in_array($p, [
+                'admin.payroll.show',
+                'admin.payroll.pay-slip',
+                'admin.payroll.revoke-payout',
+                'admin.payroll.manual-accruals',
+                'admin.payroll.payout',
+                'admin.payroll.payout-employee',
+            ], true)) {
                 return true;
             }
         }
@@ -168,6 +210,11 @@ class BranchAccessService
      */
     private function routeNameMatchesPatterns(string $routeName, array $patterns): bool
     {
+        // Пункт меню «Зарплата» — route admin.payroll; узкие сохранённые права должны по-прежнему показывать раздел.
+        if ($routeName === 'admin.payroll' && $this->patternsGrantPayrollSalaryModule($patterns)) {
+            return true;
+        }
+
         foreach ($patterns as $p) {
             if (Str::startsWith($p, 'placeholder:')) {
                 continue;

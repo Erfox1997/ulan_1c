@@ -23,6 +23,7 @@
                 </p>
             </div>
         @else
+            @if ((int) $selectedWarehouseId === 0)
             <div
                 class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
             >
@@ -44,6 +45,7 @@
                     </select>
                 </form>
             </div>
+            @endif
 
             @include('admin.purchase-receipts.partials.form-document-styles')
 
@@ -51,7 +53,6 @@
                 @php
                     $prFormUrls = [
                         'goodsSearch' => route('admin.goods.search'),
-                        'categoriesSearch' => route('admin.goods.categories'),
                         'counterpartySearch' => route('admin.counterparties.search', ['for' => 'purchase']),
                         'counterpartyQuick' => route('admin.counterparties.quick-store'),
                     ];
@@ -78,7 +79,6 @@
                         };
                     })();
                 </script>
-                @include('admin.partials.article-code-reserve-script')
                 <script>
                     window.__purchaseReceiptInit = {
                         lines: @json($linesForForm),
@@ -89,12 +89,143 @@
                         warehouseName: @json($warehouses->firstWhere('id', $selectedWarehouseId)?->name ?? ''),
                     };
                 </script>
+                <div @keydown.escape.window="closeAllSuggests()" @scroll.window="repositionOpenSuggests()" @resize.window="repositionOpenSuggests()" x-data="purchaseReceiptForm()" class="space-y-6">
+                    <div
+                        class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
+                    >
+                        <div class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5">
+                            <div class="flex flex-wrap items-end gap-x-5 gap-y-4">
+                                <form
+                                    method="GET"
+                                    action="{{ route('admin.purchase-receipts.create') }}"
+                                    class="w-full shrink-0 sm:w-auto sm:min-w-[11rem] sm:max-w-[15rem]"
+                                >
+                                    <x-input-label for="pr_warehouse_create_in_form" value="Склад документа *" />
+                                    <select
+                                        id="pr_warehouse_create_in_form"
+                                        name="warehouse_id"
+                                        class="mt-2 block w-full rounded-xl border border-slate-200/90 bg-white py-2.5 pl-3 pr-10 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+                                        onchange="this.form.submit()"
+                                    >
+                                        @foreach ($warehouses as $w)
+                                            <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
+                                        @endforeach
+                                    </select>
+                                </form>
+                                <div class="relative min-w-[min(100%,14rem)] max-w-6xl flex-1" x-ref="headerGoodBlock">
+                                    <label
+                                        for="pr_header_good_q"
+                                        class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+                                    >Наименование товара</label>
+                                    <div class="relative z-[10040]">
+                                        <input
+                                            id="pr_header_good_q"
+                                            type="search"
+                                            data-pr-header-good-input
+                                            x-model="headerGoodQuery"
+                                            @focus="onHeaderGoodFocus($event)"
+                                            @input="onHeaderGoodInput($event)"
+                                            @keydown.enter="onHeaderGoodEnter($event)"
+                                            @blur="onHeaderGoodBlur()"
+                                            autocomplete="off"
+                                            placeholder="от 2 символов, Enter — в список"
+                                            class="block w-full rounded-xl border border-slate-200/90 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+                                        />
+                                        <span class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
+                                    <template x-if="headerGoodOpen && (headerGoodLoading || headerGoodQuery.trim() !== '')">
+                                        <div
+                                            x-cloak
+                                            class="absolute left-0 right-0 top-full z-[10050] mt-1 max-h-[min(24rem,70vh)] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl ring-1 ring-slate-300/90"
+                                            role="listbox"
+                                            @mousedown.prevent
+                                        >
+                                            <div x-show="headerGoodLoading" class="px-3 py-2 text-xs text-slate-500">Поиск…</div>
+                                            <div
+                                                x-show="!headerGoodLoading && headerGoodQuery.trim().length < 2 && headerGoodQuery.trim() !== ''"
+                                                class="px-3 py-2 text-xs text-amber-800/90"
+                                            >Введите не менее 2 символов</div>
+                                            <div
+                                                x-show="!headerGoodLoading && headerGoodQuery.trim().length >= 2 && headerGoodItems.length === 0"
+                                                class="border-b border-slate-100 px-3 py-2"
+                                            >
+                                                <button
+                                                    type="button"
+                                                    class="w-full rounded-lg border border-emerald-300/90 bg-emerald-50 px-3 py-2 text-center text-[12px] font-semibold leading-snug text-emerald-950 shadow-sm hover:bg-emerald-100/95"
+                                                    @mousedown.prevent.stop
+                                                    @click.prevent.stop="appendLineFromHeaderFreeText()"
+                                                >
+                                                    Добавить новый товар
+                                                </button>
+                                            </div>
+                                            <template x-for="item in headerGoodItems" :key="item.id">
+                                                <div
+                                                    role="option"
+                                                    class="flex w-full items-stretch border-b border-slate-50 hover:bg-emerald-50/80"
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        class="flex min-w-0 flex-1 flex-col items-stretch gap-0.5 px-3 py-2 text-left text-xs"
+                                                        @mousedown.prevent="appendLineFromCatalogItem(item)"
+                                                    >
+                                                        <span class="font-medium text-slate-900" x-text="item.name"></span>
+                                                        <div
+                                                            class="mt-0.5 flex flex-wrap gap-1.5"
+                                                            x-show="goodsSuggestHasWarehouseHint(item)"
+                                                        >
+                                                            <span
+                                                                class="inline-flex rounded-lg border px-1.5 py-0.5 text-[10px] font-semibold"
+                                                                :class="goodsStockQtySoldOut(item.stock_quantity)
+                                                                    ? 'border-red-200/85 bg-gradient-to-r from-red-50/95 to-orange-50/40 text-red-800'
+                                                                    : 'border-emerald-200/85 bg-gradient-to-r from-emerald-50/95 to-sky-50/50 text-teal-900'"
+                                                                x-show="item.stock_quantity != null && item.stock_quantity !== ''"
+                                                                x-text="'Остаток: ' + formatGoodsStockQty(item.stock_quantity) + (item.unit ? ' ' + item.unit : '')"
+                                                            ></span>
+                                                            <span
+                                                                class="inline-flex rounded-lg border border-sky-200/80 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-700"
+                                                                x-show="item.opening_unit_cost != null && item.opening_unit_cost !== ''"
+                                                                x-text="'Закуп. по складу: ' + formatGoodsUnitCost(item.opening_unit_cost)"
+                                                            ></span>
+                                                        </div>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class="flex min-w-[3.75rem] shrink-0 flex-col items-center justify-center gap-0.5 border-l px-1.5 py-2 text-center text-xs transition-colors"
+                                                        :class="String(copyFeedbackGoodId) === String(item.id) ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-white text-slate-400 hover:bg-slate-50 hover:text-teal-700'"
+                                                        :title="String(copyFeedbackGoodId) === String(item.id) ? 'Скопировано в буфер обмена' : 'Копировать наименование'"
+                                                        :aria-label="String(copyFeedbackGoodId) === String(item.id) ? 'Скопировано' : 'Копировать наименование'"
+                                                        @mousedown.prevent.stop
+                                                        @click.prevent.stop="copyGoodName(item, $event)"
+                                                    >
+                                                        <span x-show="String(copyFeedbackGoodId) !== String(item.id)" class="inline-flex shrink-0">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="h-4 w-4" aria-hidden="true">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                            </svg>
+                                                        </span>
+                                                        <span
+                                                            x-show="String(copyFeedbackGoodId) === String(item.id)"
+                                                            class="flex flex-col items-center gap-0.5"
+                                                            role="status"
+                                                            aria-live="polite"
+                                                        >
+                                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                            </svg>
+                                                            <span class="max-w-[4rem] text-center text-[10px] font-semibold leading-tight text-emerald-800">Скопировано</span>
+                                                        </span>
+                                                    </button>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 <form
                     method="POST"
                     action="{{ route('admin.purchase-receipts.store') }}"
-                    class="space-y-6"
-                    @keydown.escape.window="closeAllSuggests()"
-                    x-data="purchaseReceiptForm()"
+                    class="w-full min-w-0 space-y-6"
                 >
                     @csrf
                     <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
@@ -217,22 +348,30 @@
                             <button type="button" class="ob-tb-btn ob-tb-btn-icon" title="Вверх" @click="moveUp()">▲</button>
                             <button type="button" class="ob-tb-btn ob-tb-btn-icon" title="Вниз" @click="moveDown()">▼</button>
                             <span class="mx-1 h-4 w-px bg-slate-300/90" aria-hidden="true"></span>
+                            <span
+                                class="inline-flex flex-wrap items-center gap-1"
+                                title="Одна наценка для всех строк; продажная цена считается от закупки там, где она указана"
+                            >
+                                <label class="text-[10px] font-semibold text-slate-600 whitespace-nowrap" for="pr_bulk_markup_create">Наценка всем</label>
+                                <input
+                                    id="pr_bulk_markup_create"
+                                    type="text"
+                                    x-model="bulkMarkupPercent"
+                                    class="h-[24px] w-[3.5rem] rounded-md border border-sky-200/90 bg-white px-1.5 text-center text-[11px] font-semibold text-slate-800 shadow-inner outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/35"
+                                    inputmode="decimal"
+                                    placeholder="30"
+                                    autocomplete="off"
+                                    @keydown.enter.prevent="applyBulkMarkupToAllLines()"
+                                />
+                                <button type="button" class="ob-tb-btn" title="Подставить эту наценку во все строки и пересчитать продажу" @click="applyBulkMarkupToAllLines()">Ко всем</button>
+                            </span>
+                            <span class="mx-1 h-4 w-px bg-slate-300/90" aria-hidden="true"></span>
                             <button type="button" class="ob-tb-btn" title="EAN-13 только для пустых ячеек" @click="genBarcodesEmptyOnly()">Штрихкоды</button>
-                            <button type="button" class="ob-tb-btn" title="Только для пустых ячеек" @click="genArticlesEmptyOnly()">Артикулы</button>
                             <span class="mx-1 h-4 w-px bg-slate-300/90" aria-hidden="true"></span>
                             <button type="button" class="ob-tb-btn" title="Печать по текущим полям (черновик). PDF — в диалоге печати." @click="openDraftPrint()">Печать</button>
-                            <div class="ob-more-wrap" @keydown.escape.window="moreOpen = false">
-                                <button type="button" class="ob-tb-btn" @click="moreOpen = !moreOpen" :aria-expanded="moreOpen">Ещё ▾</button>
-                                <div
-                                    x-cloak
-                                    x-show="moreOpen"
-                                    @click.outside="moreOpen = false"
-                                    class="ob-more-dd"
-                                    x-transition
-                                >
-                                    <button type="button" @click="removeSelectedRow(); moreOpen = false">Удалить строку</button>
-                                </div>
-                            </div>
+                            <span class="mx-1 h-4 w-px bg-slate-300/90" aria-hidden="true"></span>
+                            <button type="button" class="ob-tb-btn" title="Удалить выделенную строку таблицы (кликните строку или используйте Вверх/Вниз)" @click="removeSelectedRow()">Удалить строку</button>
+                            <button type="button" class="ob-tb-btn" title="Очистить все поля выделенной строки без удаления" @click="clearSelectedRow()">Очистить строку</button>
                         </div>
 
                         <x-input-error class="mx-3 mt-2" :messages="$errors->get('lines')" />
@@ -263,8 +402,7 @@
                                         <th class="ob-num">N</th>
                                         <th>Наименование *</th>
                                         <th>Штрихкод</th>
-                                        <th>Категория</th>
-                                        <th>Артикул *</th>
+                                        <th>Наценка %</th>
                                         <th>Ед. изм.</th>
                                         <th>Кол-во *</th>
                                         <th>Цена (закуп.) *</th>
@@ -281,6 +419,7 @@
                                         >
                                             <td class="ob-num" x-text="index + 1"></td>
                                             <td class="min-w-[10rem]">
+                                                <input type="hidden" :name="`lines[${index}][article_code]`" x-model="row.article_code" autocomplete="off" />
                                                 <input
                                                     type="text"
                                                     :name="`lines[${index}][name]`"
@@ -302,21 +441,18 @@
                                                     autocomplete="off"
                                                 />
                                             </td>
-                                            <td class="min-w-[6rem]">
+                                            <td class="min-w-[4.25rem] ob-numr">
                                                 <input
                                                     type="text"
-                                                    :name="`lines[${index}][category]`"
-                                                    x-model="row.category"
+                                                    :name="`lines[${index}][markup_percent]`"
+                                                    x-model="row.markup_percent"
                                                     class="ob-inp"
                                                     autocomplete="off"
-                                                    placeholder="Подсказка из справочника"
-                                                    @focus="onCategoryFocus(index, $event)"
-                                                    @input="onCategoryInput(index, $event)"
-                                                    @blur="onCategoryBlur()"
+                                                    placeholder="30"
+                                                    inputmode="decimal"
+                                                    title="Процент к закупочной цене; при вводе пересчитывается продажная цена"
+                                                    @input="applySaleFromMarkup(index)"
                                                 />
-                                            </td>
-                                            <td class="min-w-[6rem]">
-                                                <input type="text" :name="`lines[${index}][article_code]`" x-model="row.article_code" class="ob-inp font-mono text-[11px]" autocomplete="off" />
                                             </td>
                                             <td class="min-w-[3.5rem]">
                                                 <input type="text" :name="`lines[${index}][unit]`" x-model="row.unit" class="ob-inp" autocomplete="off" />
@@ -325,7 +461,7 @@
                                                 <input type="text" :name="`lines[${index}][quantity]`" x-model="row.quantity" class="ob-inp" inputmode="decimal" autocomplete="off" />
                                             </td>
                                             <td class="min-w-[4.5rem] ob-numr">
-                                                <input type="text" :name="`lines[${index}][unit_price]`" x-model="row.unit_price" class="ob-inp" inputmode="decimal" autocomplete="off" />
+                                                <input type="text" :name="`lines[${index}][unit_price]`" x-model="row.unit_price" class="ob-inp" inputmode="decimal" autocomplete="off" @input="applySaleFromMarkup(index)" />
                                             </td>
                                             <td class="min-w-[4.5rem] ob-sum ob-numr">
                                                 <input type="text" class="ob-inp" readonly tabindex="-1" :value="lineSum(row)" />
@@ -339,73 +475,90 @@
                             </table>
                         </div>
 
+                        <template x-if="nameSuggestRow !== null && (nameSuggestLoading || nameSuggestItems.length > 0 || nameSuggestNoHits)">
+                        <template x-teleport="body">
                         <div
                             x-cloak
-                            x-show="nameSuggestRow !== null && (nameSuggestLoading || nameSuggestItems.length > 0 || nameSuggestNoHits)"
-                            class="fixed z-[200] max-h-56 overflow-y-auto rounded-xl border border-slate-200/90 bg-white/95 py-1 text-left shadow-lg ring-1 ring-slate-200/40"
+                            class="fixed z-[10045] max-h-[min(24rem,70vh)] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl ring-1 ring-slate-300/90"
                             role="listbox"
                             :style="'top:' + suggestPos.top + 'px;left:' + suggestPos.left + 'px;width:' + suggestPos.width + 'px'"
+                            @mousedown.prevent
                         >
                             <div x-show="nameSuggestLoading" class="px-3 py-2 text-xs text-slate-500">Поиск…</div>
                             <template x-for="item in nameSuggestItems" :key="item.id">
-                                <button
-                                    type="button"
-                                    class="flex w-full flex-col items-stretch gap-0.5 px-3 py-1.5 text-left text-xs hover:bg-gradient-to-r hover:from-emerald-50/80 hover:to-sky-50/50"
-                                    role="option"
-                                    @mousedown.prevent="pickGoodFromSuggest(item)"
-                                >
-                                    <span class="font-medium text-slate-900" x-text="item.name"></span>
-                                    <span class="font-mono text-[11px] text-slate-500" x-text="item.article_code"></span>
-                                    <div
-                                        class="mt-0.5 flex flex-wrap gap-1.5"
-                                        x-show="goodsSuggestHasWarehouseHint(item)"
+                                <div role="option" class="flex w-full items-stretch hover:bg-gradient-to-r hover:from-emerald-50/80 hover:to-sky-50/50">
+                                    <button
+                                        type="button"
+                                        class="flex min-w-0 flex-1 flex-col items-stretch gap-0.5 px-3 py-1.5 text-left text-xs"
+                                        @mousedown.prevent="pickGoodFromSuggest(item)"
                                     >
+                                        <span class="font-medium text-slate-900" x-text="item.name"></span>
+                                        <div
+                                            class="mt-0.5 flex flex-wrap gap-1.5"
+                                            x-show="goodsSuggestHasWarehouseHint(item)"
+                                        >
+                                            <span
+                                                class="inline-flex max-w-full items-center rounded-lg border px-1.5 py-0.5 text-[10px] font-semibold leading-tight shadow-sm"
+                                                :class="goodsStockQtySoldOut(item.stock_quantity)
+                                                    ? 'border-red-200/85 bg-gradient-to-r from-red-50/95 to-orange-50/40 text-red-800'
+                                                    : 'border-emerald-200/85 bg-gradient-to-r from-emerald-50/95 to-sky-50/50 text-teal-900'"
+                                                x-show="item.stock_quantity != null && item.stock_quantity !== ''"
+                                                x-text="'Остаток: ' + formatGoodsStockQty(item.stock_quantity) + (item.unit ? ' ' + item.unit : '')"
+                                            ></span>
+                                            <span
+                                                class="inline-flex max-w-full items-center rounded-lg border border-sky-200/80 bg-white px-1.5 py-0.5 text-[10px] font-medium leading-tight text-slate-700 shadow-sm"
+                                                x-show="item.opening_unit_cost != null && item.opening_unit_cost !== ''"
+                                                x-text="'Закуп. по складу: ' + formatGoodsUnitCost(item.opening_unit_cost)"
+                                            ></span>
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="flex min-w-[3.75rem] shrink-0 flex-col items-center justify-center gap-0.5 border-l px-1.5 py-1.5 text-center text-xs transition-colors"
+                                        :class="String(copyFeedbackGoodId) === String(item.id) ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-100 bg-white text-slate-400 hover:bg-slate-50 hover:text-teal-700'"
+                                        :title="String(copyFeedbackGoodId) === String(item.id) ? 'Скопировано в буфер обмена' : 'Копировать наименование'"
+                                        :aria-label="String(copyFeedbackGoodId) === String(item.id) ? 'Скопировано' : 'Копировать наименование'"
+                                        @mousedown.prevent.stop
+                                        @click.prevent.stop="copyGoodName(item, $event)"
+                                    >
+                                        <span x-show="String(copyFeedbackGoodId) !== String(item.id)" class="inline-flex shrink-0">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="h-4 w-4" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                            </svg>
+                                        </span>
                                         <span
-                                            class="inline-flex max-w-full items-center rounded-lg border border-emerald-200/85 bg-gradient-to-r from-emerald-50/95 to-sky-50/50 px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-teal-900 shadow-sm"
-                                            x-show="item.stock_quantity != null && item.stock_quantity !== ''"
-                                            x-text="'Остаток: ' + formatGoodsStockQty(item.stock_quantity) + (item.unit ? ' ' + item.unit : '')"
-                                        ></span>
-                                        <span
-                                            class="inline-flex max-w-full items-center rounded-lg border border-sky-200/80 bg-white/95 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-slate-700 shadow-sm"
-                                            x-show="item.opening_unit_cost != null && item.opening_unit_cost !== ''"
-                                            x-text="'Закуп. по складу: ' + formatGoodsUnitCost(item.opening_unit_cost)"
-                                        ></span>
-                                    </div>
-                                </button>
+                                            x-show="String(copyFeedbackGoodId) === String(item.id)"
+                                            class="flex flex-col items-center gap-0.5"
+                                            role="status"
+                                            aria-live="polite"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                            <span class="max-w-[4rem] text-center text-[10px] font-semibold leading-tight text-emerald-800">Скопировано</span>
+                                        </span>
+                                    </button>
+                                </div>
                             </template>
                             <div
-                                x-show="!nameSuggestLoading && nameSuggestItems.length === 0 && nameSuggestNoHits"
-                                class="px-3 py-2 text-xs text-slate-500"
+                                x-show="nameSuggestRow !== null && !nameSuggestLoading && nameSuggestItems.length === 0 && nameSuggestNoHits"
+                                class="space-y-2 border-t border-slate-100 px-3 py-2.5"
                             >
-                                Нет совпадений в базе
-                            </div>
-                        </div>
-
-                        <div
-                            x-cloak
-                            x-show="categorySuggestRow !== null && (categorySuggestLoading || categorySuggestItems.length > 0 || categorySuggestNoHits)"
-                            class="fixed z-[202] max-h-56 overflow-y-auto rounded border border-slate-300 bg-white py-1 text-left shadow-lg"
-                            role="listbox"
-                            :style="'top:' + categorySuggestPos.top + 'px;left:' + categorySuggestPos.left + 'px;width:' + categorySuggestPos.width + 'px'"
-                        >
-                            <div x-show="categorySuggestLoading" class="px-3 py-2 text-xs text-slate-500">Загрузка категорий…</div>
-                            <template x-for="(cat, cidx) in categorySuggestItems" :key="cidx">
+                                <p class="text-[11px] leading-snug text-slate-600">
+                                    Новый товар (в справочнике ещё нет записи) — наименование уже подставлено в ячейку. Укажите артикул, количество и цены ниже.
+                                </p>
                                 <button
                                     type="button"
-                                    class="block w-full px-3 py-1.5 text-left text-xs text-slate-900 hover:bg-slate-100"
-                                    role="option"
-                                    @mousedown.prevent
-                                    @click="pickCategoryFromSuggest(cat)"
-                                    x-text="cat"
-                                ></button>
-                            </template>
-                            <div
-                                x-show="!categorySuggestLoading && categorySuggestItems.length === 0 && categorySuggestNoHits"
-                                class="px-3 py-2 text-xs text-slate-500"
-                            >
-                                Нет категорий в справочнике — введите вручную
+                                    class="w-full rounded-lg border border-emerald-300/90 bg-emerald-50 px-3 py-2 text-[12px] font-semibold leading-snug text-emerald-950 shadow-sm hover:bg-emerald-100/95"
+                                    @mousedown.prevent.stop
+                                    @click.prevent.stop="closeNameSuggestKeepingTypedName()"
+                                >
+                                    Закрыть список и продолжить
+                                </button>
                             </div>
                         </div>
+                        </template>
+                        </template>
 
                         <div class="ob-1c-foot">
                             <button type="submit" class="ob-tb-btn ob-btn-submit">Провести и закрыть</button>
@@ -414,6 +567,7 @@
                         </div>
                     </div>
                 </form>
+                </div>
             @else
                 <div
                     class="rounded-2xl border border-slate-200/90 bg-gradient-to-b from-slate-50/80 to-white px-4 py-6 text-sm text-slate-600 shadow-sm ring-1 ring-slate-100/80"

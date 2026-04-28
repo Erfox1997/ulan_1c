@@ -17,13 +17,19 @@
                     <a href="{{ route('admin.service-sales.requests.edit', $serviceOrder) }}" class="font-semibold text-slate-600 hover:text-emerald-700 hover:underline">Шапка заявки</a>
                 @endif
             </div>
-            @if ($mayAccessRoute('admin.service-sales.requests.show'))
+            @if ($mayAccessRoute('admin.service-sales.requests.show') && $serviceOrder->isAwaitingFulfillment())
                 <a
                     href="{{ route('admin.service-sales.requests.show', $serviceOrder) }}"
                     class="text-xs font-semibold text-slate-600 hover:text-emerald-800 hover:underline"
                 >К оформлению</a>
             @endif
         </div>
+
+        @if ($serviceOrder->status === \App\Models\ServiceOrder::STATUS_FULFILLED)
+            <div class="rounded-lg border border-teal-200/90 bg-teal-50/90 px-3 py-2 text-xs font-medium leading-snug text-teal-950">
+                Заявка уже оформлена — изменения позиций переписывают связанный документ продажи и пересчитывают складские списания.
+            </div>
+        @endif
 
         @php
             $cp = $serviceOrder->counterparty;

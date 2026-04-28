@@ -406,12 +406,8 @@
                                 role="option"
                                 @mousedown.prevent="pickGoodFromSuggest(item)"
                             >
-                                <span class="text-slate-900" x-text="item.name"></span>
-                                <span
-                                    class="text-[10px] leading-tight text-slate-600"
-                                    x-show="goodsSuggestCompactMeta(item) !== ''"
-                                    x-text="goodsSuggestCompactMeta(item)"
-                                ></span>
+                                    <span class="text-slate-900" x-text="item.name"></span>
+                                    @include('admin.partials.goods-suggest-meta-pills')
                             </button>
                         </template>
                         <div

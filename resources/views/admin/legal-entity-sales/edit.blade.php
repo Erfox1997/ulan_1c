@@ -23,16 +23,6 @@
                 </p>
             </div>
         @else
-            <div
-                class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
-            >
-                <div class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5">
-                    <p class="text-[11px] font-semibold uppercase tracking-wide text-teal-700/80">Склад документа</p>
-                    <p class="mt-1 text-sm font-semibold text-slate-900">{{ $legalEntitySale->warehouse->name }}</p>
-                    <p class="mt-1.5 text-xs text-slate-500">Склад нельзя сменить после проведения.</p>
-                </div>
-            </div>
-
             @include('admin.purchase-receipts.partials.form-document-styles')
             @include('admin.legal-entity-sales.partials.form-header-extra-styles')
 
@@ -55,13 +45,32 @@
                     warehouseName: @json($legalEntitySale->warehouse->name ?? ''),
                 };
             </script>
-            <form
-                method="POST"
-                action="{{ route('admin.legal-entity-sales.update', $legalEntitySale) }}"
+            <div
                 class="space-y-6"
-                @keydown.escape.window="closeAllSuggests()"
                 x-data="legalEntitySaleForm()"
+                @keydown.escape.window="closeAllSuggests()"
+                @scroll.window="repositionLesLineNameSuggest()"
+                @resize.window="repositionLesLineNameSuggest()"
             >
+                <div
+                    class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
+                >
+                    <div class="rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90 px-4 py-4 sm:px-6 sm:py-5">
+                        <div class="flex flex-wrap items-end gap-x-5 gap-y-4">
+                            <div class="w-full min-w-0 shrink-0 sm:w-auto sm:min-w-[11rem] sm:max-w-[18rem]">
+                                <p class="text-[11px] font-semibold uppercase tracking-wide text-teal-700/80">Склад отгрузки *</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900">{{ $legalEntitySale->warehouse->name }}</p>
+                                <p class="mt-1 text-xs text-slate-500">Склад нельзя сменить после проведения.</p>
+                            </div>
+                            @include('admin.legal-entity-sales.partials.header-goods-search-inner')
+                        </div>
+                    </div>
+                </div>
+                <form
+                    method="POST"
+                    action="{{ route('admin.legal-entity-sales.update', $legalEntitySale) }}"
+                    class="space-y-6"
+                >
                 @csrf
                 @method('PUT')
                 <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
@@ -388,12 +397,8 @@
                                         role="option"
                                         @mousedown.prevent="pickGoodFromSuggest(item)"
                                     >
-                                        <span class="text-slate-900" x-text="item.name"></span>
-                                        <span
-                                            class="text-[10px] leading-tight text-slate-600"
-                                            x-show="goodsSuggestCompactMeta(item) !== ''"
-                                            x-text="goodsSuggestCompactMeta(item)"
-                                        ></span>
+                                            <span class="text-slate-900" x-text="item.name"></span>
+                                            @include('admin.partials.goods-suggest-meta-pills')
                                     </button>
                                 </template>
                                 <div
@@ -410,7 +415,8 @@
                         </div>
                     </div>
                 </div>
-            </form>
+                </form>
+            </div>
         @endif
     </div>
 </x-admin-layout>

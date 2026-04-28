@@ -22,6 +22,7 @@ use App\Models\RetailSalePayment;
 use App\Models\ServiceOrder;
 use App\Models\ServiceOrderLine;
 use App\Models\Warehouse;
+use App\Services\BranchAccessService;
 use App\Services\OpeningBalanceService;
 use App\Support\InvoiceNakladnayaFormatter;
 use Illuminate\Http\RedirectResponse;
@@ -141,7 +142,7 @@ class ServiceOrderController extends Controller
 
     public function sellLines(Request $request, ServiceOrder $serviceOrder): View|RedirectResponse
     {
-        if (! $serviceOrder->isAwaitingFulfillment()) {
+        if (! $this->serviceOrderAllowsRequestEditing($serviceOrder)) {
             return redirect()
                 ->route('admin.service-sales.requests')
                 ->withErrors(['fulfill' => 'Заявка недоступна для редактирования позиций.']);
@@ -217,7 +218,7 @@ class ServiceOrderController extends Controller
 
     public function storeLines(StoreServiceOrderLinesRequest $request, ServiceOrder $serviceOrder): RedirectResponse
     {
-        if (! $serviceOrder->isAwaitingFulfillment()) {
+        if (! $this->serviceOrderAllowsRequestEditing($serviceOrder)) {
             return redirect()
                 ->route('admin.service-sales.requests')
                 ->withErrors(['fulfill' => 'Заявка недоступна.']);
@@ -244,11 +245,49 @@ class ServiceOrderController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($serviceOrder, $cartLines, $total) {
-                $serviceOrder->lines()->delete();
+            DB::transaction(function () use ($serviceOrder, $cartLines, $total, $branchId, $warehouseId) {
+                /** @var ServiceOrder $locked */
+                $locked = ServiceOrder::query()
+                    ->whereKey($serviceOrder->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if ($locked->status === ServiceOrder::STATUS_FULFILLED && $locked->retail_sale_id !== null) {
+                    $retailSale = RetailSale::query()
+                        ->whereKey($locked->retail_sale_id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                    foreach ($retailSale->lines()->orderBy('id')->get() as $oldLine) {
+                        $this->openingBalanceService->reverseOutboundSaleLine(
+                            $branchId,
+                            $warehouseId,
+                            (int) $oldLine->good_id,
+                            $oldLine->quantity
+                        );
+                    }
+                    RetailSaleLine::query()->where('retail_sale_id', $retailSale->id)->delete();
+                }
+
+                if ($locked->status === ServiceOrder::STATUS_FULFILLED && $locked->legal_entity_sale_id !== null) {
+                    $legalSale = LegalEntitySale::query()
+                        ->whereKey($locked->legal_entity_sale_id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                    foreach ($legalSale->lines()->orderBy('id')->get() as $oldLine) {
+                        $this->openingBalanceService->reverseOutboundSaleLine(
+                            $branchId,
+                            $warehouseId,
+                            (int) $oldLine->good_id,
+                            $oldLine->quantity
+                        );
+                    }
+                    LegalEntitySaleLine::query()->where('legal_entity_sale_id', $legalSale->id)->delete();
+                }
+
+                $locked->lines()->delete();
                 foreach ($cartLines as $line) {
                     ServiceOrderLine::query()->create([
-                        'service_order_id' => $serviceOrder->id,
+                        'service_order_id' => $locked->id,
                         'good_id' => $line['good_id'],
                         'performer_employee_id' => $line['performer_employee_id'],
                         'article_code' => $line['article_code'],
@@ -259,7 +298,49 @@ class ServiceOrderController extends Controller
                         'line_sum' => $line['line_sum'],
                     ]);
                 }
-                $serviceOrder->update(['total_amount' => $total]);
+                $locked->update(['total_amount' => $total]);
+
+                $syncLines = [];
+                foreach ($cartLines as $line) {
+                    $syncLines[] = [
+                        'article_code' => (string) $line['article_code'],
+                        'quantity' => (string) $line['quantity'],
+                        'unit_price' => $line['unit_price'] !== null && trim((string) $line['unit_price']) !== ''
+                            ? (string) $line['unit_price']
+                            : '',
+                    ];
+                }
+
+                if ($locked->status === ServiceOrder::STATUS_FULFILLED && $locked->retail_sale_id !== null) {
+                    $retailSale = RetailSale::query()
+                        ->whereKey($locked->retail_sale_id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                    $saleTotal = $this->appendRetailLines($retailSale, $branchId, $warehouseId, $syncLines);
+                    RetailSalePayment::query()->where('retail_sale_id', $retailSale->id)->delete();
+                    $accountId = (int) $retailSale->organization_bank_account_id;
+                    RetailSalePayment::query()->create([
+                        'retail_sale_id' => $retailSale->id,
+                        'organization_bank_account_id' => $accountId,
+                        'amount' => $saleTotal,
+                    ]);
+                    $retailSale->update([
+                        'total_amount' => $saleTotal,
+                        'debt_amount' => '0.00',
+                        'debtor_name' => null,
+                        'debtor_phone' => null,
+                        'debtor_comment' => null,
+                    ]);
+                }
+
+                if ($locked->status === ServiceOrder::STATUS_FULFILLED && $locked->legal_entity_sale_id !== null) {
+                    $legalSale = LegalEntitySale::query()
+                        ->whereKey($locked->legal_entity_sale_id)
+                        ->lockForUpdate()
+                        ->firstOrFail();
+                    $this->appendLegalLines($legalSale, $branchId, $warehouseId, $syncLines);
+                    $legalSale->fresh()->load('lines.good')->esfSyncQueueFlagsToDocumentLines()->save();
+                }
             });
         } catch (\Throwable) {
             return redirect()
@@ -270,8 +351,10 @@ class ServiceOrderController extends Controller
 
         $fromRequests = $request->route()->named('admin.service-sales.requests.lines.store');
         if ($fromRequests) {
+            $requestsTab = $serviceOrder->status === ServiceOrder::STATUS_FULFILLED ? 'fulfilled' : 'awaiting';
+
             return redirect()
-                ->route('admin.service-sales.requests', ['status' => 'awaiting'])
+                ->route('admin.service-sales.requests', ['status' => $requestsTab])
                 ->with('status', 'Позиции заявки №'.$serviceOrder->id.' сохранены.');
         }
 
@@ -286,10 +369,10 @@ class ServiceOrderController extends Controller
             return $redirect;
         }
 
-        if (! $serviceOrder->isAwaitingFulfillment()) {
+        if (! $this->serviceOrderAllowsRequestEditing($serviceOrder)) {
             return redirect()
                 ->route('admin.service-sales.requests')
-                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+                ->withErrors(['fulfill' => 'Редактирование заявки недоступно.']);
         }
 
         $branchId = (int) auth()->user()->branch_id;
@@ -345,10 +428,10 @@ class ServiceOrderController extends Controller
             return $redirect;
         }
 
-        if (! $serviceOrder->isAwaitingFulfillment()) {
+        if (! $this->serviceOrderAllowsRequestEditing($serviceOrder)) {
             return redirect()
                 ->route('admin.service-sales.requests')
-                ->withErrors(['fulfill' => 'Редактировать можно только заявку, которая ещё не оформлена.']);
+                ->withErrors(['fulfill' => 'Редактирование заявки недоступно.']);
         }
 
         $notes = $request->validated('notes');
@@ -362,6 +445,14 @@ class ServiceOrderController extends Controller
         $warehouseId = (int) $request->validated('warehouse_id');
         $contactName = trim((string) $request->validated('contact_name'));
 
+        if ($serviceOrder->status === ServiceOrder::STATUS_FULFILLED
+            && (int) $serviceOrder->warehouse_id !== $warehouseId) {
+            return redirect()
+                ->back()
+                ->withInput()
+                ->withErrors(['header' => 'У оформленной заявки нельзя менять склад (продажа уже проведена с текущего склада).']);
+        }
+
         try {
             $serviceOrder->update([
                 'warehouse_id' => $warehouseId,
@@ -374,6 +465,13 @@ class ServiceOrderController extends Controller
                 'document_date' => $documentDate,
                 'notes' => $notes,
             ]);
+
+            if ($serviceOrder->status === ServiceOrder::STATUS_FULFILLED && $serviceOrder->retail_sale_id !== null) {
+                RetailSale::query()->whereKey($serviceOrder->retail_sale_id)->update(['document_date' => $documentDate]);
+            }
+            if ($serviceOrder->status === ServiceOrder::STATUS_FULFILLED && $serviceOrder->legal_entity_sale_id !== null) {
+                LegalEntitySale::query()->whereKey($serviceOrder->legal_entity_sale_id)->update(['document_date' => $documentDate]);
+            }
         } catch (\Throwable) {
             return redirect()
                 ->back()
@@ -1145,5 +1243,32 @@ class ServiceOrderController extends Controller
                 'line_sum' => $lineSum,
             ]);
         }
+    }
+
+    /** Черновик заявки и оформленная заявка (без отменённых); оформленные правятся только при отдельном праве. */
+    private function serviceOrderAllowsRequestEditing(ServiceOrder $serviceOrder): bool
+    {
+        if ($serviceOrder->status === ServiceOrder::STATUS_CANCELLED) {
+            return false;
+        }
+
+        if ($serviceOrder->isAwaitingFulfillment()) {
+            return true;
+        }
+
+        if ($serviceOrder->status !== ServiceOrder::STATUS_FULFILLED) {
+            return false;
+        }
+
+        $user = auth()->user();
+        if ($user === null) {
+            return false;
+        }
+
+        return app(BranchAccessService::class)->userMayAccessRoute(
+            $user,
+            'admin.service-sales.requests.edit-fulfilled',
+            request()
+        );
     }
 }

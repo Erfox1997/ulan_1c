@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Models\PurchaseRequest;
 use App\Models\RetailSale;
 use App\Models\ServiceOrder;
 use App\Models\User;
@@ -62,6 +63,7 @@ class AppServiceProvider extends ServiceProvider
             $goodsCharacteristicsIncompleteCount = 0;
             $serviceOrdersAwaitingFulfillmentCount = 0;
             $retailDebtorGroupsCount = 0;
+            $purchaseRequestsCount = 0;
             if ($user && $user->branch_id) {
                 $branchId = (int) $user->branch_id;
                 $request = request();
@@ -94,12 +96,22 @@ class AppServiceProvider extends ServiceProvider
                     );
                 }
                 $retailDebtorGroupsCount = (int) $request->attributes->get($attrKeyDebtors);
+
+                $attrKeyPurchaseRequests = 'purchase_requests_count';
+                if (! $request->attributes->has($attrKeyPurchaseRequests)) {
+                    $request->attributes->set(
+                        $attrKeyPurchaseRequests,
+                        PurchaseRequest::query()->where('branch_id', $branchId)->count()
+                    );
+                }
+                $purchaseRequestsCount = (int) $request->attributes->get($attrKeyPurchaseRequests);
             }
             $view->with([
                 'menu' => $menu,
                 'goodsCharacteristicsIncompleteCount' => $goodsCharacteristicsIncompleteCount,
                 'serviceOrdersAwaitingFulfillmentCount' => $serviceOrdersAwaitingFulfillmentCount,
                 'retailDebtorGroupsCount' => $retailDebtorGroupsCount,
+                'purchaseRequestsCount' => $purchaseRequestsCount,
             ]);
         });
     }

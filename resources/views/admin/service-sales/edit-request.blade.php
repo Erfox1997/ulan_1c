@@ -13,7 +13,7 @@
                     class="font-semibold text-emerald-700 hover:underline"
                 >Позиции</a>
             @endif
-            @if ($mayAccessRoute('admin.service-sales.requests.show'))
+            @if ($mayAccessRoute('admin.service-sales.requests.show') && $serviceOrder->isAwaitingFulfillment())
                 <span class="text-slate-300" aria-hidden="true">·</span>
                 <a href="{{ route('admin.service-sales.requests.show', $serviceOrder) }}" class="font-semibold text-slate-600 hover:text-emerald-700 hover:underline">Оформление</a>
             @endif
@@ -43,6 +43,7 @@
         @else
             @php
                 $initialCp = $initialCounterparty;
+                $isFulfilled = $serviceOrder->status === \App\Models\ServiceOrder::STATUS_FULFILLED;
             @endphp
             <script>
                 window.__serviceOrderHeaderInit = {
@@ -70,11 +71,15 @@
                         style="background: linear-gradient(125deg, #047857 0%, #0d9488 55%, #115e59 100%);"
                     >
                         <label for="svc_edit_wh" class="block text-[10px] font-bold uppercase tracking-wide text-teal-100/95">Склад *</label>
+                        @if ($isFulfilled)
+                            <input type="hidden" name="warehouse_id" value="{{ (int) $selectedWarehouseId }}" />
+                        @endif
                         <select
                             id="svc_edit_wh"
-                            name="warehouse_id"
-                            required
-                            class="mt-1 w-full rounded-lg border-0 bg-white/95 px-2.5 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-white/80"
+                            @unless ($isFulfilled) name="warehouse_id" @endunless
+                            @if ($isFulfilled) disabled @else required @endif
+                            class="mt-1 w-full rounded-lg border-0 bg-white/95 px-2.5 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-white/80 disabled:cursor-not-allowed disabled:opacity-90"
+                            @if ($isFulfilled) title="У оформленной заявки склад не меняется (продажа уже проведена)" aria-disabled="true" @endif
                         >
                             @foreach ($warehouses as $w)
                                 <option value="{{ $w->id }}" @selected((int) $w->id === (int) $selectedWarehouseId)>{{ $w->name }}</option>
