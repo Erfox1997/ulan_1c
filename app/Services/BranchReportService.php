@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\CashMovement;
 use App\Models\Counterparty;
 use App\Models\CustomerReturnLine;
+use App\Models\EmployeeAdvance;
 use App\Models\Good;
 use App\Models\LegalEntitySale;
 use App\Models\LegalEntitySaleLine;
@@ -14,14 +15,19 @@ use App\Models\PurchaseReceiptLine;
 use App\Models\PurchaseReturnLine;
 use App\Models\RetailSale;
 use App\Models\RetailSaleLine;
+use App\Models\RetailSalePayment;
+use App\Models\RetailSaleRefund;
 use App\Models\StockSurplusLine;
 use App\Models\StockTransferLine;
 use App\Models\StockWriteoffLine;
 use App\Models\Warehouse;
+use App\Support\InvoiceNakladnayaFormatter;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 
 class BranchReportService
 {
@@ -214,12 +220,24 @@ class BranchReportService
             ->orderBy('name')
             ->get();
 
+        $stockTotalsByGoodId = [];
+        foreach ($this->goodsStock($branchId, $warehouseId) as $stockRow) {
+            $gid = (int) $stockRow['good_id'];
+            $stockTotalsByGoodId[$gid] = round(
+                ($stockTotalsByGoodId[$gid] ?? 0.0) + (float) ($stockRow['quantity'] ?? 0),
+                2
+            );
+        }
+
         $buckets = [];
         foreach ($goods as $g) {
-            $buckets[(int) $g->id] = [
-                'good_id' => (int) $g->id,
+            $gid = (int) $g->id;
+            $buckets[$gid] = [
+                'good_id' => $gid,
                 'article' => (string) ($g->article_code ?? ''),
                 'name' => (string) $g->name,
+                'category' => trim((string) ($g->category ?? '')),
+                'stock_qty' => (float) ($stockTotalsByGoodId[$gid] ?? 0.0),
                 'unit' => (string) ($g->unit ?? 'шт.'),
                 'purchase' => 0.0,
                 'purchase_return' => 0.0,
@@ -430,6 +448,303 @@ class BranchReportService
             'rows' => $rows,
             'totals' => $totals,
         ];
+    }
+
+    /**
+     * Движения по одному товару (все склады филиала), по убыванию даты документа.
+     *
+     * @param  ?int  $limit  null — без ограничения (перед фильтрацией по периоду)
+     * @return Collection<int, array{
+     *     date: string,
+     *     date_human: string,
+     *     label: string,
+     *     warehouse: string,
+     *     quantity: float,
+     *     direction: 'in'|'out'|'neutral',
+     *     sort_key: string
+     * }>
+     */
+    public function goodMovementLedgerForGood(int $branchId, int $goodId, ?int $limit = 200): Collection
+    {
+        $bucket = collect();
+
+        $addRow = function (
+            string $dateYmd,
+            string $label,
+            string $warehouse,
+            float $quantity,
+            string $direction,
+            string $sortPrefix,
+            int $sortTail
+        ) use ($bucket): void {
+            $dt = Carbon::parse($dateYmd);
+            $bucket->push([
+                'date' => $dateYmd,
+                'date_human' => $dt->format('d.m.Y'),
+                'label' => $label,
+                'warehouse' => $warehouse,
+                'quantity' => round($quantity, 4),
+                'direction' => $direction,
+                'sort_key' => $dateYmd.'|'.$sortPrefix.'|'.str_pad((string) $sortTail, 12, '0', STR_PAD_LEFT),
+            ]);
+        };
+
+        foreach (
+            OpeningStockBalance::query()
+                ->where('branch_id', $branchId)
+                ->where('good_id', $goodId)
+                ->with('warehouse')
+                ->orderBy('id')
+                ->get() as $ob
+        ) {
+            $d = $ob->created_at !== null ? $ob->created_at->format('Y-m-d') : now()->format('Y-m-d');
+            $addRow(
+                $d,
+                'Ввод начального остатка',
+                $ob->warehouse?->name ?? '—',
+                abs((float) $ob->quantity),
+                'in',
+                'ob',
+                (int) $ob->id
+            );
+        }
+
+        PurchaseReceiptLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('purchaseReceipt', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['purchaseReceipt.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (PurchaseReceiptLine $line) use ($addRow): void {
+                $doc = $line->purchaseReceipt;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Поступление от поставщика',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'in',
+                    'prl',
+                    (int) $line->id
+                );
+            });
+
+        PurchaseReturnLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('purchaseReturn', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['purchaseReturn.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (PurchaseReturnLine $line) use ($addRow): void {
+                $doc = $line->purchaseReturn;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Возврат поставщику',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'out',
+                    'prtl',
+                    (int) $line->id
+                );
+            });
+
+        RetailSaleLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('retailSale', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['retailSale.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (RetailSaleLine $line) use ($addRow): void {
+                $doc = $line->retailSale;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Розничная продажа',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'out',
+                    'rsl',
+                    (int) $line->id
+                );
+            });
+
+        LegalEntitySaleLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('legalEntitySale', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['legalEntitySale.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (LegalEntitySaleLine $line) use ($addRow): void {
+                $doc = $line->legalEntitySale;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Продажа юрлицу',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'out',
+                    'lel',
+                    (int) $line->id
+                );
+            });
+
+        CustomerReturnLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('customerReturn', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['customerReturn.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (CustomerReturnLine $line) use ($addRow): void {
+                $doc = $line->customerReturn;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Возврат от покупателя',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'in',
+                    'crl',
+                    (int) $line->id
+                );
+            });
+
+        StockWriteoffLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('stockWriteoff', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['stockWriteoff.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (StockWriteoffLine $line) use ($addRow): void {
+                $doc = $line->stockWriteoff;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Списание',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'out',
+                    'swl',
+                    (int) $line->id
+                );
+            });
+
+        StockSurplusLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('stockSurplus', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['stockSurplus.warehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (StockSurplusLine $line) use ($addRow): void {
+                $doc = $line->stockSurplus;
+                if ($doc === null) {
+                    return;
+                }
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Оприходование излишков',
+                    $doc->warehouse?->name ?? '—',
+                    (float) $line->quantity,
+                    'in',
+                    'ssl',
+                    (int) $line->id
+                );
+            });
+
+        StockTransferLine::query()
+            ->where('good_id', $goodId)
+            ->whereHas('stockTransfer', fn ($q) => $q->where('branch_id', $branchId))
+            ->with(['stockTransfer.fromWarehouse', 'stockTransfer.toWarehouse'])
+            ->orderBy('id')
+            ->get()
+            ->each(function (StockTransferLine $line) use ($addRow): void {
+                $doc = $line->stockTransfer;
+                if ($doc === null) {
+                    return;
+                }
+                $from = $doc->fromWarehouse?->name ?? '—';
+                $to = $doc->toWarehouse?->name ?? '—';
+                $addRow(
+                    $doc->document_date->format('Y-m-d'),
+                    'Перемещение: '.$from.' → '.$to,
+                    $from.' → '.$to,
+                    (float) $line->quantity,
+                    'neutral',
+                    'stl',
+                    (int) $line->id
+                );
+            });
+
+        $sorted = $bucket->sortByDesc('sort_key')->values();
+        if ($limit !== null) {
+            $sorted = $sorted->take($limit);
+        }
+
+        return $sorted->map(function (array $r): array {
+            unset($r['sort_key']);
+
+            return $r;
+        })->values();
+    }
+
+    /**
+     * Строки журнала движений по товару за период, с фильтром по складу как в отчёте («все склады» или один).
+     * Сортировка: новее сверху (как goodMovementLedgerForGood).
+     *
+     * @return Collection<int, array{
+     *     date: string,
+     *     date_human: string,
+     *     label: string,
+     *     warehouse: string,
+     *     quantity: float,
+     *     direction: 'in'|'out'|'neutral'
+     * }>
+     */
+    public function goodMovementLedgerForGoodInPeriod(
+        int $branchId,
+        int $goodId,
+        CarbonInterface $from,
+        CarbonInterface $to,
+        int $warehouseId,
+        int $maxRows = 400
+    ): Collection {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $whName = '';
+        if ($warehouseId > 0) {
+            $whName = trim((string) Warehouse::query()
+                ->where('branch_id', $branchId)
+                ->whereKey($warehouseId)
+                ->value('name'));
+        }
+
+        return $this->goodMovementLedgerForGood($branchId, $goodId, null)
+            ->filter(function (array $r) use ($fromStr, $toStr, $whName): bool {
+                $d = (string) ($r['date'] ?? '');
+                if ($d === '' || $d < $fromStr || $d > $toStr) {
+                    return false;
+                }
+                if ($whName === '') {
+                    return true;
+                }
+                $w = (string) ($r['warehouse'] ?? '');
+
+                return $w === $whName || str_contains($w, $whName);
+            })
+            ->take($maxRows)
+            ->values();
     }
 
     /**
@@ -1005,34 +1320,1250 @@ class BranchReportService
     }
 
     /**
-     * Расходы по категориям (прочие расходы из кассы/банка).
+     * Сводный отчёт «чистая прибыль» за период: денежные поступления минус выплаты по выбранным статьям.
      *
-     * @return Collection<int, array{category: string, amount: float}>
+     * — Приход от покупателя / прочие приходы / расход поставщику / прочие расходы — из журнала «Банк и касса» (дата операции).
+     * — Прочие расходы без выплат зарплаты (категория «Зарплата» учитывается отдельной строкой).
+     * — Розница: оплаты по чекам за период и возвраты покупателю (денежная выплата по возврату) по дате документа возврата — отдельные строки в отчёте, в итоге считаются как оплаты минус возвраты.
+     * — Авансы: суммы записей модуля «Авансы» по дате записи (отдельный учёт от проводок кассы).
+     * Переводы между счетами не включаются.
+     *
+     * @return array{
+     *     income_client: float,
+     *     income_other: float,
+     *     expense_supplier: float,
+     *     expense_other: float,
+     *     retail_payments: float,
+     *     retail_refunds: float,
+     *     retail_net: float,
+     *     salary_payouts: float,
+     *     employee_advances: float,
+     *     payroll_advances_total: float,
+     *     net_profit: float
+     * }
      */
-    public function expensesByCategory(int $branchId, CarbonInterface $from, CarbonInterface $to): Collection
+    public function netProfitCashSummary(int $branchId, CarbonInterface $from, CarbonInterface $to): array
     {
         $fromStr = $from->format('Y-m-d');
         $toStr = $to->format('Y-m-d');
 
-        $table = (new CashMovement)->getTable();
-        $catExpr = "COALESCE(NULLIF(TRIM(`{$table}`.expense_category), ''), 'Без категории')";
+        $incomeClient = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
 
-        return CashMovement::query()
+        $incomeOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $expenseSupplier = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $salaryPayouts = (float) CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
             ->whereDate('occurred_on', '>=', $fromStr)
             ->whereDate('occurred_on', '<=', $toStr)
-            ->selectRaw($catExpr.' as category')
-            ->selectRaw('SUM(amount) as amount')
-            // GROUP BY 1: совпадает с первым выражением в SELECT; иначе при ONLY_FULL_GROUP_BY
-            // (типично на проде) MySQL/MariaDB может ругаться, что expense_category «не в GROUP BY».
-            ->groupByRaw('1')
-            ->orderByDesc('amount')
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) = ?", ['Зарплата'])
+            ->sum('amount');
+
+        $expenseOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) != ?", ['Зарплата'])
+            ->sum('amount');
+
+        $retailPayments = (float) RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->sum('retail_sale_payments.amount');
+
+        $retailRefunds = (float) RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->sum('retail_sale_refunds.amount');
+
+        $retailNet = round($retailPayments - $retailRefunds, 2);
+
+        $employeeAdvances = (float) EmployeeAdvance::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('entry_date', '>=', $fromStr)
+            ->whereDate('entry_date', '<=', $toStr)
+            ->sum('amount');
+
+        $payrollAdvancesTotal = round($salaryPayouts + $employeeAdvances, 2);
+
+        $netProfit = round(
+            $incomeClient + $incomeOther + $retailNet - $expenseSupplier - $expenseOther - $salaryPayouts - $employeeAdvances,
+            2
+        );
+
+        return [
+            'income_client' => round($incomeClient, 2),
+            'income_other' => round($incomeOther, 2),
+            'expense_supplier' => round($expenseSupplier, 2),
+            'expense_other' => round($expenseOther, 2),
+            'retail_payments' => round($retailPayments, 2),
+            'retail_refunds' => round($retailRefunds, 2),
+            'retail_net' => $retailNet,
+            'salary_payouts' => round($salaryPayouts, 2),
+            'employee_advances' => round($employeeAdvances, 2),
+            'payroll_advances_total' => $payrollAdvancesTotal,
+            'net_profit' => $netProfit,
+        ];
+    }
+
+    /**
+     * Детальные строки для модального окна отчёта «Чистая прибыль».
+     *
+     * @return array{
+     *     title: string,
+     *     period_label: string,
+     *     columns: list<array{key: string, label: string}>,
+     *     rows: list<array<string, string>>,
+     *     total: float,
+     *     total_formatted: string,
+     *     empty_message: string
+     * }
+     */
+    public function netProfitCashDetail(int $branchId, CarbonInterface $from, CarbonInterface $to, string $kind): array
+    {
+        $allowed = [
+            'income_client',
+            'income_other',
+            'expense_supplier',
+            'expense_other',
+            'retail_payments',
+            'retail_refunds',
+            'salary_payouts',
+            'employee_advances',
+            'payroll_advances',
+            'net_profit',
+        ];
+        if (! in_array($kind, $allowed, true)) {
+            throw new InvalidArgumentException('Неизвестная статья отчёта.');
+        }
+
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $periodLabel = $from->format('d.m.Y').' — '.$to->format('d.m.Y');
+
+        return match ($kind) {
+            'income_client' => $this->netProfitDetailIncomeClient($branchId, $fromStr, $toStr, $periodLabel),
+            'income_other' => $this->netProfitDetailIncomeOther($branchId, $fromStr, $toStr, $periodLabel),
+            'expense_supplier' => $this->netProfitDetailExpenseSupplier($branchId, $fromStr, $toStr, $periodLabel),
+            'expense_other' => $this->netProfitDetailExpenseOther($branchId, $fromStr, $toStr, $periodLabel),
+            'retail_payments' => $this->netProfitDetailRetailPayments($branchId, $fromStr, $toStr, $periodLabel),
+            'retail_refunds' => $this->netProfitDetailRetailRefunds($branchId, $fromStr, $toStr, $periodLabel),
+            'salary_payouts' => $this->netProfitDetailSalary($branchId, $fromStr, $toStr, $periodLabel),
+            'employee_advances' => $this->netProfitDetailEmployeeAdvances($branchId, $fromStr, $toStr, $periodLabel),
+            'payroll_advances' => $this->netProfitDetailPayrollCombined($branchId, $fromStr, $toStr, $periodLabel),
+            'net_profit' => $this->netProfitDetailNetProfitComposition($branchId, $from, $to, $periodLabel),
+        };
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailIncomeClient(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_INCOME_CLIENT);
+
+        return $this->netProfitDetailPackCash(
+            'Приход от покупателя',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '+'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailIncomeOther(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_INCOME_OTHER);
+
+        return $this->netProfitDetailPackCash(
+            'Приход прочие',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '+'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailExpenseSupplier(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_EXPENSE_SUPPLIER);
+
+        return $this->netProfitDetailPackCash(
+            'Расход поставщику',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '−'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailExpenseOther(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) != ?", ['Зарплата'])
+            ->with(['counterparty', 'ourAccount'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->get();
+
+        return $this->netProfitDetailPackCash(
+            'Прочие расходы (без зарплаты)',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '−'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailSalary(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) = ?", ['Зарплата'])
+            ->with(['counterparty', 'ourAccount'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->get();
+
+        return $this->netProfitDetailPackCash(
+            'Выплаты зарплаты',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '−'
+        );
+    }
+
+    /**
+     * @return EloquentCollection<int, CashMovement>
+     */
+    private function netProfitFetchCashMovements(int $branchId, string $fromStr, string $toStr, string $movementKind): EloquentCollection
+    {
+        return CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', $movementKind)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->with(['counterparty', 'ourAccount'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->get();
+    }
+
+    /**
+     * @param  EloquentCollection<int, CashMovement>  $movements
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailPackCash(string $title, string $periodLabel, EloquentCollection $movements, float $total, string $signPrefix): array
+    {
+        $rows = [];
+        foreach ($movements as $m) {
+            $cat = trim((string) ($m->expense_category ?? ''));
+            $comment = trim((string) ($m->comment ?? ''));
+            $detail = '—';
+            if ($cat !== '' && $comment !== '') {
+                $detail = $cat.' · '.$comment;
+            } elseif ($cat !== '') {
+                $detail = $cat;
+            } elseif ($comment !== '') {
+                $detail = $comment;
+            }
+
+            $rows[] = [
+                'date' => $m->occurred_on->format('d.m.Y'),
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $m->amount),
+                'account' => $m->ourAccount?->movementReportLabel() ?? '—',
+                'counterparty' => trim((string) ($m->counterparty?->name ?? '')) !== ''
+                    ? trim((string) $m->counterparty->name)
+                    : '—',
+                'detail' => $detail,
+            ];
+        }
+
+        return [
+            'title' => $title,
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+                ['key' => 'account', 'label' => 'Счёт'],
+                ['key' => 'counterparty', 'label' => 'Контрагент'],
+                ['key' => 'detail', 'label' => 'Комментарий'],
+            ],
+            'rows' => $rows,
+            'total' => round($total, 2),
+            'total_formatted' => trim($signPrefix.' '.InvoiceNakladnayaFormatter::formatMoney($total)),
+            'empty_message' => 'Нет операций за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailRetailPayments(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $payments = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->with(['organizationBankAccount'])
+            ->orderByDesc('rs.document_date')
+            ->orderByDesc('rs.id')
+            ->orderByDesc('retail_sale_payments.id')
+            ->select('retail_sale_payments.*', 'rs.document_date as sale_document_date', 'rs.id as sale_id')
+            ->get();
+
+        $total = (float) $payments->sum('amount');
+        $rows = [];
+        foreach ($payments as $p) {
+            $acc = $p->organizationBankAccount;
+            $saleDate = $p->getAttribute('sale_document_date');
+            if ($saleDate !== null && ! $saleDate instanceof CarbonInterface) {
+                $saleDate = Carbon::parse((string) $saleDate);
+            }
+            $saleDate = $saleDate instanceof CarbonInterface ? $saleDate : ($p->retailSale?->document_date);
+
+            $saleId = (int) ($p->getAttribute('sale_id') ?? $p->retail_sale_id);
+            $rows[] = [
+                'date' => $saleDate instanceof CarbonInterface ? $saleDate->format('d.m.Y') : '—',
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $p->amount),
+                'sale_id' => (string) $saleId,
+                'account' => $acc?->movementReportLabel() ?? '—',
+            ];
+        }
+
+        return [
+            'title' => 'Оплаты по розничным чекам',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата чека'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+                ['key' => 'sale_id', 'label' => 'Чек №'],
+                ['key' => 'account', 'label' => 'Счёт'],
+            ],
+            'rows' => $rows,
+            'total' => round($total, 2),
+            'total_formatted' => '+ '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет оплат за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailRetailRefunds(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $refunds = RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->with(['organizationBankAccount'])
+            ->orderByDesc('cr.document_date')
+            ->orderByDesc('cr.id')
+            ->orderByDesc('retail_sale_refunds.id')
+            ->select(
+                'retail_sale_refunds.*',
+                'cr.document_date as return_document_date',
+                'cr.id as customer_return_id'
+            )
+            ->get();
+
+        $total = (float) $refunds->sum('amount');
+        $rows = [];
+        foreach ($refunds as $r) {
+            $acc = $r->organizationBankAccount;
+            $d = $r->getAttribute('return_document_date');
+            if ($d !== null && ! $d instanceof CarbonInterface) {
+                $d = Carbon::parse((string) $d);
+            }
+            $d = $d instanceof CarbonInterface ? $d : ($r->customerReturn?->document_date);
+            $rows[] = [
+                'date' => $d instanceof CarbonInterface ? $d->format('d.m.Y') : '—',
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $r->amount),
+                'return_id' => (string) (int) ($r->getAttribute('customer_return_id') ?? $r->customer_return_id),
+                'sale_id' => (string) (int) $r->retail_sale_id,
+                'account' => $acc?->movementReportLabel() ?? '—',
+            ];
+        }
+
+        return [
+            'title' => 'Возвраты покупателю (розница)',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата возврата'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+                ['key' => 'return_id', 'label' => 'Возврат №'],
+                ['key' => 'sale_id', 'label' => 'Чек №'],
+                ['key' => 'account', 'label' => 'Счёт'],
+            ],
+            'rows' => $rows,
+            'total' => round($total, 2),
+            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет возвратов за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailEmployeeAdvances(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $advances = EmployeeAdvance::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('entry_date', '>=', $fromStr)
+            ->whereDate('entry_date', '<=', $toStr)
+            ->with('employee')
+            ->orderByDesc('entry_date')
+            ->orderByDesc('id')
+            ->get();
+
+        $total = (float) $advances->sum('amount');
+        $rows = [];
+        foreach ($advances as $a) {
+            $note = trim((string) ($a->note ?? ''));
+            $rows[] = [
+                'date' => $a->entry_date->format('d.m.Y'),
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $a->amount),
+                'employee' => trim((string) ($a->employee?->full_name ?? '')) !== ''
+                    ? trim((string) $a->employee->full_name)
+                    : '—',
+                'detail' => $note !== '' ? mb_substr($note, 0, 500) : '—',
+            ];
+        }
+
+        return [
+            'title' => 'Авансы сотрудникам',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+                ['key' => 'employee', 'label' => 'Сотрудник'],
+                ['key' => 'detail', 'label' => 'Примечание'],
+            ],
+            'rows' => $rows,
+            'total' => round($total, 2),
+            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет записей за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailPayrollCombined(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $salaryMovements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) = ?", ['Зарплата'])
+            ->with(['ourAccount'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->get();
+
+        $advances = EmployeeAdvance::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('entry_date', '>=', $fromStr)
+            ->whereDate('entry_date', '<=', $toStr)
+            ->with('employee')
+            ->orderByDesc('entry_date')
+            ->orderByDesc('id')
+            ->get();
+
+        $merged = [];
+        foreach ($salaryMovements as $m) {
+            $comment = trim((string) ($m->comment ?? ''));
+            $merged[] = [
+                '_sort' => $m->occurred_on->copy()->startOfDay()->timestamp * 1000 + $m->id,
+                'date' => $m->occurred_on->format('d.m.Y'),
+                'kind_label' => 'Зарплата',
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $m->amount),
+                'account' => $m->ourAccount?->movementReportLabel() ?? '—',
+                'detail' => $comment !== '' ? $comment : '—',
+            ];
+        }
+        foreach ($advances as $a) {
+            $note = trim((string) ($a->note ?? ''));
+            $emp = trim((string) ($a->employee?->full_name ?? ''));
+            $merged[] = [
+                '_sort' => $a->entry_date->copy()->startOfDay()->timestamp * 1000 + 500000000 + $a->id,
+                'date' => $a->entry_date->format('d.m.Y'),
+                'kind_label' => 'Аванс',
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $a->amount),
+                'account' => '—',
+                'detail' => $emp !== '' ? ($note !== '' ? $emp.' · '.$note : $emp) : ($note !== '' ? $note : '—'),
+            ];
+        }
+
+        usort($merged, fn (array $x, array $y): int => ($y['_sort'] ?? 0) <=> ($x['_sort'] ?? 0));
+        $rows = array_map(function (array $r): array {
+            unset($r['_sort']);
+
+            return $r;
+        }, $merged);
+
+        $totalSalary = (float) $salaryMovements->sum('amount');
+        $totalAdv = (float) $advances->sum('amount');
+        $total = round($totalSalary + $totalAdv, 2);
+
+        return [
+            'title' => 'Зарплата и авансы',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата'],
+                ['key' => 'kind_label', 'label' => 'Вид'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+                ['key' => 'account', 'label' => 'Счёт'],
+                ['key' => 'detail', 'label' => 'Детали'],
+            ],
+            'rows' => $rows,
+            'total' => $total,
+            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет выплат и авансов за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailNetProfitComposition(int $branchId, CarbonInterface $from, CarbonInterface $to, string $periodLabel): array
+    {
+        $s = $this->netProfitCashSummary($branchId, $from, $to);
+        $fmt = fn (float $v): string => InvoiceNakladnayaFormatter::formatMoney($v);
+
+        $rows = [
+            ['article' => 'Приход от покупателя', 'flow' => '+ '.$fmt($s['income_client'])],
+            ['article' => 'Приход прочие', 'flow' => '+ '.$fmt($s['income_other'])],
+            ['article' => 'Расход поставщику', 'flow' => '− '.$fmt($s['expense_supplier'])],
+            ['article' => 'Прочие расходы (без зарплаты)', 'flow' => '− '.$fmt($s['expense_other'])],
+            ['article' => 'Оплаты по розничным чекам', 'flow' => '+ '.$fmt($s['retail_payments'])],
+            ['article' => 'Возвраты покупателю (розница)', 'flow' => '− '.$fmt($s['retail_refunds'])],
+            ['article' => 'Зарплата и авансы', 'flow' => '− '.$fmt($s['payroll_advances_total'])],
+            ['article' => 'Чистая прибыль', 'flow' => ($s['net_profit'] >= 0 ? '+ ' : '− ').$fmt(abs($s['net_profit']))],
+        ];
+
+        return [
+            'title' => 'Состав чистой прибыли',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'article', 'label' => 'Статья'],
+                ['key' => 'flow', 'label' => 'В расчёте'],
+            ],
+            'rows' => $rows,
+            'total' => round((float) $s['net_profit'], 2),
+            'total_formatted' => InvoiceNakladnayaFormatter::formatMoney((float) $s['net_profit']),
+            'empty_message' => 'Нет данных.',
+        ];
+    }
+
+    /**
+     * Полная управленческая ОСВ (стиль бухгалтерского отчёта): счета по блокам —
+     * деньги, товары, расчёты, доходы и расходы; сальдо начала/конца и обороты там, где данные есть.
+     *
+     * @return array{
+     *   sections: list<array<string, mixed>>,
+     *   currency_codes: list<string>,
+     *   dashboard: array{closing: array<string, float>, turnover: array{debit: float, credit: float}}
+     * }
+     */
+    public function fullTurnoverOsv(int $branchId, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+
+        $cashBlock = $this->cashTurnoverOsv($branchId, $from, $to);
+        $resolveCost = $this->buildCostResolverForBranch($branchId);
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $cogs = round((float) $gp['cost'], 2);
+
+        $onBeforePeriod = $from->copy()->subDay()->startOfDay();
+        $onEndPeriod = $to->copy()->startOfDay();
+
+        $invOpen = $this->inventoryValuationAtBoundary($branchId, $onBeforePeriod);
+        $invClose = $this->inventoryValuationAtBoundary($branchId, $onEndPeriod);
+
+        $purchaseIn = (float) (PurchaseReceiptLine::query()
+            ->join('purchase_receipts as pr', 'pr.id', '=', 'purchase_receipt_lines.purchase_receipt_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('purchase_receipt_lines.line_sum'));
+
+        $purchaseRetOut = (float) (PurchaseReturnLine::query()
+            ->join('purchase_returns as pr', 'pr.id', '=', 'purchase_return_lines.purchase_return_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('purchase_return_lines.line_sum'));
+
+        $customerReturnInCost = $this->sumCustomerReturnStockCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $writeoffCost = $this->sumStockWriteoffCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $surplusDebit = $this->sumStockSurplusCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $costTransferOutIn = $this->sumStockTransferCostsForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $invDebitTurnover = round(
+            $purchaseIn + $customerReturnInCost + $surplusDebit + ($costTransferOutIn['in'] ?? 0.0),
+            2
+        );
+        $invCreditTurnover = round(
+            $cogs + $purchaseRetOut + $writeoffCost + ($costTransferOutIn['out'] ?? 0.0),
+            2
+        );
+
+        $openAp = round((float) Counterparty::query()->where('branch_id', $branchId)->sum('opening_debt_as_supplier'), 2);
+        $openArRef = round((float) Counterparty::query()->where('branch_id', $branchId)->sum('opening_debt_as_buyer'), 2);
+
+        $paymentsToSuppliers = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $paymentsFromClientsTracked = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereNotNull('counterparty_id')
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $legalTurnoverDebit = round((float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->sum('legal_entity_sale_lines.line_sum'), 2);
+
+        $closingApNet = round($openAp + $purchaseIn - $paymentsToSuppliers, 2);
+
+        $closingArRef = round($openArRef + $legalTurnoverDebit - $paymentsFromClientsTracked, 2);
+
+        $fromStart = $from->copy()->startOfDay();
+        $retailDebtOpen = $this->retailDebtOutstandingAtMoment($branchId, $fromStart, false);
+        $retailDebtClose = $this->retailDebtOutstandingAtMoment($branchId, $to->copy()->startOfDay(), true);
+        $retailDebtDebitTurn = $this->retailDebtIssuedInPeriod($branchId, $fromStr, $toStr);
+        $retailDebtCreditTurn = $this->retailDebtRepaidAfterCheckoutInPeriod($branchId, $fromStr, $toStr);
+
+        $rdOpenSides = $this->assetPositiveDebitSaldoSides($retailDebtOpen);
+        $rdCloseSides = $this->assetPositiveDebitSaldoSides($retailDebtClose);
+
+        $retailGoodsRev = (float) RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('retail_sale_lines.line_sum');
+
+        $retailServicesRev = (float) RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('retail_sale_lines.line_sum');
+
+        $legalGoodsRev = (float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('legal_entity_sale_lines.line_sum');
+
+        $legalServicesRev = (float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('legal_entity_sale_lines.line_sum');
+
+        $expenseOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $incomeOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $snippet = fn (float $snD, float $snC, float $toD, float $toC, float $skD, float $skC): array => [
+            'sn_debit' => round($snD, 2),
+            'sn_credit' => round($snC, 2),
+            'to_debit' => round($toD, 2),
+            'to_credit' => round($toC, 2),
+            'sk_debit' => round($skD, 2),
+            'sk_credit' => round($skC, 2),
+        ];
+
+        $apSn = $this->liabilityPositiveCreditToSides($openAp);
+        $apSk = $this->liabilityPositiveCreditToSides($closingApNet);
+
+        $arRefSn = $this->assetPositiveDebitSaldoSides($openArRef);
+        $arRefSk = $this->assetPositiveDebitSaldoSides($closingArRef);
+
+        $syntheticSections = [];
+
+        $syntheticSections[] = [
+            'key' => 'inventory',
+            'title' => '2. Товары и запасы',
+            'mode' => 'flat',
+            'accounts' => [
+                array_merge($snippet($invOpen, 0.0, $invDebitTurnover, $invCreditTurnover, $invClose, 0.0), [
+                    'id' => -1310,
+                    'register_code' => '1310',
+                    'account_label' => 'Материальные запасы (товары на складах)',
+                    'kind' => 'stock',
+                    'currency' => '',
+                ]),
+            ],
+        ];
+
+        $syntheticSections[] = [
+            'key' => 'debts',
+            'title' => '3. Расчёты с контрагентами',
+            'mode' => 'flat',
+            'accounts' => [
+                array_merge($snippet($apSn['debit'], $apSn['credit'], $paymentsToSuppliers, $purchaseIn, $apSk['debit'], $apSk['credit']), [
+                    'id' => -3310,
+                    'register_code' => '3310',
+                    'account_label' => 'Задолженность поставщикам (+ закупки за период − оплаты из «Банк и касса»)',
+                    'kind' => 'payable',
+                    'currency' => '',
+                    'balance_kind' => 'passive',
+                ]),
+                array_merge($snippet($arRefSn['debit'], $arRefSn['credit'], $legalTurnoverDebit, $paymentsFromClientsTracked, $arRefSk['debit'], $arRefSk['credit']), [
+                    'id' => -4110,
+                    'register_code' => '4110',
+                    'account_label' => 'Дебиторская задолженность покупателей (контрагенты из справочника + счета юрлиц за период)',
+                    'kind' => 'receivable_ref',
+                    'currency' => '',
+                ]),
+                array_merge($snippet($rdOpenSides['debit'], $rdOpenSides['credit'], $retailDebtDebitTurn, $retailDebtCreditTurn, $rdCloseSides['debit'], $rdCloseSides['credit']), [
+                    'id' => -4210,
+                    'register_code' => '4210',
+                    'account_label' => 'Розничная задолженность (отсрочка в чеках: выдача в дебет оборота, оплату долга после чека — в кредит)',
+                    'kind' => 'receivable_retail',
+                    'currency' => '',
+                ]),
+            ],
+        ];
+
+        $syntheticSections[] = [
+            'key' => 'income',
+            'title' => '4. Доходы за период',
+            'mode' => 'flat',
+            'accounts' => [
+                $this->pnlCreditRow(-6010, '6010', 'Выручка розницы — товары', round($retailGoodsRev, 2)),
+                $this->pnlCreditRow(-6011, '6011', 'Выручка розницы — услуги', round($retailServicesRev, 2)),
+                $this->pnlCreditRow(-6110, '6110', 'Выручка от оптовых продаж (юрлица) — товары', round($legalGoodsRev, 2)),
+                $this->pnlCreditRow(-6120, '6120', 'Выручка от оптовых продаж (юрлица) — услуги', round($legalServicesRev, 2)),
+                $this->pnlCreditRow(-6030, '6030', 'Прочие поступления («Банк и касса» — приход прочее / займы)', round($incomeOther, 2)),
+            ],
+        ];
+
+        $syntheticSections[] = [
+            'key' => 'expense',
+            'title' => '5. Расходы за период',
+            'mode' => 'flat',
+            'accounts' => [
+                $this->pnlDebitRow(-7110, '7110', 'Себестоимость проданных товаров (по учётной цене)', $cogs),
+                $this->pnlDebitRow(-7510, '7510', 'Прочие расходы («Банк и касса» — прочий расход)', round($expenseOther, 2)),
+            ],
+        ];
+
+        $totalIncomeForProfit = round(
+            (float) $retailGoodsRev + (float) $retailServicesRev + (float) $legalGoodsRev + (float) $legalServicesRev + (float) $incomeOther,
+            2
+        );
+        $totalExpenseForProfit = round((float) $cogs + (float) $expenseOther, 2);
+        $profitNet = round($totalIncomeForProfit - $totalExpenseForProfit, 2);
+
+        $syntheticSections[] = [
+            'key' => 'period_result',
+            'title' => '6. Финансовый результат (управленчески)',
+            'mode' => 'flat',
+            'accounts' => [
+                array_merge(
+                    $snippet(
+                        0.0,
+                        0.0,
+                        $profitNet < 0 ? abs($profitNet) : 0.0,
+                        $profitNet > 0 ? $profitNet : 0.0,
+                        0.0,
+                        0.0
+                    ),
+                    [
+                        'id' => -9910,
+                        'register_code' => '9910',
+                        'account_label' => 'Доходы разд. 4 − расходы разд. 5 (без налогов и полного БУ)',
+                        'kind' => 'period_profit',
+                        'currency' => '',
+                    ]
+                ),
+            ],
+        ];
+
+        $sections = array_merge(
+            [[
+                'key' => 'money',
+                'title' => '1. Денежные средства',
+                'mode' => 'money',
+                'groups' => $cashBlock['groups'],
+                'grand' => $cashBlock['grand'],
+            ]],
+            $syntheticSections
+        );
+
+        $dashboard = $this->buildTurnoverOsvDashboard(
+            $sections,
+            round($invClose, 2),
+            round($closingArRef + $retailDebtClose, 2),
+            round($closingApNet, 2)
+        );
+
+        return [
+            'sections' => $sections,
+            'currency_codes' => $cashBlock['currency_codes'],
+            'dashboard' => $dashboard,
+        ];
+    }
+
+    /**
+     * Сводка для шапки ОСВ: сальдо на конец по ключевым показателям, обороты за период.
+     *
+     * @param  list<array<string, mixed>>  $sections
+     * @return array<string, mixed>
+     */
+    private function buildTurnoverOsvDashboard(
+        array $sections,
+        float $inventoryClosing,
+        float $receivablesNet,
+        float $payablesNet
+    ): array {
+        $cashClosingNet = 0.0;
+        $bankClosingNet = 0.0;
+        $moneySec = $sections[0] ?? [];
+        if (($moneySec['mode'] ?? '') === 'money') {
+            foreach ($moneySec['groups'] ?? [] as $g) {
+                foreach ($g['accounts'] ?? [] as $r) {
+                    $net = (float) $r['sk_debit'] - (float) $r['sk_credit'];
+                    if (($r['kind'] ?? '') === 'cash') {
+                        $cashClosingNet += $net;
+                    } elseif (($r['kind'] ?? '') === 'bank') {
+                        $bankClosingNet += $net;
+                    }
+                }
+            }
+        }
+        $cashClosingNet = round($cashClosingNet, 2);
+        $bankClosingNet = round($bankClosingNet, 2);
+
+        $rows = $this->flattenOsvAccountRows($sections);
+        $sums = $this->sumOsvNumericColumns($rows);
+
+        return [
+            'closing' => [
+                'cash' => $cashClosingNet,
+                'bank' => $bankClosingNet,
+                'money_total' => round($cashClosingNet + $bankClosingNet, 2),
+                'receivables' => $receivablesNet,
+                'payables' => $payablesNet,
+                'inventory' => $inventoryClosing,
+            ],
+            'turnover' => [
+                'debit' => (float) $sums['to_debit'],
+                'credit' => (float) $sums['to_credit'],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $sections
+     * @return list<array<string, mixed>>
+     */
+    private function flattenOsvAccountRows(array $sections): array
+    {
+        $out = [];
+        foreach ($sections as $sec) {
+            if (($sec['mode'] ?? '') === 'money') {
+                foreach ($sec['groups'] ?? [] as $g) {
+                    foreach ($g['accounts'] ?? [] as $row) {
+                        $out[] = $row;
+                    }
+                }
+            } else {
+                foreach ($sec['accounts'] ?? [] as $row) {
+                    $out[] = $row;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @return array{sn_debit: float, sn_credit: float, to_debit: float, to_credit: float, sk_debit: float, sk_credit: float}
+     */
+    private function sumOsvNumericColumns(array $rows): array
+    {
+        $acc = [
+            'sn_debit' => 0.0,
+            'sn_credit' => 0.0,
+            'to_debit' => 0.0,
+            'to_credit' => 0.0,
+            'sk_debit' => 0.0,
+            'sk_credit' => 0.0,
+        ];
+        foreach ($rows as $r) {
+            foreach (array_keys($acc) as $k) {
+                $acc[$k] += (float) ($r[$k] ?? 0);
+            }
+        }
+        foreach ($acc as $k => $v) {
+            $acc[$k] = round($v, 2);
+        }
+
+        return $acc;
+    }
+
+    /**
+     * Розничная дебиторка по чекам: сколько покупатель всё ещё должен (total − оплаты), на дату.
+     *
+     * @param  bool  $inclusiveEnd  false — платежи строго до начала $paymentsRecordedUpTo; true — включая конец календарного дня $paymentsRecordedUpTo
+     */
+    private function retailDebtOutstandingAtMoment(int $branchId, CarbonInterface $paymentsRecordedUpTo, bool $inclusiveEnd): float
+    {
+        $cutoff = $inclusiveEnd
+            ? $paymentsRecordedUpTo->copy()->endOfDay()
+            : $paymentsRecordedUpTo->copy()->startOfDay();
+        $op = $inclusiveEnd ? '<=' : '<';
+
+        $sales = RetailSale::query()
+            ->where('branch_id', $branchId)
+            ->withSum([
+                'payments' => function ($q) use ($op, $cutoff) {
+                    $q->where('created_at', $op, $cutoff);
+                },
+            ], 'amount')
+            ->get(['id', 'total_amount']);
+
+        return round($sales->sum(function (RetailSale $s): float {
+            $paid = (float) ($s->payments_sum_amount ?? 0);
+            $tot = (float) $s->total_amount;
+
+            return max(0.0, round($tot - $paid, 2));
+        }), 2);
+    }
+
+    /**
+     * Сумма первоначальной отсрочки по чекам с датой продажи в интервале (в дебет оборота 4210).
+     */
+    private function retailDebtIssuedInPeriod(int $branchId, string $fromStr, string $toStr): float
+    {
+        $sales = RetailSale::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('document_date', '>=', $fromStr)
+            ->whereDate('document_date', '<=', $toStr)
+            ->get(['id', 'debt_amount']);
+
+        if ($sales->isEmpty()) {
+            return 0.0;
+        }
+
+        $ids = $sales->pluck('id')->all();
+        $extras = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->whereIn('retail_sale_payments.retail_sale_id', $ids)
+            ->whereColumn('retail_sale_payments.created_at', '>', 'rs.created_at')
+            ->groupBy('retail_sale_payments.retail_sale_id')
+            ->selectRaw('retail_sale_payments.retail_sale_id as sid, SUM(retail_sale_payments.amount) as extra')
+            ->pluck('extra', 'sid');
+
+        return round($sales->sum(function (RetailSale $s) use ($extras): float {
+            $extra = (float) ($extras[$s->id] ?? 0.0);
+
+            return max(0.0, round((float) $s->debt_amount + $extra, 2));
+        }), 2);
+    }
+
+    /**
+     * Оплаты долга после оформления чека (не счётная оплата при пробитии), в кредит оборота 4210.
+     */
+    private function retailDebtRepaidAfterCheckoutInPeriod(int $branchId, string $fromStr, string $toStr): float
+    {
+        return round((float) RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('retail_sale_payments.created_at', '>=', $fromStr)
+            ->whereDate('retail_sale_payments.created_at', '<=', $toStr)
+            ->whereColumn('retail_sale_payments.created_at', '>', 'rs.created_at')
+            ->sum('retail_sale_payments.amount'), 2);
+    }
+
+    /**
+     * @return array{debit: float, credit: float}
+     */
+    private function liabilityPositiveCreditToSides(float $netPayablePositive): array
+    {
+        if ($netPayablePositive >= 0) {
+            return ['debit' => 0.0, 'credit' => round($netPayablePositive, 2)];
+        }
+
+        return ['debit' => round(-$netPayablePositive, 2), 'credit' => 0.0];
+    }
+
+    /**
+     * @return array{debit: float, credit: float}
+     */
+    private function assetPositiveDebitSaldoSides(float $netReceivableDebitPositive): array
+    {
+        if ($netReceivableDebitPositive >= 0) {
+            return ['debit' => round($netReceivableDebitPositive, 2), 'credit' => 0.0];
+        }
+
+        return ['debit' => 0.0, 'credit' => round(-$netReceivableDebitPositive, 2)];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function pnlCreditRow(int $id, string $code, string $label, float $creditTurn): array
+    {
+        return [
+            'id' => $id,
+            'register_code' => $code,
+            'account_label' => $label,
+            'kind' => 'income',
+            'currency' => '',
+            'sn_debit' => 0.0,
+            'sn_credit' => 0.0,
+            'to_debit' => 0.0,
+            'to_credit' => round($creditTurn, 2),
+            'sk_debit' => 0.0,
+            'sk_credit' => 0.0,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function pnlDebitRow(int $id, string $code, string $label, float $debitTurn): array
+    {
+        return [
+            'id' => $id,
+            'register_code' => $code,
+            'account_label' => $label,
+            'kind' => 'expense',
+            'currency' => '',
+            'sn_debit' => 0.0,
+            'sn_credit' => 0.0,
+            'to_debit' => round($debitTurn, 2),
+            'to_credit' => 0.0,
+            'sk_debit' => 0.0,
+            'sk_credit' => 0.0,
+        ];
+    }
+
+    private function inventoryValuationAtBoundary(int $branchId, CarbonInterface $onExclusiveEndBoundary): float
+    {
+        $deltaMap = $this->netGoodsStockDeltaAfterDate($branchId, 0, $onExclusiveEndBoundary);
+
+        return round((float) OpeningStockBalance::query()
+            ->where('branch_id', $branchId)
             ->get()
-            ->map(fn ($r) => [
-                'category' => (string) $r->category,
-                'amount' => round((float) $r->amount, 2),
-            ]);
+            ->reduce(function (float $carry, OpeningStockBalance $b) use ($deltaMap): float {
+                $k = $b->good_id.'|'.$b->warehouse_id;
+                $qtyNow = (float) $b->quantity;
+                $dq = (float) ($deltaMap[$k] ?? 0);
+                $qtyAt = round($qtyNow - $dq, 4);
+                $uc = $b->unit_cost;
+
+                return $carry + ($qtyAt > 0 && $uc !== null
+                    ? round($qtyAt * (float) $uc, 2)
+                    : 0.0);
+            }, 0.0), 2);
+    }
+
+    /**
+     * @return callable(int,int):float
+     */
+    private function buildCostResolverForBranch(int $branchId): callable
+    {
+        $costByGoodWarehouse = OpeningStockBalance::query()
+            ->where('branch_id', $branchId)
+            ->get()
+            ->groupBy(fn (OpeningStockBalance $b) => $b->good_id.'_'.$b->warehouse_id);
+
+        return function (int $goodId, int $warehouseId) use ($costByGoodWarehouse, $branchId): float {
+            $b = $costByGoodWarehouse->get($goodId.'_'.$warehouseId)?->first();
+            if ($b !== null && $b->unit_cost !== null) {
+                return (float) $b->unit_cost;
+            }
+
+            return (float) (OpeningStockBalance::query()
+                ->where('branch_id', $branchId)
+                ->where('good_id', $goodId)
+                ->whereNotNull('unit_cost')
+                ->orderByDesc('quantity')
+                ->value('unit_cost') ?? 0);
+        };
+    }
+
+    /**
+     * @param  callable(int,int):float  $resolveCost
+     */
+    private function sumCustomerReturnStockCostForPeriod(int $branchId, string $fromStr, string $toStr, callable $resolveCost): float
+    {
+        $sum = 0.0;
+        CustomerReturnLine::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'customer_return_lines.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->select(['customer_return_lines.good_id', 'customer_return_lines.quantity', 'cr.warehouse_id'])
+            ->get()
+            ->each(function ($r) use (&$sum, $resolveCost): void {
+                $sum += round((float) $r->quantity * $resolveCost((int) $r->good_id, (int) $r->warehouse_id), 2);
+            });
+
+        return round($sum, 2);
+    }
+
+    /**
+     * @param  callable(int,int):float  $resolveCost
+     */
+    private function sumStockWriteoffCostForPeriod(int $branchId, string $fromStr, string $toStr, callable $resolveCost): float
+    {
+        $sum = 0.0;
+        StockWriteoffLine::query()
+            ->join('stock_writeoffs as sw', 'sw.id', '=', 'stock_writeoff_lines.stock_writeoff_id')
+            ->where('sw.branch_id', $branchId)
+            ->whereDate('sw.document_date', '>=', $fromStr)
+            ->whereDate('sw.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->select(['stock_writeoff_lines.good_id', 'stock_writeoff_lines.quantity', 'sw.warehouse_id'])
+            ->get()
+            ->each(function ($r) use (&$sum, $resolveCost): void {
+                $sum += round((float) $r->quantity * $resolveCost((int) $r->good_id, (int) $r->warehouse_id), 2);
+            });
+
+        return round($sum, 2);
+    }
+
+    /**
+     * @param  callable(int,int):float  $resolveCost
+     */
+    private function sumStockSurplusCostForPeriod(int $branchId, string $fromStr, string $toStr, callable $resolveCost): float
+    {
+        $sum = 0.0;
+        StockSurplusLine::query()
+            ->join('stock_surpluses as ss', 'ss.id', '=', 'stock_surplus_lines.stock_surplus_id')
+            ->where('ss.branch_id', $branchId)
+            ->whereDate('ss.document_date', '>=', $fromStr)
+            ->whereDate('ss.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->with('good:id,is_service')
+            ->select(['stock_surplus_lines.good_id', 'stock_surplus_lines.quantity', 'stock_surplus_lines.unit_cost', 'ss.warehouse_id'])
+            ->get()
+            ->each(function ($r) use (&$sum, $resolveCost): void {
+                $uc = $r->unit_cost !== null ? (float) $r->unit_cost : $resolveCost((int) $r->good_id, (int) $r->warehouse_id);
+                $sum += round((float) $r->quantity * $uc, 2);
+            });
+
+        return round($sum, 2);
+    }
+
+    /**
+     * @param  callable(int,int):float  $resolveCost
+     * @return array{out: float, in: float}
+     */
+    private function sumStockTransferCostsForPeriod(int $branchId, string $fromStr, string $toStr, callable $resolveCost): array
+    {
+        $outSum = 0.0;
+        $inSum = 0.0;
+        StockTransferLine::query()
+            ->join('stock_transfers as st', 'st.id', '=', 'stock_transfer_lines.stock_transfer_id')
+            ->where('st.branch_id', $branchId)
+            ->whereDate('st.document_date', '>=', $fromStr)
+            ->whereDate('st.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->select([
+                'stock_transfer_lines.good_id',
+                'stock_transfer_lines.quantity',
+                'st.from_warehouse_id',
+                'st.to_warehouse_id',
+            ])
+            ->get()
+            ->each(function ($r) use (&$outSum, &$inSum, $resolveCost): void {
+                $gid = (int) $r->good_id;
+                $qty = (float) $r->quantity;
+                $fromWh = (int) $r->from_warehouse_id;
+                $toWh = (int) $r->to_warehouse_id;
+                $outSum += round($qty * $resolveCost($gid, $fromWh), 2);
+                $inSum += round($qty * $resolveCost($gid, $toWh), 2);
+            });
+
+        return ['out' => round($outSum, 2), 'in' => round($inSum, 2)];
     }
 
     /**
@@ -1046,6 +2577,7 @@ class BranchReportService
      *     organization_name: string,
      *     accounts: list<array{
      *       id: int,
+     *       register_code: string,
      *       account_label: string,
      *       kind: string,
      *       currency: string,
@@ -1118,10 +2650,15 @@ class BranchReportService
             $sk = $this->osvBalanceToDebitCredit($closing);
 
             $org = $acc->organization;
+            $registerCode = str_pad((string) ($id % 10000), 4, '0', STR_PAD_LEFT);
+            if ($registerCode === '0000') {
+                $registerCode = '9999';
+            }
             $accountRows[] = [
                 'organization_id' => (int) $acc->organization_id,
                 'organization_name' => (string) ($org?->name ?? '—'),
                 'id' => $id,
+                'register_code' => $registerCode,
                 'account_label' => $acc->summaryLabel(),
                 'kind' => $acc->isCash() ? 'cash' : 'bank',
                 'currency' => (string) $acc->currency,
@@ -1169,6 +2706,757 @@ class BranchReportService
             'grand' => $rowSix($grand),
             'currency_codes' => $currencies,
         ];
+    }
+
+    /**
+     * Расшифровка ячейки синтетического счёта ОСВ (id строки в таблице — отрицательный).
+     *
+     * @return array<string, mixed>
+     */
+    public function turnoverOsvSyntheticDetail(int $branchId, int $synthId, string $kind, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $allowed = ['opening', 'turnover_debit', 'turnover_credit', 'closing'];
+        if (! in_array($kind, $allowed, true)) {
+            throw new \InvalidArgumentException('Неизвестный тип ячейки.');
+        }
+
+        $kindLabels = [
+            'opening' => 'Сальдо на начало периода',
+            'turnover_debit' => 'Оборот за период — дебет',
+            'turnover_credit' => 'Оборот за период — кредит',
+            'closing' => 'Сальдо на конец периода',
+        ];
+        $kindLabel = $kindLabels[$kind];
+
+        return match ($synthId) {
+            -1310 => $this->turnoverOsvSynth1310($branchId, $kind, $kindLabel, $from, $to),
+            -3310 => $this->turnoverOsvSynth3310($branchId, $kind, $kindLabel, $from, $to),
+            -4110 => $this->turnoverOsvSynth4110($branchId, $kind, $kindLabel, $from, $to),
+            -4210 => $this->turnoverOsvSynth4210($branchId, $kind, $kindLabel, $from, $to),
+            -6010, -6011, -6110, -6120, -6030 => $this->turnoverOsvSynthIncome($branchId, $synthId, $kind, $kindLabel, $from, $to),
+            -7110 => $this->turnoverOsvSynth7110($branchId, $kind, $kindLabel, $from, $to),
+            -7510 => $this->turnoverOsvSynth7510($branchId, $kind, $kindLabel, $from, $to),
+            -9910 => $this->turnoverOsvSynth9910($branchId, $kind, $kindLabel, $from, $to),
+            default => throw new \InvalidArgumentException('Для этой строки расшифровка не настроена.'),
+        };
+    }
+
+    /**
+     * @param  list<array{date: ?string, title: string, detail: string, amount: float, amount_fmt: string}>  $lines
+     * @return array<string, mixed>
+     */
+    private function osvSynthJson(
+        string $code,
+        string $accountLabel,
+        string $kind,
+        string $kindLabel,
+        array $lines,
+        string $footerNote,
+        ?float $total = null
+    ): array {
+        $out = [
+            'account_code' => $code,
+            'account_label' => $accountLabel,
+            'kind' => $kind,
+            'kind_label' => $kindLabel,
+            'is_synthetic' => true,
+            'lines' => $lines,
+            'footer_note' => $footerNote,
+        ];
+        if ($total !== null) {
+            $out['total'] = round($total, 2);
+            $out['total_fmt'] = InvoiceNakladnayaFormatter::formatMoney(abs($total));
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array{date: ?string, title: string, detail: string, amount: float, amount_fmt: string}
+     */
+    private function osvSynthLine(?string $date, string $title, string $detail, float $amount): array
+    {
+        $r = round($amount, 2);
+
+        return [
+            'date' => $date,
+            'title' => $title,
+            'detail' => $detail,
+            'amount' => $r,
+            'amount_fmt' => InvoiceNakladnayaFormatter::formatMoney($r),
+        ];
+    }
+
+    private function turnoverOsvSynthPnlNoSaldo(string $code, string $label, string $kind, string $kindLabel): array
+    {
+        return $this->osvSynthJson(
+            $code,
+            $label,
+            $kind,
+            $kindLabel,
+            [],
+            'Для счетов доходов и расходов в этой ведомости заполняются только обороты за период; сальдо на начало и конец не строится.',
+        );
+    }
+
+    private function turnoverOsvSynth1310(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $onBeforePeriod = $from->copy()->subDay()->startOfDay();
+        $onEndPeriod = $to->copy()->startOfDay();
+        $resolveCost = $this->buildCostResolverForBranch($branchId);
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $cogs = round((float) $gp['cost'], 2);
+
+        $invOpen = round($this->inventoryValuationAtBoundary($branchId, $onBeforePeriod), 2);
+        $invClose = round($this->inventoryValuationAtBoundary($branchId, $onEndPeriod), 2);
+
+        $purchaseIn = (float) (PurchaseReceiptLine::query()
+            ->join('purchase_receipts as pr', 'pr.id', '=', 'purchase_receipt_lines.purchase_receipt_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('purchase_receipt_lines.line_sum'));
+
+        $purchaseRetOut = (float) (PurchaseReturnLine::query()
+            ->join('purchase_returns as pr', 'pr.id', '=', 'purchase_return_lines.purchase_return_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('purchase_return_lines.line_sum'));
+
+        $customerReturnInCost = $this->sumCustomerReturnStockCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+        $writeoffCost = $this->sumStockWriteoffCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+        $surplusDebit = $this->sumStockSurplusCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+        $costTransferOutIn = $this->sumStockTransferCostsForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $debitTurn = round(
+            $purchaseIn + $customerReturnInCost + $surplusDebit + ($costTransferOutIn['in'] ?? 0.0),
+            2
+        );
+        $creditTurn = round(
+            $cogs + $purchaseRetOut + $writeoffCost + ($costTransferOutIn['out'] ?? 0.0),
+            2
+        );
+
+        $code = '1310';
+        $label = 'Материальные запасы (товары на складах)';
+
+        if ($kind === 'opening') {
+            $lines = [
+                $this->osvSynthLine(null, 'Оценка запасов на начало', 'Учётные цены из карточек остатков и движения до '.$from->format('d.m.Y'), $invOpen),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Сальдо — сумма количества × учётная цена по каждой позиции входящих остатков (без услуг).',
+                $invOpen);
+        }
+        if ($kind === 'closing') {
+            $lines = [
+                $this->osvSynthLine(null, 'Оценка запасов на конец', 'На '.$to->format('d.m.Y'), $invClose),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'То же правило, что на начало: остатки по складам × учётная себестоимость.',
+                $invClose);
+        }
+        if ($kind === 'turnover_debit') {
+            $lines = [
+                $this->osvSynthLine(null, 'Поступления (закупки у поставщиков)', 'Суммы строк приходных накладных за период', $purchaseIn),
+                $this->osvSynthLine(null, 'Возвраты от покупателей на склад', 'По учётной цене отгрузки', $customerReturnInCost),
+                $this->osvSynthLine(null, 'Оприходование излишков', 'По учётной цене', $surplusDebit),
+                $this->osvSynthLine(null, 'Перемещения — приход на склад', 'Себестоимость вх. остатка', (float) ($costTransferOutIn['in'] ?? 0.0)),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Дебет оборота — всё, что увеличило оценку запасов за период.', $debitTurn);
+        }
+
+        $lines = [
+            $this->osvSynthLine(null, 'Себестоимость проданных товаров', 'По строкам розницы и опта (не услуги), кол-во × учётная цена', $cogs),
+            $this->osvSynthLine(null, 'Возвраты поставщику', 'Суммы строк за период', $purchaseRetOut),
+            $this->osvSynthLine(null, 'Списания со склада', 'По учётной цене', $writeoffCost),
+            $this->osvSynthLine(null, 'Перемещения — расход со склада', 'Себестоимость', (float) ($costTransferOutIn['out'] ?? 0.0)),
+        ];
+
+        return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+            'Кредит оборота — всё, что уменьшило оценку запасов за период.', $creditTurn);
+    }
+
+    private function turnoverOsvSynth3310(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $openAp = round((float) Counterparty::query()->where('branch_id', $branchId)->sum('opening_debt_as_supplier'), 2);
+
+        $purchaseIn = (float) (PurchaseReceiptLine::query()
+            ->join('purchase_receipts as pr', 'pr.id', '=', 'purchase_receipt_lines.purchase_receipt_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('purchase_receipt_lines.line_sum'));
+
+        $paymentsToSuppliers = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $closingApNet = round($openAp + $purchaseIn - $paymentsToSuppliers, 2);
+        $code = '3310';
+        $label = 'Задолженность поставщикам';
+
+        if ($kind === 'opening') {
+            $lines = [
+                $this->osvSynthLine(null, 'Входящие сальдо контрагентов', 'Поле «долг перед поставщиком» в справочнике (сумма по филиалу)', $openAp),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Упрощённая модель: старт — только из справочника контрагентов.', $openAp);
+        }
+        if ($kind === 'closing') {
+            $lines = [
+                $this->osvSynthLine(null, 'Расчёт на конец', 'Входящие долги + закупки за период − оплаты поставщикам из «Банк и касса»', $closingApNet),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Это не полная бухгалтерская кредиторка, а связка справочника и документов закупки/оплат.', $closingApNet);
+        }
+        if ($kind === 'turnover_debit') {
+            $lines = [];
+            $movements = CashMovement::query()
+                ->where('branch_id', $branchId)
+                ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
+                ->whereDate('occurred_on', '>=', $fromStr)
+                ->whereDate('occurred_on', '<=', $toStr)
+                ->with('counterparty')
+                ->orderByDesc('occurred_on')
+                ->orderByDesc('id')
+                ->limit(200)
+                ->get();
+            foreach ($movements as $m) {
+                $cp = $m->counterparty?->name ?? '';
+                $lines[] = $this->osvSynthLine(
+                    $m->occurred_on->format('d.m.Y'),
+                    'Оплата поставщику',
+                    trim($cp.' '.(string) $m->comment),
+                    (float) $m->amount
+                );
+            }
+            if (empty($lines)) {
+                $lines[] = $this->osvSynthLine(null, '—', 'Нет оплат поставщикам за период', 0.0);
+            }
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Дебет оборота — оплаты из раздела «Банк и касса» (расход поставщику), уменьшают долг.',
+                $paymentsToSuppliers);
+        }
+
+        $lines = [];
+        $receipts = PurchaseReceiptLine::query()
+            ->join('purchase_receipts as pr', 'pr.id', '=', 'purchase_receipt_lines.purchase_receipt_id')
+            ->where('pr.branch_id', $branchId)
+            ->whereDate('pr.document_date', '>=', $fromStr)
+            ->whereDate('pr.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->selectRaw('pr.id, pr.document_date, SUM(purchase_receipt_lines.line_sum) as s')
+            ->groupBy('pr.id', 'pr.document_date')
+            ->orderByDesc('s')
+            ->limit(200)
+            ->get();
+        foreach ($receipts as $r) {
+            $lines[] = $this->osvSynthLine(
+                $r->document_date instanceof CarbonInterface ? $r->document_date->format('d.m.Y') : null,
+                'Поступление от поставщика',
+                'Документ № '.$r->id,
+                (float) $r->s
+            );
+        }
+        if (empty($lines)) {
+            $lines[] = $this->osvSynthLine(null, '—', 'Нет закупок товара за период', 0.0);
+        }
+
+        return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+            'Кредит оборота — суммы строк приходов (накладные), увеличивают долг перед поставщиками.',
+            $purchaseIn);
+    }
+
+    private function turnoverOsvSynth4110(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $openArRef = round((float) Counterparty::query()->where('branch_id', $branchId)->sum('opening_debt_as_buyer'), 2);
+
+        $paymentsFromClientsTracked = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereNotNull('counterparty_id')
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $legalTurnoverDebit = round((float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->sum('legal_entity_sale_lines.line_sum'), 2);
+
+        $closingArRef = round($openArRef + $legalTurnoverDebit - $paymentsFromClientsTracked, 2);
+        $code = '4110';
+        $label = 'Дебиторская задолженность покупателей (юрлица, справочник)';
+
+        if ($kind === 'opening') {
+            $lines = [
+                $this->osvSynthLine(null, 'Входящие сальдо', 'Сумма полей «долг покупателя» у контрагентов филиала', $openArRef),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Старт модели — только справочник контрагентов.', $openArRef);
+        }
+        if ($kind === 'closing') {
+            $lines = [
+                $this->osvSynthLine(null, 'Расчёт на конец', 'Входящие + суммы продаж юрлицам − оплаты от клиентов с привязкой контрагента', $closingArRef),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Розница и оплаты без контрагента сюда по этой строке не входят.', $closingArRef);
+        }
+        if ($kind === 'turnover_debit') {
+            $lines = [];
+            $buckets = LegalEntitySaleLine::query()
+                ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+                ->where('ls.branch_id', $branchId)
+                ->whereDate('ls.document_date', '>=', $fromStr)
+                ->whereDate('ls.document_date', '<=', $toStr)
+                ->selectRaw('ls.id, ls.document_date, SUM(legal_entity_sale_lines.line_sum) as s')
+                ->groupBy('ls.id', 'ls.document_date')
+                ->orderByDesc('s')
+                ->limit(200)
+                ->get();
+            foreach ($buckets as $b) {
+                $lines[] = $this->osvSynthLine(
+                    $b->document_date instanceof CarbonInterface ? $b->document_date->format('d.m.Y') : null,
+                    'Реализация юрлицу',
+                    'Документ № '.$b->id,
+                    (float) $b->s
+                );
+            }
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Дебет оборота — суммы строк счетов/отгрузок юрлицам за период.', $legalTurnoverDebit);
+        }
+
+        $lines = [];
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereNotNull('counterparty_id')
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->with('counterparty')
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->limit(200)
+            ->get();
+        foreach ($movements as $m) {
+            $cp = $m->counterparty?->name ?? '';
+            $lines[] = $this->osvSynthLine(
+                $m->occurred_on->format('d.m.Y'),
+                'Оплата от клиента',
+                trim($cp.' '.(string) $m->comment),
+                (float) $m->amount
+            );
+        }
+
+        return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+            'Кредит оборота — приходы из «Банк и касса» с указанием контрагента-покупателя.', $paymentsFromClientsTracked);
+    }
+
+    private function turnoverOsvSynth4210(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $fromStart = $from->copy()->startOfDay();
+
+        $retailDebtOpen = $this->retailDebtOutstandingAtMoment($branchId, $fromStart, false);
+        $retailDebtClose = $this->retailDebtOutstandingAtMoment($branchId, $to->copy()->startOfDay(), true);
+        $retailDebtDebitTurn = $this->retailDebtIssuedInPeriod($branchId, $fromStr, $toStr);
+        $retailDebtCreditTurn = $this->retailDebtRepaidAfterCheckoutInPeriod($branchId, $fromStr, $toStr);
+
+        $code = '4210';
+        $label = 'Розничная задолженность (долг в чеках)';
+
+        if ($kind === 'opening') {
+            $lines = [
+                $this->osvSynthLine(null, 'Долг по чекам до начала периода', 'По каждому чеку: сумма чека − все оплаты, учтённые до '.$from->format('d.m.Y'), $retailDebtOpen),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Учёт по времени создания платежа (retail_sale_payments.created_at).',
+                $retailDebtOpen);
+        }
+        if ($kind === 'closing') {
+            $lines = [
+                $this->osvSynthLine(null, 'Долг по чекам на конец периода', 'Оплаты до конца '.$to->format('d.m.Y').' включительно', $retailDebtClose),
+            ];
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Незакрытый остаток долга по полю остатка (total − оплаты на дату).',
+                $retailDebtClose);
+        }
+        if ($kind === 'turnover_debit') {
+            $lines = [];
+            $sales = RetailSale::query()
+                ->where('branch_id', $branchId)
+                ->whereDate('document_date', '>=', $fromStr)
+                ->whereDate('document_date', '<=', $toStr)
+                ->orderByDesc('document_date')
+                ->orderByDesc('id')
+                ->limit(200)
+                ->get(['id', 'document_date', 'debt_amount', 'created_at']);
+            $ids = $sales->pluck('id')->all();
+            $extras = [];
+            if ($ids !== []) {
+                $extras = RetailSalePayment::query()
+                    ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+                    ->whereIn('retail_sale_payments.retail_sale_id', $ids)
+                    ->whereColumn('retail_sale_payments.created_at', '>', 'rs.created_at')
+                    ->groupBy('retail_sale_payments.retail_sale_id')
+                    ->selectRaw('retail_sale_payments.retail_sale_id as sid, SUM(retail_sale_payments.amount) as extra')
+                    ->pluck('extra', 'sid');
+            }
+            foreach ($sales as $s) {
+                $extra = (float) ($extras[$s->id] ?? 0.0);
+                $issued = max(0.0, round((float) $s->debt_amount + $extra, 2));
+                if ($issued < 0.005) {
+                    continue;
+                }
+                $lines[] = $this->osvSynthLine(
+                    $s->document_date->format('d.m.Y'),
+                    'Отсрочка по чеку № '.$s->id,
+                    'Первоначальный долг с чеком (остаток + оплаты после оформления чека)',
+                    $issued
+                );
+            }
+            if (empty($lines)) {
+                $lines[] = $this->osvSynthLine(null, '—', 'Нет новой отсрочки по датам чеков в периоде', 0.0);
+            }
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Только чеки с ненулевой выданной отсрочкой.', $retailDebtDebitTurn);
+        }
+
+        $lines = [];
+        $payments = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('retail_sale_payments.created_at', '>=', $fromStr)
+            ->whereDate('retail_sale_payments.created_at', '<=', $toStr)
+            ->whereColumn('retail_sale_payments.created_at', '>', 'rs.created_at')
+            ->orderByDesc('retail_sale_payments.created_at')
+            ->orderByDesc('retail_sale_payments.id')
+            ->limit(200)
+            ->get(['retail_sale_payments.amount', 'retail_sale_payments.created_at', 'retail_sale_payments.retail_sale_id']);
+        foreach ($payments as $p) {
+            $lines[] = $this->osvSynthLine(
+                Carbon::parse($p->created_at)->format('d.m.Y'),
+                'Погашение долга по чеку',
+                'Чек № '.(int) $p->retail_sale_id,
+                (float) $p->amount
+            );
+        }
+        if (empty($lines)) {
+            $lines[] = $this->osvSynthLine(null, '—', 'Нет доплат по долгу после оформления чека в периоде', 0.0);
+        }
+
+        return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+            'Учитываются только платежи, у которых время позже создания записи чека (доплата в долг).',
+            $retailDebtCreditTurn);
+    }
+
+    private function turnoverOsvSynthIncome(int $branchId, int $synthId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+
+        [$code, $label, $isService, $retail, $isIncomeOther] = match ($synthId) {
+            -6010 => ['6010', 'Выручка розницы — товары', false, true, false],
+            -6011 => ['6011', 'Выручка розницы — услуги', true, true, false],
+            -6110 => ['6110', 'Выручка опт — товары', false, false, false],
+            -6120 => ['6120', 'Выручка опт — услуги', true, false, false],
+            -6030 => ['6030', 'Прочие поступления', false, false, true],
+            default => throw new \InvalidArgumentException('Неизвестный счёт дохода.'),
+        };
+
+        if ($kind !== 'turnover_credit') {
+            return $this->turnoverOsvSynthPnlNoSaldo($code, $label, $kind, $kindLabel);
+        }
+
+        if ($isIncomeOther) {
+            $lines = [];
+            $movements = CashMovement::query()
+                ->where('branch_id', $branchId)
+                ->where('kind', CashMovement::KIND_INCOME_OTHER)
+                ->whereDate('occurred_on', '>=', $fromStr)
+                ->whereDate('occurred_on', '<=', $toStr)
+                ->orderByDesc('occurred_on')
+                ->orderByDesc('id')
+                ->limit(250)
+                ->get();
+            foreach ($movements as $m) {
+                $lines[] = $this->osvSynthLine(
+                    $m->occurred_on->format('d.m.Y'),
+                    'Приход прочее',
+                    trim(trim((string) $m->expense_category).' '.(string) $m->comment),
+                    (float) $m->amount
+                );
+            }
+            if (empty($lines)) {
+                $lines[] = $this->osvSynthLine(null, '—', 'Нет операций «Приход прочее» за период', 0.0);
+            }
+            $total = (float) $movements->sum('amount');
+
+            return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+                'Документы «Банк и касса» — приход прочее (в т.ч. займы с кредитором «прочее»).',
+                round($total, 2));
+        }
+
+        $lines = [];
+        if ($retail) {
+            $buckets = RetailSaleLine::query()
+                ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+                ->where('rs.branch_id', $branchId)
+                ->whereDate('rs.document_date', '>=', $fromStr)
+                ->whereDate('rs.document_date', '<=', $toStr)
+                ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
+                ->selectRaw('rs.id, rs.document_date, SUM(retail_sale_lines.line_sum) as s')
+                ->groupBy('rs.id', 'rs.document_date')
+                ->orderByDesc('s')
+                ->limit(200)
+                ->get();
+            foreach ($buckets as $b) {
+                $lines[] = $this->osvSynthLine(
+                    $b->document_date instanceof CarbonInterface ? $b->document_date->format('d.m.Y') : null,
+                    'Розничный чек',
+                    '№ '.$b->id,
+                    (float) $b->s
+                );
+            }
+            $total = (float) RetailSaleLine::query()
+                ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+                ->where('rs.branch_id', $branchId)
+                ->whereDate('rs.document_date', '>=', $fromStr)
+                ->whereDate('rs.document_date', '<=', $toStr)
+                ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
+                ->sum('retail_sale_lines.line_sum');
+        } else {
+            $buckets = LegalEntitySaleLine::query()
+                ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+                ->where('ls.branch_id', $branchId)
+                ->whereDate('ls.document_date', '>=', $fromStr)
+                ->whereDate('ls.document_date', '<=', $toStr)
+                ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
+                ->selectRaw('ls.id, ls.document_date, SUM(legal_entity_sale_lines.line_sum) as s')
+                ->groupBy('ls.id', 'ls.document_date')
+                ->orderByDesc('s')
+                ->limit(200)
+                ->get();
+            foreach ($buckets as $b) {
+                $lines[] = $this->osvSynthLine(
+                    $b->document_date instanceof CarbonInterface ? $b->document_date->format('d.m.Y') : null,
+                    'Продажа юрлицу',
+                    'Документ № '.$b->id,
+                    (float) $b->s
+                );
+            }
+            $total = (float) LegalEntitySaleLine::query()
+                ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+                ->where('ls.branch_id', $branchId)
+                ->whereDate('ls.document_date', '>=', $fromStr)
+                ->whereDate('ls.document_date', '<=', $toStr)
+                ->whereHas('good', fn ($g) => $g->where('is_service', $isService))
+                ->sum('legal_entity_sale_lines.line_sum');
+        }
+
+        if (empty($lines)) {
+            $lines[] = $this->osvSynthLine(null, '—', 'Нет строк за период', 0.0);
+        }
+
+        return $this->osvSynthJson($code, $label, $kind, $kindLabel, $lines,
+            'Суммы строк продаж за период (как в отчёте), до 200 крупнейших документов в списке.',
+            round($total, 2));
+    }
+
+    private function turnoverOsvSynth7110(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        if ($kind !== 'turnover_debit') {
+            return $this->turnoverOsvSynthPnlNoSaldo('7110', 'Себестоимость проданных товаров', $kind, $kindLabel);
+        }
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $lines = [];
+        foreach ($gp['lines']->sortByDesc('cost')->take(150) as $row) {
+            $lines[] = $this->osvSynthLine(
+                null,
+                (string) $row['name'],
+                'Арт. '.(string) $row['article'].' · кол-во '.(string) $row['quantity'],
+                (float) $row['cost']
+            );
+        }
+        $total = round((float) $gp['cost'], 2);
+
+        return $this->osvSynthJson(
+            '7110',
+            'Себестоимость проданных товаров',
+            $kind,
+            $kindLabel,
+            $lines,
+            'Совпадает с блоком «Себестоимость» отчёта валовой прибыли: количество продаж × учётная цена запаса.',
+            $total
+        );
+    }
+
+    private function turnoverOsvSynth7510(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        if ($kind !== 'turnover_debit') {
+            return $this->turnoverOsvSynthPnlNoSaldo('7510', 'Прочие расходы', $kind, $kindLabel);
+        }
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+
+        $lines = [];
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->limit(300)
+            ->get();
+        foreach ($movements as $m) {
+            $cat = trim((string) $m->expense_category);
+            $lines[] = $this->osvSynthLine(
+                $m->occurred_on->format('d.m.Y'),
+                $cat !== '' ? $cat : 'Прочий расход',
+                (string) $m->comment,
+                (float) $m->amount
+            );
+        }
+        if ($lines === []) {
+            $lines[] = [
+                'date' => '—',
+                'summary' => 'За период нет записей «Прочий расход».',
+                'comment' => '',
+                'debit' => null,
+                'credit' => null,
+            ];
+        }
+        $total = round((float) $movements->sum('amount'), 2);
+
+        return $this->osvSynthJson(
+            '7510',
+            'Прочие расходы («Банк и касса»)',
+            $kind,
+            $kindLabel,
+            $lines,
+            'В том числе выплаты зарплаты, если они оформлены как прочий расход с категорией «Зарплата».',
+            $total
+        );
+    }
+
+    private function turnoverOsvSynth9910(int $branchId, string $kind, string $kindLabel, CarbonInterface $from, CarbonInterface $to): array
+    {
+        if (! in_array($kind, ['turnover_debit', 'turnover_credit'], true)) {
+            return $this->turnoverOsvSynthPnlNoSaldo('9910', 'Финансовый результат', $kind, $kindLabel);
+        }
+
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $cogs = round((float) $gp['cost'], 2);
+
+        $retailGoodsRev = (float) RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('retail_sale_lines.line_sum');
+
+        $retailServicesRev = (float) RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('retail_sale_lines.line_sum');
+
+        $legalGoodsRev = (float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', false))
+            ->sum('legal_entity_sale_lines.line_sum');
+
+        $legalServicesRev = (float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('legal_entity_sale_lines.line_sum');
+
+        $expenseOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $incomeOther = (float) CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount');
+
+        $totalIncome = round(
+            $retailGoodsRev + $retailServicesRev + $legalGoodsRev + $legalServicesRev + $incomeOther,
+            2
+        );
+        $totalExpense = round($cogs + $expenseOther, 2);
+        $profit = round($totalIncome - $totalExpense, 2);
+
+        $lines = [
+            $this->osvSynthLine(null, 'Доходы п.4 (6010–6120 + 6030)', 'Сумма строк раздела доходов', $totalIncome),
+            $this->osvSynthLine(null, 'Расходы п.5 (7110 + 7510)', 'Себестоимость + прочие расходы из кассы/банка', $totalExpense),
+            $this->osvSynthLine(null, 'Разница', $profit >= 0 ? 'Прибыль' : 'Убыток', abs($profit)),
+        ];
+
+        $footer = 'Управленческий итог без налогов, начислений ФОТ до выплаты и полного плана счетов.';
+
+        if ($kind === 'turnover_credit' && $profit > 0) {
+            return $this->osvSynthJson('9910', 'Финансовый результат', $kind, $kindLabel, $lines, $footer, $profit);
+        }
+        if ($kind === 'turnover_debit' && $profit < 0) {
+            return $this->osvSynthJson('9910', 'Финансовый результат', $kind, $kindLabel, $lines, $footer, abs($profit));
+        }
+
+        return $this->osvSynthJson(
+            '9910',
+            'Финансовый результат',
+            $kind,
+            $kindLabel,
+            [],
+            'За период нет прибыли в выбранной колонке: прибыль/убыток отражается только в одной из колонок оборота.'
+        );
     }
 
     /**

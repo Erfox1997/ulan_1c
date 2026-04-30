@@ -105,8 +105,7 @@
                                 @focus="searchOpen = true; if (query.trim().length >= 2) { search() }"
                                 @keydown.escape="searchOpen = false"
                                 autocomplete="off"
-                                placeholder="Наименование, артикул…"
-                                class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                             />
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
 
@@ -125,6 +124,7 @@
                                         type="button"
                                         class="flex w-full flex-col items-start gap-0.5 border-b px-3 py-2 text-left text-sm transition"
                                         :class="goodsRowOutOfStock(row) ? 'border-red-100 bg-red-50 hover:bg-red-100/90' : 'border-slate-50 hover:bg-emerald-50/80'"
+                                        @mousedown.prevent
                                         @click="addProduct(row)"
                                     >
                                         <span class="font-medium" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>

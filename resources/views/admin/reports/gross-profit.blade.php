@@ -13,11 +13,17 @@
             </div>
 
             <div class="border-b border-slate-100 px-4 py-3 sm:px-5">
-                @include('admin.reports.partials.period-filter', [
-                    'action' => route('admin.reports.gross-profit'),
-                    'filterFrom' => $filterFrom,
-                    'filterTo' => $filterTo,
-                ])
+                <div class="flex flex-wrap items-end gap-3">
+                    @include('admin.reports.partials.period-filter', [
+                        'action' => route('admin.reports.gross-profit'),
+                        'filterFrom' => $filterFrom,
+                        'filterTo' => $filterTo,
+                    ])
+                    <a
+                        href="{{ route('admin.reports.gross-profit.pdf', request()->query()) }}"
+                        class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                    >Скачать PDF</a>
+                </div>
             </div>
 
             <div class="grid gap-3 border-b border-slate-100 px-4 py-4 sm:grid-cols-3 sm:px-5">

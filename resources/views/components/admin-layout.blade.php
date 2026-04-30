@@ -16,8 +16,30 @@
 <body class="min-h-screen bg-slate-100 font-sans text-slate-900 antialiased">
     <div
         class="flex min-h-screen flex-col md:flex-row"
-        x-data="{ navOpen: false }"
-        x-init="window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 768px)').matches) navOpen = false }); $watch('navOpen', (v) => { document.body.style.overflow = v && window.innerWidth < 768 ? 'hidden' : '' })"
+        x-data="{
+            navOpen: false,
+            sidebarCollapsed: false,
+            toggleSidebar() {
+                this.sidebarCollapsed = !this.sidebarCollapsed;
+                try {
+                    localStorage.setItem('adminSidebarCollapsed', this.sidebarCollapsed ? '1' : '0');
+                } catch (e) {}
+            },
+            expandSidebar() {
+                if (!this.sidebarCollapsed) return;
+                this.sidebarCollapsed = false;
+                try {
+                    localStorage.setItem('adminSidebarCollapsed', '0');
+                } catch (e) {}
+            },
+        }"
+        x-init="
+            try {
+                if (localStorage.getItem('adminSidebarCollapsed') === '1') sidebarCollapsed = true;
+            } catch (e) {}
+            window.addEventListener('resize', () => { if (window.matchMedia('(min-width: 768px)').matches) navOpen = false });
+            $watch('navOpen', (v) => { document.body.style.overflow = v && window.innerWidth < 768 ? 'hidden' : '' })
+        "
         @keydown.escape.window="navOpen = false"
         @close-admin-nav.window="navOpen = false"
     >
@@ -53,12 +75,13 @@
             </aside>
         </div>
 
-        {{-- Только ПК: колонка в потоке, без fixed/тени/крестика (admin-desktop-sidebar в app.css) --}}
+        {{-- Только ПК: колонка в потоке; узкий режим — только иконки (как в Bitrix24) --}}
         <aside
-            class="admin-desktop-sidebar w-[300px] shrink-0 min-h-screen border-r border-white/5 bg-slate-950"
+            class="admin-desktop-sidebar shrink-0 min-h-screen border-r border-white/5 bg-slate-950 transition-[width] duration-300 ease-out md:w-[300px]"
+            :class="sidebarCollapsed ? 'md:!w-[4.25rem]' : ''"
             aria-label="Разделы учёта"
         >
-            @include('admin.partials.sidebar')
+            @include('admin.partials.sidebar', ['collapseAware' => true, 'appName' => $appName])
         </aside>
 
         <div class="flex min-w-0 flex-1 flex-col">

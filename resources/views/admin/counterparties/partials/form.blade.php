@@ -1,4 +1,7 @@
-@props(['submitLabel' => 'Записать'])
+@props([
+    'submitLabel' => 'Записать',
+    'showToolbarBackLink' => true,
+])
 @php
     use App\Models\Counterparty;
     /** @var \App\Models\Counterparty $counterparty */
@@ -101,15 +104,23 @@
     @endif
 
     <div class="cp-panel">
-        <div class="cp-toolbar">
-            <a href="{{ route('admin.counterparties.index') }}" class="cp-btn">← К списку</a>
-        </div>
+        @if ($showToolbarBackLink)
+            <div class="cp-toolbar">
+                <a href="{{ route('admin.counterparties.index') }}" class="cp-btn">← К списку</a>
+            </div>
+        @endif
 
         <div class="cp-titlebar">
-            <h2 class="cp-title">{{ $isEdit ? 'Контрагент' : 'Новый контрагент' }}</h2>
+            <h2 class="cp-title">
+                @if ($isEdit)
+                    Контрагент
+                @else
+                    Данные карточки
+                @endif
+            </h2>
         </div>
 
-        <div class="cp-grid cp-grid-2 border-b border-[#c0c0c0]">
+        <div class="cp-grid cp-grid-2 cp-section-divider">
             <div>
                 <label for="kind" class="cp-label">Тип *</label>
                 <select
@@ -171,7 +182,7 @@
         </div>
 
         <div class="cp-subhead">Реквизиты</div>
-        <div class="cp-grid cp-grid-2 border-b border-[#c0c0c0]">
+        <div class="cp-grid cp-grid-2 cp-section-divider">
             <div>
                 <label for="inn" class="cp-label">ИНН</label>
                 <input id="inn" name="inn" type="text" value="{{ $innValue }}" class="cp-field" />
@@ -190,7 +201,7 @@
         </div>
 
         <div class="cp-subhead">Начальные долги</div>
-        <div class="cp-grid border-b border-[#c0c0c0]">
+        <div class="cp-grid cp-section-divider">
             <div class="max-w-md">
                 <label for="opening_debt" class="cp-label">
                     <span x-text="openingDebtLabel()">Начальный долг, сом</span>
@@ -212,7 +223,7 @@
         <div class="cp-subhead">Счета в банке и наличные</div>
 
         <div
-            class="border-b border-[#c0c0c0] bg-white px-3 py-3 sm:px-4"
+            class="cp-bank-section cp-section-divider px-3 py-3 sm:px-4"
             x-data="organizationBankRows({{ \Illuminate\Support\Js::from($bankAccounts) }}, {{ (int) $defaultBankIndex }})"
         >
             <div class="space-y-3">

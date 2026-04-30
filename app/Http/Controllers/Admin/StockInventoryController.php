@@ -1546,7 +1546,7 @@ class StockInventoryController extends Controller
         foreach ($lines as $line) {
             $raw = $line['unit_cost'] ?? null;
             if ($raw === null || (is_string($raw) && trim($raw) === '')) {
-                return 'Укажите закупочную цену по каждой строке с количеством.';
+                continue;
             }
             $parsed = $this->openingBalanceService->parseOptionalMoney($raw);
             if ($parsed === null) {

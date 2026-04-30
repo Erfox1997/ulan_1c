@@ -58,7 +58,8 @@ class LegalEntitySaleController extends Controller
             ->where('branch_id', $branchId)
             ->when($selectedWarehouseId > 0, fn ($q) => $q->where('warehouse_id', $selectedWarehouseId))
             ->when($filterGoodId > 0, fn ($q) => $q->whereHas('lines', fn ($lq) => $lq->where('good_id', $filterGoodId)))
-            ->with(['warehouse', 'lines'])
+            ->with(['warehouse'])
+            ->withCount('lines')
             ->orderByDesc('document_date')
             ->orderByDesc('id')
             ->limit(500)
@@ -115,6 +116,7 @@ class LegalEntitySaleController extends Controller
                     continue;
                 }
                 $linesForForm[] = [
+                    'good_id' => isset($line['good_id']) ? (string) $line['good_id'] : '',
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
@@ -204,6 +206,7 @@ class LegalEntitySaleController extends Controller
                     continue;
                 }
                 $linesForForm[] = [
+                    'good_id' => isset($line['good_id']) ? (string) $line['good_id'] : '',
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
@@ -221,6 +224,7 @@ class LegalEntitySaleController extends Controller
                 $good = $line->good;
 
                 return [
+                    'good_id' => $line->good_id !== null && $line->good_id !== '' ? (string) $line->good_id : '',
                     'article_code' => (string) $line->article_code,
                     'name' => (string) $line->name,
                     'barcode' => $good?->barcode ? (string) $good->barcode : '',
@@ -235,20 +239,11 @@ class LegalEntitySaleController extends Controller
             }
         }
 
-        $organizations = Organization::query()
-            ->where('branch_id', $branchId)
-            ->orderByDesc('is_default')
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get();
-
         return view('admin.legal-entity-sales.edit', [
             'legalEntitySale' => $legalEntitySale,
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $selectedWarehouseId,
             'linesForForm' => $linesForForm,
-            'organizations' => $organizations,
-            'defaultPrintOrganizationId' => $organizations->first()?->id,
         ]);
     }
 
@@ -584,6 +579,7 @@ class LegalEntitySaleController extends Controller
     private function emptyLine(): array
     {
         return [
+            'good_id' => '',
             'article_code' => '',
             'name' => '',
             'barcode' => '',

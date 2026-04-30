@@ -179,7 +179,7 @@
                                                 <span class="text-slate-400">—</span>
                                             @endif
                                         </td>
-                                        <td class="whitespace-nowrap border border-slate-200 px-3 py-2.5 text-right text-slate-600">{{ $sale->lines->count() }}</td>
+                                        <td class="whitespace-nowrap border border-slate-200 px-3 py-2.5 text-right text-slate-600">{{ $sale->lines_count }}</td>
                                         <td class="border border-slate-200 px-3 py-2.5 text-center">
                                             <div class="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
                                                 <a

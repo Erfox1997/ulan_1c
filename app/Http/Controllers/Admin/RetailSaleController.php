@@ -394,6 +394,7 @@ class RetailSaleController extends Controller
                     'retail_sale_id' => $retailSale->id,
                     'organization_bank_account_id' => $accountId,
                     'amount' => $amountStr,
+                    'recorded_by_user_id' => auth()->id(),
                 ]);
                 $retailSale->refresh();
                 $retailSale->load('payments');
@@ -492,6 +493,7 @@ class RetailSaleController extends Controller
                         'retail_sale_id' => $sale->id,
                         'organization_bank_account_id' => $accountId,
                         'amount' => $take,
+                        'recorded_by_user_id' => auth()->id(),
                     ]);
 
                     $sale->refresh();
@@ -592,7 +594,8 @@ class RetailSaleController extends Controller
             ->when($dateFromNorm !== null, fn ($q) => $q->whereDate('document_date', '>=', $dateFromNorm))
             ->when($dateToNorm !== null, fn ($q) => $q->whereDate('document_date', '<=', $dateToNorm))
             ->when($filterGoodId > 0, fn ($q) => $q->whereHas('lines', fn ($lq) => $lq->where('good_id', $filterGoodId)))
-            ->with(['warehouse', 'organizationBankAccount.organization', 'payments.organizationBankAccount', 'lines'])
+            ->with(['warehouse', 'payments.organizationBankAccount'])
+            ->withCount('lines')
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit($limit)
@@ -846,6 +849,7 @@ class RetailSaleController extends Controller
                     'retail_sale_id' => $sale->id,
                     'organization_bank_account_id' => $accountId,
                     'amount' => $totalAmount,
+                    'recorded_by_user_id' => auth()->id(),
                 ]);
                 $sale->update([
                     'total_amount' => $totalAmount,
@@ -1220,6 +1224,7 @@ class RetailSaleController extends Controller
                 'retail_sale_id' => $sale->id,
                 'organization_bank_account_id' => $accId,
                 'amount' => $amt,
+                'recorded_by_user_id' => auth()->id(),
             ]);
             $sum = bcadd($sum, $amt, 2);
         }

@@ -18,6 +18,75 @@ function goodsStockQtyIsSoldOut(raw) {
 }
 
 document.addEventListener('alpine:init', () => {
+    /** Поле категории в модалке «Новый товар»: select + новая категория (x-modelable → newGoodForm.category). */
+    Alpine.data('quickGoodCategoryPicker', (categoriesUrl) => ({
+        categoriesUrl: typeof categoriesUrl === 'string' ? categoriesUrl : '',
+        items: [],
+        loading: false,
+        category: '',
+        pickValue: '',
+        newName: '',
+        async loadItems() {
+            if (!this.categoriesUrl) {
+                this.items = [];
+                return;
+            }
+            this.loading = true;
+            try {
+                const url = new URL(this.categoriesUrl, window.location.origin);
+                const res = await fetch(url.toString(), {
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                const data = await res.json();
+                this.items = Array.isArray(data) ? data.map((x) => String(x)) : [];
+                this.syncPickFromCategory();
+            } catch {
+                this.items = [];
+            } finally {
+                this.loading = false;
+            }
+        },
+        syncPickFromCategory() {
+            const c = (this.category || '').trim();
+            if (c === '') {
+                this.pickValue = '';
+                this.newName = '';
+                return;
+            }
+            if (this.items.some((x) => x === c)) {
+                this.pickValue = c;
+                this.newName = '';
+            } else {
+                this.pickValue = '__new__';
+                this.newName = c;
+            }
+        },
+        onPickChange() {
+            if (this.pickValue === '' || this.pickValue == null) {
+                this.category = '';
+                this.newName = '';
+                return;
+            }
+            if (this.pickValue === '__new__') {
+                this.category = (this.newName || '').trim();
+            } else {
+                this.category = this.pickValue;
+                this.newName = '';
+            }
+        },
+        onNewNameInput() {
+            if (this.pickValue === '__new__') {
+                this.category = (this.newName || '').trim();
+            }
+        },
+        init() {
+            this.loadItems();
+            this.$watch('category', () => {
+                this.syncPickFromCategory();
+            });
+        },
+    }));
+
     Alpine.data('organizationBankRows', (initialAccounts, defaultIndex) => ({
         accounts:
             Array.isArray(initialAccounts) && initialAccounts.length > 0
@@ -80,6 +149,7 @@ document.addEventListener('alpine:init', () => {
             article_code: '',
             name: '',
             barcode: '',
+            good_id: '',
             markup_percent: '',
             unit: 'шт.',
             quantity: '',
@@ -109,6 +179,7 @@ document.addEventListener('alpine:init', () => {
             article_code: r.article_code ?? '',
             name: r.name ?? '',
             barcode: r.barcode ?? '',
+            good_id: r.good_id ?? '',
             markup_percent: r.markup_percent ?? '',
             unit: r.unit ?? 'шт.',
             quantity: r.quantity ?? '',
@@ -118,21 +189,45 @@ document.addEventListener('alpine:init', () => {
 
         const u = urls && typeof urls === 'object' ? urls : {};
         const goodsSearchUrl = typeof u.goodsSearch === 'string' ? u.goodsSearch : '';
+        const goodsQuickStoreUrl = typeof u.goodsQuickStore === 'string' ? u.goodsQuickStore : '';
         const counterpartySearchUrl = typeof u.counterpartySearch === 'string' ? u.counterpartySearch : '';
         const counterpartyQuickUrl = typeof u.counterpartyQuick === 'string' ? u.counterpartyQuick : '';
         const branchName = typeof init.branchName === 'string' ? init.branchName : '';
         const warehouseName = typeof init.warehouseName === 'string' ? init.warehouseName : '';
+        const openFinalizeOnLoad = init.openFinalizeOnLoad === true;
+        const purchaseReceiptSwitchWarehouseUrl =
+            typeof init.purchaseReceiptSwitchWarehouseUrl === 'string'
+                ? init.purchaseReceiptSwitchWarehouseUrl
+                : '';
 
         return {
         lines,
         selectedRow: 0,
         warehouseId,
+        openFinalizeOnLoad,
         supplierName: typeof initialSupplierName === 'string' ? initialSupplierName : '',
         goodsSearchUrl,
+        goodsQuickStoreUrl,
         counterpartySearchUrl,
         counterpartyQuickUrl,
         branchName,
         warehouseName,
+        newGoodModalOpen: false,
+        newGoodSaving: false,
+        newGoodError: '',
+        newGoodForm: {
+            name: '',
+            barcode: '',
+            category: '',
+            unit: 'шт.',
+            quantity: '1',
+            unit_price: '',
+            wholesale_price: '',
+            sale_price: '',
+            oem: '',
+            factory_number: '',
+            min_stock: '',
+        },
         copyFeedbackGoodId: null,
         copyFeedbackTimer: null,
         nameSuggestRow: null,
@@ -152,6 +247,201 @@ document.addEventListener('alpine:init', () => {
         cpQuickLegalForm: 'osoo',
         cpQuickSaving: false,
         cpQuickError: '',
+        finalizeModalOpen: false,
+        resetNewGoodForm() {
+            this.newGoodForm = {
+                name: '',
+                barcode: '',
+                category: '',
+                unit: 'шт.',
+                quantity: '1',
+                unit_price: '',
+                wholesale_price: '',
+                sale_price: '',
+                oem: '',
+                factory_number: '',
+                min_stock: '',
+            };
+        },
+        openNewGoodModal(presetName) {
+            this.closeAllSuggests();
+            this.resetNewGoodForm();
+            const n = presetName != null ? String(presetName).trim() : '';
+            if (n !== '') {
+                this.newGoodForm.name = n;
+            }
+            this.newGoodError = '';
+            this.newGoodModalOpen = true;
+            this.$nextTick(() => {
+                document.getElementById('pr_new_good_name')?.focus();
+            });
+        },
+        closeNewGoodModal() {
+            this.newGoodModalOpen = false;
+            this.newGoodError = '';
+            this.newGoodSaving = false;
+        },
+        async submitNewGoodQuickStore() {
+            const name = String(this.newGoodForm.name ?? '').trim();
+            if (name === '') {
+                this.newGoodError = 'Укажите наименование.';
+                return;
+            }
+            const qtyRaw = String(this.newGoodForm.quantity ?? '').trim();
+            if (qtyRaw === '') {
+                this.newGoodError = 'Укажите количество.';
+                return;
+            }
+            const qNum = this.parsePurchaseNum(qtyRaw);
+            if (!Number.isFinite(qNum) || qNum <= 0) {
+                this.newGoodError = 'Количество должно быть числом больше нуля.';
+                return;
+            }
+            if (!this.goodsQuickStoreUrl) {
+                this.newGoodError = 'Создание товара недоступно.';
+                return;
+            }
+            const token =
+                document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+            this.newGoodSaving = true;
+            this.newGoodError = '';
+            /** @type {Record<string, string>} */
+            const body = { name };
+            const addStr = (k, v) => {
+                const t = String(v ?? '').trim();
+                if (t !== '') {
+                    body[k] = t;
+                }
+            };
+            addStr('barcode', this.newGoodForm.barcode);
+            addStr('category', this.newGoodForm.category);
+            addStr('unit', this.newGoodForm.unit);
+            addStr('sale_price', this.newGoodForm.sale_price);
+            addStr('wholesale_price', this.newGoodForm.wholesale_price);
+            addStr('oem', this.newGoodForm.oem);
+            addStr('factory_number', this.newGoodForm.factory_number);
+            addStr('min_stock', this.newGoodForm.min_stock);
+            if (!body.unit) {
+                body.unit = 'шт.';
+            }
+            let url = this.goodsQuickStoreUrl;
+            if (this.warehouseId > 0) {
+                url += (url.includes('?') ? '&' : '?') + 'warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+            }
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': token,
+                    },
+                    body: JSON.stringify(body),
+                });
+                /** @type {Record<string, unknown>} */
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch (_) {
+                    data = {};
+                }
+                if (!res.ok) {
+                    let msg =
+                        typeof data.message === 'string'
+                            ? data.message
+                            : 'Не удалось сохранить товар.';
+                    if (data.errors && typeof data.errors === 'object') {
+                        const first = Object.values(data.errors).flat()[0];
+                        if (typeof first === 'string' && first.trim() !== '') {
+                            msg = first;
+                        }
+                    }
+                    this.newGoodError = msg;
+                    return;
+                }
+                const item = data;
+                const row = emptyLine();
+                this.fillLineFromPurchaseGood(row, item);
+                row.quantity = qtyRaw.replace(/\s/g, '').replace(',', '.');
+                const up = String(this.newGoodForm.unit_price ?? '').trim();
+                if (up !== '') {
+                    row.unit_price = up.replace(/\s/g, '').replace(',', '.');
+                }
+                const sp = String(this.newGoodForm.sale_price ?? '').trim();
+                if (sp !== '') {
+                    row.sale_price = sp.replace(/\s/g, '').replace(',', '.');
+                }
+                const cost = this.parsePurchaseNum(row.unit_price);
+                const sale = this.parsePurchaseNum(row.sale_price);
+                if (Number.isFinite(cost) && cost > 0 && Number.isFinite(sale)) {
+                    const m = (sale / cost - 1) * 100;
+                    if (Number.isFinite(m)) {
+                        row.markup_percent = (Math.round(m * 100) / 100).toString();
+                    }
+                }
+                this.applyNewPurchaseLineOrPush(row);
+                this.closeNewGoodModal();
+                this.headerGoodClose();
+                this.$nextTick(() => {
+                    document.querySelector('[data-pr-header-good-input]')?.focus?.();
+                });
+            } catch (_) {
+                this.newGoodError = 'Ошибка сети. Повторите попытку.';
+            } finally {
+                this.newGoodSaving = false;
+            }
+        },
+        purchaseReceiptEscape() {
+            if (this.newGoodModalOpen) {
+                this.closeNewGoodModal();
+                return;
+            }
+            if (this.finalizeModalOpen) {
+                this.closeFinalizeModal();
+                return;
+            }
+            this.closeAllSuggests();
+        },
+        openFinalizeModal() {
+            this.closeAllSuggests();
+            this.finalizeModalOpen = true;
+            this.$nextTick(() => {
+                document.getElementById('pr_finalize_supplier')?.focus();
+            });
+        },
+        openFinalizeIfNeeded() {
+            if (!this.openFinalizeOnLoad) {
+                return;
+            }
+            this.$nextTick(() => {
+                this.finalizeModalOpen = true;
+                this.$nextTick(() => {
+                    document.getElementById('pr_finalize_supplier')?.focus();
+                });
+            });
+        },
+        onFinalizeWarehouseChange(event) {
+            const v = parseInt(String(event?.target?.value ?? ''), 10);
+            if (!Number.isFinite(v) || v <= 0 || v === this.warehouseId) {
+                return;
+            }
+            if (!purchaseReceiptSwitchWarehouseUrl) {
+                return;
+            }
+            const u = new URL(purchaseReceiptSwitchWarehouseUrl, window.location.href);
+            u.searchParams.set('warehouse_id', String(v));
+            window.location.assign(u.href);
+        },
+        closeFinalizeModal() {
+            this.finalizeModalOpen = false;
+            this.counterpartySuggestClose();
+        },
+        submitPurchaseFromModal() {
+            const form = document.getElementById('pr-purchase-receipt-form');
+            if (!form || !form.reportValidity()) return;
+            form.requestSubmit();
+        },
         parsePurchaseNum(v) {
             const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
             return Number.isFinite(n) ? n : NaN;
@@ -164,6 +454,21 @@ document.addEventListener('alpine:init', () => {
             if (!Number.isFinite(purchase) || purchase < 0) return;
             if (!Number.isFinite(markup)) return;
             row.sale_price = (purchase * (1 + markup / 100)).toFixed(2);
+        },
+        applyMarkupFromSale(index) {
+            const row = this.lines[index];
+            if (!row) return;
+            const saleRaw = String(row.sale_price ?? '').trim();
+            if (saleRaw === '') {
+                row.markup_percent = '';
+                return;
+            }
+            const purchase = this.parsePurchaseNum(row.unit_price);
+            const sale = this.parsePurchaseNum(row.sale_price);
+            if (!Number.isFinite(purchase) || purchase <= 0) return;
+            if (!Number.isFinite(sale)) return;
+            const m = (sale / purchase - 1) * 100;
+            row.markup_percent = (Math.round(m * 100) / 100).toString();
         },
         bulkMarkupPercent: '',
         applyBulkMarkupToAllLines() {
@@ -243,6 +548,10 @@ document.addEventListener('alpine:init', () => {
             this.cpQuickError = '';
         },
         closeAllSuggests() {
+            if (this.newGoodModalOpen) {
+                this.closeNewGoodModal();
+                return;
+            }
             this.nameSuggestClose();
             this.counterpartySuggestClose();
             this.headerGoodClose();
@@ -307,6 +616,7 @@ document.addEventListener('alpine:init', () => {
         },
         fillLineFromPurchaseGood(row, item) {
             if (!row || !item) return;
+            row.good_id = item.id != null && item.id !== '' ? String(item.id) : '';
             row.name = item.name || '';
             row.article_code = item.article_code || '';
             row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
@@ -352,9 +662,14 @@ document.addEventListener('alpine:init', () => {
                 const inp = document.querySelector(`input[name="lines[${ni}][name]"]`);
                 if (inp) this.refreshSuggestPosition(inp);
             }
-            if (this.showCpDropdown()) {
-                const sup = document.getElementById('supplier_name');
-                if (sup) this.refreshCpSuggestPosition(sup);
+            const supEl = document.getElementById('pr_finalize_supplier');
+            if (
+                supEl &&
+                (this.cpQuickOpen ||
+                    ((this.supplierName || '').trim().length >= 2 &&
+                        (this.cpSuggestLoading || this.cpSuggestItems.length > 0 || this.cpSuggestNoHits)))
+            ) {
+                this.refreshCpSuggestPosition(supEl);
             }
         },
         clearCopyFeedback() {
@@ -460,15 +775,32 @@ document.addEventListener('alpine:init', () => {
         appendLineFromCatalogItem(item) {
             clearTimeout(this.headerGoodBlurTimer);
             if (!item) return;
-            const row = emptyLine();
-            this.fillLineFromPurchaseGood(row, item);
-            this.applyNewPurchaseLineOrPush(row);
-            this.headerGoodClose(false);
-            this.nameSuggestClose();
-            const anchor = document.querySelector('[data-pr-header-good-input]');
-            if (anchor && anchor.focus) {
-                anchor.focus();
+            const gid = item.id != null && item.id !== '' ? String(item.id) : '';
+            const idx = gid !== '' ? this.lines.findIndex((r) => String(r.good_id || '') === gid) : -1;
+            if (idx >= 0) {
+                const row = this.lines[idx];
+                let cur = this.parsePurchaseNum(row.quantity);
+                if (!Number.isFinite(cur) || cur < 0) {
+                    cur = 0;
+                }
+                row.quantity = String(cur + 1);
+                this.selectedRow = idx;
+            } else {
+                const row = emptyLine();
+                this.fillLineFromPurchaseGood(row, item);
+                row.quantity = '1';
+                this.applyNewPurchaseLineOrPush(row);
             }
+            this.headerGoodOpen = true;
+            this.nameSuggestClose();
+            this.$nextTick(() => {
+                clearTimeout(this.headerGoodBlurTimer);
+                const anchor = document.querySelector('[data-pr-header-good-input]');
+                if (anchor && anchor.focus) {
+                    anchor.focus();
+                }
+                clearTimeout(this.headerGoodBlurTimer);
+            });
         },
         appendLineFromHeaderFreeText() {
             clearTimeout(this.headerGoodBlurTimer);
@@ -476,13 +808,18 @@ document.addEventListener('alpine:init', () => {
             if (q.length < 2) return;
             const row = emptyLine();
             row.name = q;
+            row.quantity = '1';
             this.applyNewPurchaseLineOrPush(row);
-            this.headerGoodClose(false);
+            this.headerGoodOpen = true;
             this.nameSuggestClose();
-            const anchor = document.querySelector('[data-pr-header-good-input]');
-            if (anchor && anchor.focus) {
-                anchor.focus();
-            }
+            this.$nextTick(() => {
+                clearTimeout(this.headerGoodBlurTimer);
+                const anchor = document.querySelector('[data-pr-header-good-input]');
+                if (anchor && anchor.focus) {
+                    anchor.focus();
+                }
+                clearTimeout(this.headerGoodBlurTimer);
+            });
         },
         closeNameSuggestKeepingTypedName() {
             const i = this.nameSuggestRow;
@@ -503,7 +840,7 @@ document.addEventListener('alpine:init', () => {
             }
             const q = (this.headerGoodQuery || '').trim();
             if (q.length >= 2 && this.headerGoodItems.length === 0) {
-                this.appendLineFromHeaderFreeText();
+                this.openNewGoodModal(q);
             }
         },
         copyGoodName(item, event) {
@@ -587,6 +924,7 @@ document.addEventListener('alpine:init', () => {
                 try {
                     if (!this.counterpartySearchUrl) {
                         this.cpSuggestItems = [];
+                        this.cpSuggestNoHits = true;
                         return;
                     }
                     const sep = this.counterpartySearchUrl.includes('?') ? '&' : '?';
@@ -600,7 +938,7 @@ document.addEventListener('alpine:init', () => {
                     this.cpSuggestNoHits = this.cpSuggestItems.length === 0;
                 } catch (e) {
                     this.cpSuggestItems = [];
-                    this.cpSuggestNoHits = false;
+                    this.cpSuggestNoHits = true;
                 } finally {
                     this.cpSuggestLoading = false;
                     this.$nextTick(() => this.refreshCpSuggestPosition(el));
@@ -617,7 +955,7 @@ document.addEventListener('alpine:init', () => {
         openCpQuickAdd(event) {
             if (event) event.preventDefault();
             clearTimeout(this.cpSuggestBlurTimer);
-            const el = document.getElementById('supplier_name');
+            const el = document.getElementById('pr_finalize_supplier');
             const q = (el && el.value ? el.value : this.supplierName || '').trim();
             if (q.length >= 2) {
                 this.supplierName = q;
@@ -719,6 +1057,22 @@ document.addEventListener('alpine:init', () => {
             this.selectedRow = Math.min(this.selectedRow, this.lines.length - 1);
             this.closeAllSuggests();
         },
+        removeLineAt(index) {
+            const i = typeof index === 'number' ? index : parseInt(String(index), 10);
+            if (!Number.isFinite(i) || i < 0 || i >= this.lines.length) {
+                return;
+            }
+            if (this.lines.length <= 1) {
+                return;
+            }
+            this.lines.splice(i, 1);
+            if (this.selectedRow === i) {
+                this.selectedRow = Math.min(i, this.lines.length - 1);
+            } else if (this.selectedRow > i) {
+                this.selectedRow--;
+            }
+            this.closeAllSuggests();
+        },
         clearSelectedRow() {
             this.closeAllSuggests();
             const row = this.lines[this.selectedRow];
@@ -747,7 +1101,8 @@ document.addEventListener('alpine:init', () => {
             this.closeAllSuggests();
         },
         openDraftPrint() {
-            const dateEl = document.getElementById('document_date');
+            const dateEl =
+                document.getElementById('pr_finalize_document_date') || document.getElementById('document_date');
             const rawDate = dateEl && dateEl.value ? dateEl.value : '';
             const months = [
                 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -885,6 +1240,7 @@ document.addEventListener('alpine:init', () => {
 
     Alpine.data('legalEntitySaleForm', () => {
         const emptyLine = () => ({
+            good_id: '',
             article_code: '',
             name: '',
             barcode: '',
@@ -943,6 +1299,7 @@ document.addEventListener('alpine:init', () => {
 
         const u = urls && typeof urls === 'object' ? urls : {};
         const goodsSearchUrl = typeof u.goodsSearch === 'string' ? u.goodsSearch : '';
+        const goodsQuickStoreUrl = typeof u.goodsQuickStore === 'string' ? u.goodsQuickStore : '';
         const counterpartySearchUrl = typeof u.counterpartySearch === 'string' ? u.counterpartySearch : '';
         const counterpartyQuickUrl = typeof u.counterpartyQuick === 'string' ? u.counterpartyQuick : '';
         const branchName = typeof init.branchName === 'string' ? init.branchName : '';
@@ -958,6 +1315,7 @@ document.addEventListener('alpine:init', () => {
             buyerPin: typeof initialBuyerPin === 'string' ? initialBuyerPin : '',
             counterpartyId: initialCounterpartyId,
             goodsSearchUrl,
+            goodsQuickStoreUrl,
             counterpartySearchUrl,
             counterpartyQuickUrl,
             branchName,
@@ -988,11 +1346,165 @@ document.addEventListener('alpine:init', () => {
             cpQuickLegalForm: 'osoo',
             cpQuickSaving: false,
             cpQuickError: '',
+            newGoodModalOpen: false,
+            newGoodSaving: false,
+            newGoodError: '',
+            newGoodForm: {
+                name: '',
+                barcode: '',
+                category: '',
+                unit: 'шт.',
+                quantity: '1',
+                unit_price: '',
+                wholesale_price: '',
+                sale_price: '',
+                oem: '',
+                factory_number: '',
+                min_stock: '',
+            },
+            resetLesNewGoodForm() {
+                this.newGoodForm = {
+                    name: '',
+                    barcode: '',
+                    category: '',
+                    unit: 'шт.',
+                    quantity: '1',
+                    unit_price: '',
+                    wholesale_price: '',
+                    sale_price: '',
+                    oem: '',
+                    factory_number: '',
+                    min_stock: '',
+                };
+            },
+            openNewGoodModal(presetName) {
+                this.closeAllSuggests();
+                this.resetLesNewGoodForm();
+                const n = presetName != null ? String(presetName).trim() : '';
+                if (n !== '') {
+                    this.newGoodForm.name = n;
+                }
+                this.newGoodError = '';
+                this.newGoodModalOpen = true;
+                this.$nextTick(() => {
+                    document.getElementById('les_new_good_name')?.focus();
+                });
+            },
+            closeNewGoodModal() {
+                this.newGoodModalOpen = false;
+                this.newGoodError = '';
+                this.newGoodSaving = false;
+            },
+            async submitNewGoodQuickStore() {
+                const name = String(this.newGoodForm.name ?? '').trim();
+                if (name === '') {
+                    this.newGoodError = 'Укажите наименование.';
+                    return;
+                }
+                const qtyRaw = String(this.newGoodForm.quantity ?? '').trim();
+                if (qtyRaw === '') {
+                    this.newGoodError = 'Укажите количество.';
+                    return;
+                }
+                const qNum = this.parsePurchaseNum(qtyRaw);
+                if (!Number.isFinite(qNum) || qNum <= 0) {
+                    this.newGoodError = 'Количество должно быть числом больше нуля.';
+                    return;
+                }
+                if (!this.goodsQuickStoreUrl) {
+                    this.newGoodError = 'Создание товара недоступно.';
+                    return;
+                }
+                const token =
+                    document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+                this.newGoodSaving = true;
+                this.newGoodError = '';
+                const body = { name };
+                const addStr = (k, v) => {
+                    const t = String(v ?? '').trim();
+                    if (t !== '') {
+                        body[k] = t;
+                    }
+                };
+                addStr('barcode', this.newGoodForm.barcode);
+                addStr('category', this.newGoodForm.category);
+                addStr('unit', this.newGoodForm.unit);
+                addStr('sale_price', this.newGoodForm.sale_price);
+                addStr('wholesale_price', this.newGoodForm.wholesale_price);
+                addStr('oem', this.newGoodForm.oem);
+                addStr('factory_number', this.newGoodForm.factory_number);
+                addStr('min_stock', this.newGoodForm.min_stock);
+                if (!body.unit) {
+                    body.unit = 'шт.';
+                }
+                let url = this.goodsQuickStoreUrl;
+                if (this.warehouseId > 0) {
+                    url += (url.includes('?') ? '&' : '?') + 'warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                }
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': token,
+                        },
+                        body: JSON.stringify(body),
+                    });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (_) {
+                        data = {};
+                    }
+                    if (!res.ok) {
+                        let msg =
+                            typeof data.message === 'string'
+                                ? data.message
+                                : 'Не удалось сохранить товар.';
+                        if (data.errors && typeof data.errors === 'object') {
+                            const first = Object.values(data.errors).flat()[0];
+                            if (typeof first === 'string' && first.trim() !== '') {
+                                msg = first;
+                            }
+                        }
+                        this.newGoodError = msg;
+                        return;
+                    }
+                    const item = data;
+                    const row = emptyLine();
+                    this.fillLesLineFromCatalogItem(row, item);
+                    row.quantity = qtyRaw.replace(/\s/g, '').replace(',', '.');
+                    const sp = String(this.newGoodForm.sale_price ?? '').trim();
+                    if (sp !== '') {
+                        row.unit_price = sp.replace(/\s/g, '').replace(',', '.');
+                    }
+                    const wp = String(this.newGoodForm.wholesale_price ?? '').trim();
+                    if (wp !== '') {
+                        row.wholesale_price = wp.replace(/\s/g, '').replace(',', '.');
+                    }
+                    this.applyNewLesLineOrPush(row);
+                    this.closeNewGoodModal();
+                    this.lesHeaderGoodsClose(false);
+                    this.$nextTick(() => {
+                        document.querySelector('[data-les-header-good-input]')?.focus?.();
+                    });
+                } catch (_) {
+                    this.newGoodError = 'Ошибка сети. Повторите попытку.';
+                } finally {
+                    this.newGoodSaving = false;
+                }
+            },
             lineSum(row) {
                 const q = parseFloat(String(row.quantity ?? '').replace(/\s/g, '').replace(',', '.'));
                 const p = parseFloat(String(row.unit_price ?? '').replace(/\s/g, '').replace(',', '.'));
                 if (!Number.isFinite(q) || !Number.isFinite(p)) return '';
                 return (q * p).toFixed(2);
+            },
+            parsePurchaseNum(v) {
+                const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+                return Number.isFinite(n) ? n : NaN;
             },
             /** Одна строка под наименованием в подсказке поиска товара (юрлицо / возвраты). */
             goodsSuggestCompactMeta(item) {
@@ -1140,6 +1652,10 @@ document.addEventListener('alpine:init', () => {
             },
             fillLesLineFromCatalogItem(row, item) {
                 if (!row || !item) return;
+                row.good_id =
+                    item.id !== undefined && item.id !== null && item.id !== ''
+                        ? String(item.id)
+                        : '';
                 row.name = item.name || '';
                 row.article_code = item.article_code || '';
                 row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
@@ -1156,14 +1672,51 @@ document.addEventListener('alpine:init', () => {
             appendLesLineFromCatalogItem(item) {
                 clearTimeout(this.lesHeaderBlurTimer);
                 if (!item) return;
+
+                const idStr =
+                    item.id !== undefined && item.id !== null && item.id !== '' ? String(item.id) : '';
+                const itemArt = String(item.article_code ?? '').trim();
+
+                for (let i = this.lines.length - 1; i >= 0; i--) {
+                    const row = this.lines[i];
+                    const rowId = String(row.good_id ?? '').trim();
+                    const rowArt = String(row.article_code ?? '').trim();
+                    let match = false;
+                    if (idStr !== '' && rowId !== '') {
+                        match = rowId === idStr;
+                    } else if (itemArt !== '' && rowArt !== '') {
+                        match = rowArt === itemArt;
+                    }
+                    if (!match) continue;
+
+                    const raw = String(row.quantity ?? '')
+                        .trim()
+                        .replace(/\s/g, '')
+                        .replace(',', '.');
+                    let qPrev = parseFloat(raw);
+                    if (!Number.isFinite(qPrev) || qPrev <= 0) qPrev = 0;
+                    const next = qPrev + 1;
+                    row.quantity = Number.isInteger(next) ? String(next) : String(next);
+                    this.selectedRow = i;
+                    this.nameSuggestClose();
+                    this.counterpartySuggestClose();
+                    const anchor = document.querySelector('[data-les-header-good-input]');
+                    if (anchor?.focus) {
+                        this.$nextTick(() => anchor.focus());
+                    }
+                    return;
+                }
+
                 const row = emptyLine();
                 this.fillLesLineFromCatalogItem(row, item);
+                row.quantity = '1';
                 this.applyNewLesLineOrPush(row);
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
-                this.lesHeaderGoodsClose(false);
                 const anchor = document.querySelector('[data-les-header-good-input]');
-                if (anchor && anchor.focus) anchor.focus();
+                if (anchor?.focus) {
+                    this.$nextTick(() => anchor.focus());
+                }
             },
             appendLesLineFromHeaderFreeText() {
                 clearTimeout(this.lesHeaderBlurTimer);
@@ -1243,7 +1796,7 @@ document.addEventListener('alpine:init', () => {
                 }
                 const q = (this.lesHeaderQuery || '').trim();
                 if (q.length >= 2 && this.lesHeaderItems.length === 0) {
-                    this.appendLesLineFromHeaderFreeText();
+                    this.openNewGoodModal(q);
                 }
             },
             repositionLesLineNameSuggest() {
@@ -1259,6 +1812,10 @@ document.addEventListener('alpine:init', () => {
                 }
             },
             closeAllSuggests() {
+                if (this.newGoodModalOpen) {
+                    this.closeNewGoodModal();
+                    return;
+                }
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
                 this.lesHeaderGoodsClose();
@@ -1558,6 +2115,23 @@ document.addEventListener('alpine:init', () => {
                 this.moreOpen = false;
                 this.closeAllSuggests();
             },
+            removeLineAt(index) {
+                const i = typeof index === 'number' ? index : parseInt(String(index), 10);
+                if (!Number.isFinite(i) || i < 0 || i >= this.lines.length) {
+                    return;
+                }
+                if (this.lines.length <= 1) {
+                    return;
+                }
+                this.lines.splice(i, 1);
+                if (this.selectedRow === i) {
+                    this.selectedRow = Math.min(i, this.lines.length - 1);
+                } else if (this.selectedRow > i) {
+                    this.selectedRow--;
+                }
+                this.moreOpen = false;
+                this.closeAllSuggests();
+            },
             moveUp() {
                 const i = this.selectedRow;
                 if (i <= 0) return;
@@ -1577,7 +2151,8 @@ document.addEventListener('alpine:init', () => {
                 this.closeAllSuggests();
             },
             openDraftPrint() {
-                const dateEl = document.getElementById('document_date');
+                const dateEl =
+                    document.querySelector('#prt_finalize_document_date, #pr_finalize_document_date, #document_date');
                 const rawDate = dateEl && dateEl.value ? dateEl.value : '';
                 const months = [
                     'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -1966,6 +2541,8 @@ document.addEventListener('alpine:init', () => {
             unit: 'шт.',
             quantity: '',
             unit_price: '',
+            /** Совпадение с позицией каталога при повторных кликах в шапке (не уходит в форму). */
+            prtCatalogGoodId: '',
         });
 
         const init =
@@ -1994,22 +2571,33 @@ document.addEventListener('alpine:init', () => {
             unit: r.unit ?? 'шт.',
             quantity: r.quantity ?? '',
             unit_price: r.unit_price ?? '',
+            prtCatalogGoodId: r.prtCatalogGoodId ?? '',
         }));
 
         const u = urls && typeof urls === 'object' ? urls : {};
         const goodsSearchUrl = typeof u.goodsSearch === 'string' ? u.goodsSearch : '';
+        const goodsQuickStoreUrl = typeof u.goodsQuickStore === 'string' ? u.goodsQuickStore : '';
         const counterpartySearchUrl = typeof u.counterpartySearch === 'string' ? u.counterpartySearch : '';
         const counterpartyQuickUrl = typeof u.counterpartyQuick === 'string' ? u.counterpartyQuick : '';
         const branchName = typeof init.branchName === 'string' ? init.branchName : '';
         const warehouseName = typeof init.warehouseName === 'string' ? init.warehouseName : '';
+        const openFinalizeOnLoad = init.openFinalizeOnLoad === true;
+        const purchaseReturnSwitchWarehouseUrl =
+            typeof init.purchaseReturnSwitchWarehouseUrl === 'string'
+                ? init.purchaseReturnSwitchWarehouseUrl
+                : '';
 
         return {
             lines,
             selectedRow: 0,
             moreOpen: false,
+            finalizeModalOpen: false,
+            openFinalizeOnLoad,
+            purchaseReturnSwitchWarehouseUrl,
             warehouseId,
             supplierName: typeof initialSupplierName === 'string' ? initialSupplierName : '',
             goodsSearchUrl,
+            goodsQuickStoreUrl,
             counterpartySearchUrl,
             counterpartyQuickUrl,
             branchName,
@@ -2031,6 +2619,152 @@ document.addEventListener('alpine:init', () => {
             cpQuickLegalForm: 'osoo',
             cpQuickSaving: false,
             cpQuickError: '',
+            newGoodModalOpen: false,
+            newGoodSaving: false,
+            newGoodError: '',
+            newGoodForm: {
+                name: '',
+                barcode: '',
+                category: '',
+                unit: 'шт.',
+                quantity: '1',
+                unit_price: '',
+                wholesale_price: '',
+                sale_price: '',
+                oem: '',
+                factory_number: '',
+                min_stock: '',
+            },
+            resetPrtNewGoodForm() {
+                this.newGoodForm = {
+                    name: '',
+                    barcode: '',
+                    category: '',
+                    unit: 'шт.',
+                    quantity: '1',
+                    unit_price: '',
+                    wholesale_price: '',
+                    sale_price: '',
+                    oem: '',
+                    factory_number: '',
+                    min_stock: '',
+                };
+            },
+            openNewGoodModal(presetName) {
+                this.closeAllSuggests();
+                this.resetPrtNewGoodForm();
+                const n = presetName != null ? String(presetName).trim() : '';
+                if (n !== '') {
+                    this.newGoodForm.name = n;
+                }
+                this.newGoodError = '';
+                this.newGoodModalOpen = true;
+                this.$nextTick(() => {
+                    document.getElementById('prt_new_good_name')?.focus();
+                });
+            },
+            closeNewGoodModal() {
+                this.newGoodModalOpen = false;
+                this.newGoodError = '';
+                this.newGoodSaving = false;
+            },
+            async submitNewGoodQuickStore() {
+                const name = String(this.newGoodForm.name ?? '').trim();
+                if (name === '') {
+                    this.newGoodError = 'Укажите наименование.';
+                    return;
+                }
+                const qtyRaw = String(this.newGoodForm.quantity ?? '').trim();
+                if (qtyRaw === '') {
+                    this.newGoodError = 'Укажите количество.';
+                    return;
+                }
+                const qNum = this.parsePurchaseNum(qtyRaw);
+                if (!Number.isFinite(qNum) || qNum <= 0) {
+                    this.newGoodError = 'Количество должно быть числом больше нуля.';
+                    return;
+                }
+                if (!this.goodsQuickStoreUrl) {
+                    this.newGoodError = 'Создание товара недоступно.';
+                    return;
+                }
+                const token =
+                    document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+                this.newGoodSaving = true;
+                this.newGoodError = '';
+                const body = { name };
+                const addStr = (k, v) => {
+                    const t = String(v ?? '').trim();
+                    if (t !== '') {
+                        body[k] = t;
+                    }
+                };
+                addStr('barcode', this.newGoodForm.barcode);
+                addStr('category', this.newGoodForm.category);
+                addStr('unit', this.newGoodForm.unit);
+                addStr('sale_price', this.newGoodForm.sale_price);
+                addStr('wholesale_price', this.newGoodForm.wholesale_price);
+                addStr('oem', this.newGoodForm.oem);
+                addStr('factory_number', this.newGoodForm.factory_number);
+                addStr('min_stock', this.newGoodForm.min_stock);
+                if (!body.unit) {
+                    body.unit = 'шт.';
+                }
+                let url = this.goodsQuickStoreUrl;
+                if (this.warehouseId > 0) {
+                    url += (url.includes('?') ? '&' : '?') + 'warehouse_id=' + encodeURIComponent(String(this.warehouseId));
+                }
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            Accept: 'application/json',
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': token,
+                        },
+                        body: JSON.stringify(body),
+                    });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (_) {
+                        data = {};
+                    }
+                    if (!res.ok) {
+                        let msg =
+                            typeof data.message === 'string'
+                                ? data.message
+                                : 'Не удалось сохранить товар.';
+                        if (data.errors && typeof data.errors === 'object') {
+                            const first = Object.values(data.errors).flat()[0];
+                            if (typeof first === 'string' && first.trim() !== '') {
+                                msg = first;
+                            }
+                        }
+                        this.newGoodError = msg;
+                        return;
+                    }
+                    const item = data;
+                    const row = emptyLine();
+                    this.fillPrtLineFromCatalogItem(row, item);
+                    row.quantity = qtyRaw.replace(/\s/g, '').replace(',', '.');
+                    const up = String(this.newGoodForm.unit_price ?? '').trim();
+                    if (up !== '') {
+                        row.unit_price = up.replace(/\s/g, '').replace(',', '.');
+                    }
+                    this.applyNewPrtLineOrPush(row);
+                    this.closeNewGoodModal();
+                    this.prtHeaderGoodsClose(false);
+                    this.$nextTick(() => {
+                        document.querySelector('[data-prt-header-good-input]')?.focus?.();
+                    });
+                } catch (_) {
+                    this.newGoodError = 'Ошибка сети. Повторите попытку.';
+                } finally {
+                    this.newGoodSaving = false;
+                }
+            },
             prtHeaderQuery: '',
             prtHeaderOpen: false,
             prtHeaderLoading: false,
@@ -2045,6 +2779,10 @@ document.addEventListener('alpine:init', () => {
                 const p = parseFloat(String(row.unit_price ?? '').replace(/\s/g, '').replace(',', '.'));
                 if (!Number.isFinite(q) || !Number.isFinite(p)) return '';
                 return (q * p).toFixed(2);
+            },
+            parsePurchaseNum(v) {
+                const n = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+                return Number.isFinite(n) ? n : NaN;
             },
             /** Одна строка под наименованием в подсказке поиска товара — для чипов в шапке. */
             goodsSuggestCompactMeta(item) {
@@ -2178,6 +2916,8 @@ document.addEventListener('alpine:init', () => {
             },
             fillPrtLineFromCatalogItem(row, item) {
                 if (!row || !item) return;
+                row.prtCatalogGoodId =
+                    item.id != null && item.id !== '' ? String(item.id) : '';
                 row.name = item.name || '';
                 row.article_code = item.article_code || '';
                 row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
@@ -2187,17 +2927,48 @@ document.addEventListener('alpine:init', () => {
                     row.unit_price = String(item.sale_price);
                 }
             },
+            findPrtLineIndexForCatalogItem(item) {
+                if (!item) return -1;
+                const gid = item.id != null && item.id !== '' ? String(item.id) : '';
+                if (gid !== '') {
+                    const ix = this.lines.findIndex((r) => String(r.prtCatalogGoodId || '') === gid);
+                    if (ix !== -1) return ix;
+                }
+                const ac = String(item.article_code ?? '').trim();
+                if (ac !== '') {
+                    const ix = this.lines.findIndex((r) => String(r.article_code ?? '').trim() === ac);
+                    if (ix !== -1) return ix;
+                }
+                return -1;
+            },
+            incrementPrtHeaderLineQuantity(row) {
+                const raw = String(row.quantity ?? '').trim();
+                const q = parseFloat(raw.replace(/\s/g, '').replace(',', '.'));
+                const base = Number.isFinite(q) && q >= 0 ? q : 0;
+                const next = base + 1;
+                if (Number.isInteger(next) || Math.abs(next - Math.round(next)) < 1e-9) {
+                    row.quantity = String(Math.round(next));
+                } else {
+                    row.quantity = String(parseFloat(next.toFixed(6)));
+                }
+            },
             appendPrtLineFromCatalogItem(item) {
                 clearTimeout(this.prtHeaderBlurTimer);
                 if (!item) return;
+                const existingIx = this.findPrtLineIndexForCatalogItem(item);
+                if (existingIx !== -1) {
+                    this.incrementPrtHeaderLineQuantity(this.lines[existingIx]);
+                    this.selectedRow = existingIx;
+                    this.nameSuggestClose();
+                    this.counterpartySuggestClose();
+                    return;
+                }
                 const row = emptyLine();
                 this.fillPrtLineFromCatalogItem(row, item);
+                row.quantity = '1';
                 this.applyNewPrtLineOrPush(row);
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
-                this.prtHeaderGoodsClose(false);
-                const anchor = document.querySelector('[data-prt-header-good-input]');
-                if (anchor && anchor.focus) anchor.focus();
             },
             appendPrtLineFromHeaderFreeText() {
                 clearTimeout(this.prtHeaderBlurTimer);
@@ -2206,9 +2977,6 @@ document.addEventListener('alpine:init', () => {
                 const row = emptyLine();
                 row.name = q;
                 this.applyNewPrtLineOrPush(row);
-                this.prtHeaderGoodsClose(false);
-                const anchor = document.querySelector('[data-prt-header-good-input]');
-                if (anchor && anchor.focus) anchor.focus();
             },
             onPrtHeaderGoodsFocus(event) {
                 clearTimeout(this.prtHeaderBlurTimer);
@@ -2277,7 +3045,7 @@ document.addEventListener('alpine:init', () => {
                 }
                 const q = (this.prtHeaderQuery || '').trim();
                 if (q.length >= 2 && this.prtHeaderItems.length === 0) {
-                    this.appendPrtLineFromHeaderFreeText();
+                    this.openNewGoodModal(q);
                 }
             },
             refreshSuggestPosition(el) {
@@ -2312,9 +3080,82 @@ document.addEventListener('alpine:init', () => {
                 this.cpQuickError = '';
             },
             closeAllSuggests() {
+                if (this.newGoodModalOpen) {
+                    this.closeNewGoodModal();
+                    return;
+                }
                 this.nameSuggestClose();
                 this.counterpartySuggestClose();
                 this.prtHeaderGoodsClose();
+            },
+            purchaseReturnEscape() {
+                if (this.newGoodModalOpen) {
+                    this.closeNewGoodModal();
+                    return;
+                }
+                if (this.finalizeModalOpen) {
+                    this.closeFinalizeModal();
+                    return;
+                }
+                this.closeAllSuggests();
+            },
+            openFinalizeModal() {
+                this.closeAllSuggests();
+                this.finalizeModalOpen = true;
+                this.$nextTick(() => {
+                    document.getElementById('prt_finalize_supplier')?.focus();
+                });
+            },
+            openFinalizeIfNeeded() {
+                if (!this.openFinalizeOnLoad) {
+                    return;
+                }
+                this.$nextTick(() => {
+                    this.finalizeModalOpen = true;
+                    this.$nextTick(() => {
+                        document.getElementById('prt_finalize_supplier')?.focus();
+                    });
+                });
+            },
+            closeFinalizeModal() {
+                this.finalizeModalOpen = false;
+                this.counterpartySuggestClose();
+            },
+            submitPurchaseReturnFromModal() {
+                const form = document.getElementById('prt-purchase-return-form');
+                if (!form || !form.reportValidity()) return;
+                form.requestSubmit();
+            },
+            onFinalizeWarehouseChange(event) {
+                const v = parseInt(String(event?.target?.value ?? ''), 10);
+                if (!Number.isFinite(v) || v <= 0 || v === this.warehouseId) {
+                    return;
+                }
+                if (!purchaseReturnSwitchWarehouseUrl) {
+                    return;
+                }
+                const u = new URL(purchaseReturnSwitchWarehouseUrl, window.location.href);
+                u.searchParams.set('warehouse_id', String(v));
+                window.location.assign(u.href);
+            },
+            repositionOpenSuggests() {
+                const ni = this.nameSuggestRow;
+                if (
+                    ni !== null &&
+                    (this.nameSuggestLoading || this.nameSuggestItems.length > 0 || this.nameSuggestNoHits)
+                ) {
+                    const inp = document.querySelector(`input[name="lines[${ni}][name]"]`);
+                    if (inp) this.refreshSuggestPosition(inp);
+                }
+                const supEl = document.getElementById('prt_finalize_supplier');
+                if (
+                    supEl &&
+                    (this.cpQuickOpen ||
+                        ((this.supplierName || '').trim().length >= 2 &&
+                            (this.cpSuggestLoading || this.cpSuggestItems.length > 0 || this.cpSuggestNoHits)))
+                ) {
+                    this.refreshCpSuggestPosition(supEl);
+                }
             },
             showCpDropdown() {
                 if (this.cpQuickOpen) {
@@ -2380,6 +3221,8 @@ document.addEventListener('alpine:init', () => {
                 if (index === null || !item) return;
                 const row = this.lines[index];
                 if (!row) return;
+                row.prtCatalogGoodId =
+                    item.id != null && item.id !== '' ? String(item.id) : '';
                 row.name = item.name || '';
                 row.article_code = item.article_code || '';
                 row.barcode = item.barcode != null && item.barcode !== '' ? String(item.barcode) : '';
@@ -2456,7 +3299,7 @@ document.addEventListener('alpine:init', () => {
             openCpQuickAdd(event) {
                 if (event) event.preventDefault();
                 clearTimeout(this.cpSuggestBlurTimer);
-                const el = document.getElementById('supplier_name');
+                const el = document.getElementById('prt_finalize_supplier');
                 const q = (el && el.value ? el.value : this.supplierName || '').trim();
                 if (q.length >= 2) {
                     this.supplierName = q;
@@ -2539,6 +3382,23 @@ document.addEventListener('alpine:init', () => {
                 this.moreOpen = false;
                 this.closeAllSuggests();
             },
+            removeLineAt(index) {
+                const i = typeof index === 'number' ? index : parseInt(String(index), 10);
+                if (!Number.isFinite(i) || i < 0 || i >= this.lines.length) {
+                    return;
+                }
+                if (this.lines.length <= 1) {
+                    return;
+                }
+                this.lines.splice(i, 1);
+                if (this.selectedRow === i) {
+                    this.selectedRow = Math.min(i, this.lines.length - 1);
+                } else if (this.selectedRow > i) {
+                    this.selectedRow--;
+                }
+                this.moreOpen = false;
+                this.closeAllSuggests();
+            },
             moveUp() {
                 const i = this.selectedRow;
                 if (i <= 0) return;
@@ -2558,7 +3418,8 @@ document.addEventListener('alpine:init', () => {
                 this.closeAllSuggests();
             },
             openDraftPrint() {
-                const dateEl = document.getElementById('document_date');
+                const dateEl =
+                    document.querySelector('#prt_finalize_document_date, #pr_finalize_document_date, #document_date');
                 const rawDate = dateEl && dateEl.value ? dateEl.value : '';
                 const months = [
                     'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
@@ -2705,6 +3566,8 @@ document.addEventListener('alpine:init', () => {
         const counterpartyQuickUrl = typeof c.counterpartyQuickUrl === 'string' ? c.counterpartyQuickUrl : '';
         const vehiclesIndexUrl = typeof c.customerVehiclesIndexUrl === 'string' ? c.customerVehiclesIndexUrl : '';
         const vehiclesStoreUrl = typeof c.customerVehiclesStoreUrl === 'string' ? c.customerVehiclesStoreUrl : '';
+        const vehicleHistoryUrlBase =
+            typeof c.vehicleHistoryUrlBase === 'string' ? c.vehicleHistoryUrlBase.trim().replace(/\/+$/, '') : '';
         const csrf = typeof c.csrf === 'string' ? c.csrf : '';
         const masters = Array.isArray(c.masters) ? c.masters : [];
         const initialCp =
@@ -2724,6 +3587,7 @@ document.addEventListener('alpine:init', () => {
             counterpartyQuickUrl,
             vehiclesIndexUrl,
             vehiclesStoreUrl,
+            vehicleHistoryUrlBase,
             csrf,
             masters,
             warehouseId,
@@ -2750,6 +3614,10 @@ document.addEventListener('alpine:init', () => {
             vPlate: '',
             vehicleSaving: false,
             vehicleError: '',
+            vehicleHistoryOpen: false,
+            vehicleHistoryLoading: false,
+            vehicleHistoryError: '',
+            vehicleHistoryPayload: null,
             init() {
                 if (initialCp && initialCp.id) {
                     this.counterpartyId = initialCp.id;
@@ -2976,6 +3844,239 @@ document.addEventListener('alpine:init', () => {
                     v.vin ? 'VIN ' + v.vin : null,
                 ].filter(Boolean);
                 return parts.length ? parts.join(' · ') : 'Авто #' + v.id;
+            },
+            formatVisitDate(iso) {
+                if (!iso || typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+                    return iso || '—';
+                }
+                const [y, m, d] = iso.split('-');
+                return `${d}.${m}.${y}`;
+            },
+            mileageDisplay(km) {
+                if (km == null || km === '') {
+                    return '—';
+                }
+                const n = parseFloat(String(km).replace(/\s/g, '').replace(',', '.'));
+                if (Number.isFinite(n)) {
+                    return (
+                        n.toLocaleString('ru-RU', { maximumFractionDigits: 1, minimumFractionDigits: 0 }) + ' км'
+                    );
+                }
+                return String(km) + ' км';
+            },
+            visitStatusLabel(s) {
+                if (s === 'fulfilled') {
+                    return 'Оформлена';
+                }
+                if (s === 'awaiting_fulfillment') {
+                    return 'В работе';
+                }
+                if (s === 'cancelled') {
+                    return 'Отменена';
+                }
+                return s ? String(s) : '—';
+            },
+            async openVehicleHistory() {
+                const id = String(this.customerVehicleId ?? '').trim();
+                if (!id || !this.vehicleHistoryUrlBase) {
+                    return;
+                }
+                this.vehicleHistoryOpen = true;
+                this.vehicleHistoryLoading = true;
+                this.vehicleHistoryError = '';
+                this.vehicleHistoryPayload = null;
+                const url = `${this.vehicleHistoryUrlBase}/${encodeURIComponent(id)}`;
+                try {
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        const msg =
+                            (data && data.message) ||
+                            (data && data.error) ||
+                            (typeof data === 'string' ? data : '') ||
+                            'Не удалось загрузить историю.';
+                        this.vehicleHistoryError = msg;
+                        return;
+                    }
+                    this.vehicleHistoryPayload = data && typeof data === 'object' ? data : null;
+                } catch (e) {
+                    this.vehicleHistoryError = 'Ошибка сети.';
+                } finally {
+                    this.vehicleHistoryLoading = false;
+                }
+            },
+            closeVehicleHistory() {
+                this.vehicleHistoryOpen = false;
+                this.vehicleHistoryError = '';
+                this.vehicleHistoryPayload = null;
+            },
+        };
+    });
+
+    Alpine.data('vehicleHistoryIndexPage', (opts) => {
+        const o = opts && typeof opts === 'object' ? opts : {};
+        /** @param {string} raw абсолютный или относительный URL с сервера — привести к URL для fetch с текущим origin */
+        function sameOriginRequestUrl(raw) {
+            const t = typeof raw === 'string' ? raw.trim() : '';
+            if (!t) {
+                return '';
+            }
+            try {
+                return new URL(t, window.location.href).href;
+            } catch {
+                return t;
+            }
+        }
+        const jsonBaseRaw =
+            typeof o.jsonBase === 'string' ? o.jsonBase.trim().replace(/\/+$/, '') : '';
+        const searchUrlRaw = typeof o.searchUrl === 'string' ? o.searchUrl.trim() : '';
+        const jsonBase = jsonBaseRaw ? sameOriginRequestUrl(jsonBaseRaw) : '';
+        const searchUrl = searchUrlRaw ? sameOriginRequestUrl(searchUrlRaw) : '';
+
+        return {
+            jsonBase,
+            searchUrl,
+            searchQuery: '',
+            suggestOpen: false,
+            suggestLoading: false,
+            suggestItems: [],
+            suggestNoHits: false,
+            suggestTimer: null,
+            suggestBlurTimer: null,
+            modalOpen: false,
+            loading: false,
+            error: '',
+            payload: null,
+            scheduleSuggest() {
+                clearTimeout(this.suggestTimer);
+                const q = String(this.searchQuery ?? '').trim();
+                if (q.length < 2) {
+                    this.suggestItems = [];
+                    this.suggestOpen = false;
+                    this.suggestNoHits = false;
+                    this.suggestLoading = false;
+                    return;
+                }
+                this.suggestTimer = setTimeout(() => {
+                    this.fetchSuggest();
+                }, 300);
+            },
+            async fetchSuggest() {
+                const q = String(this.searchQuery ?? '').trim();
+                if (q.length < 2 || !this.searchUrl) {
+                    return;
+                }
+                this.suggestLoading = true;
+                this.suggestNoHits = false;
+                this.suggestOpen = true;
+                try {
+                    const join = this.searchUrl.indexOf('?') >= 0 ? '&' : '?';
+                    const url = `${this.searchUrl}${join}q=${encodeURIComponent(q)}`;
+                    const res = await fetch(url, {
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    const list = data && Array.isArray(data.vehicles) ? data.vehicles : [];
+                    this.suggestItems = list;
+                    this.suggestNoHits = list.length === 0;
+                } catch (e) {
+                    this.suggestItems = [];
+                    this.suggestNoHits = true;
+                } finally {
+                    this.suggestLoading = false;
+                }
+            },
+            onSearchFocus() {
+                const q = String(this.searchQuery ?? '').trim();
+                if (q.length >= 2) {
+                    this.suggestOpen = true;
+                    this.fetchSuggest();
+                }
+            },
+            onSearchBlur() {
+                clearTimeout(this.suggestBlurTimer);
+                this.suggestBlurTimer = setTimeout(() => {
+                    this.suggestOpen = false;
+                }, 200);
+            },
+            pickVehicle(item) {
+                if (!item || item.id == null) {
+                    return;
+                }
+                this.searchQuery = item.label ? String(item.label) : '';
+                this.suggestOpen = false;
+                this.suggestItems = [];
+                this.openHistory(item.id);
+            },
+            formatVisitDate(iso) {
+                if (!iso || typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+                    return iso || '—';
+                }
+                const [y, m, d] = iso.split('-');
+                return `${d}.${m}.${y}`;
+            },
+            mileageDisplay(km) {
+                if (km == null || km === '') {
+                    return '—';
+                }
+                const n = parseFloat(String(km).replace(/\s/g, '').replace(',', '.'));
+                if (Number.isFinite(n)) {
+                    return (
+                        n.toLocaleString('ru-RU', { maximumFractionDigits: 1, minimumFractionDigits: 0 }) + ' км'
+                    );
+                }
+                return String(km) + ' км';
+            },
+            visitStatusLabel(s) {
+                if (s === 'fulfilled') {
+                    return 'Оформлена';
+                }
+                if (s === 'awaiting_fulfillment') {
+                    return 'В работе';
+                }
+                if (s === 'cancelled') {
+                    return 'Отменена';
+                }
+                return s ? String(s) : '—';
+            },
+            async openHistory(id) {
+                const vid = String(id ?? '').trim();
+                if (!vid || !this.jsonBase) {
+                    return;
+                }
+                this.modalOpen = true;
+                this.loading = true;
+                this.error = '';
+                this.payload = null;
+                const url = `${this.jsonBase}/${encodeURIComponent(vid)}/json`;
+                try {
+                    const res = await fetch(url, {
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        const msg =
+                            (data && data.message) ||
+                            (data && data.error) ||
+                            'Не удалось загрузить историю.';
+                        this.error = msg;
+                        return;
+                    }
+                    this.payload = data && typeof data === 'object' ? data : null;
+                } catch (e) {
+                    this.error = 'Ошибка сети.';
+                } finally {
+                    this.loading = false;
+                }
+            },
+            closeModal() {
+                this.modalOpen = false;
+                this.error = '';
+                this.payload = null;
             },
         };
     });
@@ -3252,11 +4353,13 @@ document.addEventListener('alpine:init', () => {
                         performer_employee_id: isService ? '' : '',
                     });
                 }
-                this.searchOpen = false;
                 if (fromBarcode) {
+                    this.searchOpen = false;
                     this.query = '';
+                    this.results = [];
+                    return;
                 }
-                this.results = [];
+                this.searchOpen = true;
             },
             async searchCp() {
                 if (!this.counterpartySearchUrl) {
@@ -3597,6 +4700,9 @@ document.addEventListener('alpine:init', () => {
         const searchUrl = typeof c.searchUrl === 'string' ? c.searchUrl : '';
         const editUrlTemplate = typeof c.editUrlTemplate === 'string' ? c.editUrlTemplate : '';
         const initialQuery = typeof c.initialQuery === 'string' ? c.initialQuery : '';
+        const openModalEvent = c.openModalEvent === true;
+        const openModalEventName =
+            typeof c.openModalEventName === 'string' ? c.openModalEventName.trim() : '';
 
         return {
             query: initialQuery,
@@ -3652,6 +4758,14 @@ document.addEventListener('alpine:init', () => {
                     return;
                 }
                 this.open = false;
+                if (openModalEventName !== '') {
+                    window.dispatchEvent(new CustomEvent(openModalEventName, { detail: { id: row.id } }));
+                    return;
+                }
+                if (openModalEvent) {
+                    window.dispatchEvent(new CustomEvent('sale-good-open-modal', { detail: { id: row.id } }));
+                    return;
+                }
                 if (editUrlTemplate === '') {
                     return;
                 }
@@ -3678,6 +4792,377 @@ document.addEventListener('alpine:init', () => {
                 }
 
                 return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' сом';
+            },
+        };
+    });
+
+    /** Карточка товара в модальном окне (справочник trade.sale-goods). */
+    Alpine.data('saleGoodDetailModal', (config) => {
+        const c = config && typeof config === 'object' ? config : {};
+        const dataUrlTemplate = typeof c.dataUrlTemplate === 'string' ? c.dataUrlTemplate : '';
+        const updateUrlTemplate = typeof c.updateUrlTemplate === 'string' ? c.updateUrlTemplate : '';
+        const csrf = typeof c.csrf === 'string' ? c.csrf : '';
+
+        return {
+            modalOpen: false,
+            loading: false,
+            saving: false,
+            loadError: '',
+            saveError: '',
+            fieldErrors: {},
+            activeTab: 'info',
+            goodId: null,
+            meta: { display_name: '', aggregated_stock: 0, aggregated_purchase_price: null },
+            movements: [],
+            form: {
+                article_code: '',
+                name: '',
+                barcode: '',
+                category: '',
+                unit: '',
+                sale_price: '',
+                wholesale_price: '',
+                min_sale_price: '',
+                oem: '',
+                factory_number: '',
+                min_stock: '',
+            },
+            categoryList: [],
+            showCategoryAdd: false,
+            newCategoryName: '',
+            openModal(id) {
+                if (id == null || dataUrlTemplate === '') {
+                    return;
+                }
+                this.loadGood(id);
+            },
+            closeModal() {
+                this.modalOpen = false;
+                try {
+                    document.body.style.overflow = '';
+                } catch (e) {}
+                this.loadError = '';
+                this.saveError = '';
+                this.fieldErrors = {};
+                this.showCategoryAdd = false;
+                this.newCategoryName = '';
+            },
+            async loadGood(id) {
+                this.loading = true;
+                this.loadError = '';
+                this.saveError = '';
+                this.fieldErrors = {};
+                this.modalOpen = true;
+                try {
+                    document.body.style.overflow = 'hidden';
+                } catch (e) {}
+                this.activeTab = 'info';
+                this.goodId = id;
+                this.showCategoryAdd = false;
+                this.newCategoryName = '';
+                try {
+                    const url = dataUrlTemplate.replace('__ID__', String(id));
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) {
+                        throw new Error('load');
+                    }
+                    const data = await res.json();
+                    const g = data.good && typeof data.good === 'object' ? data.good : {};
+                    this.goodId = g.id != null ? g.id : id;
+                    this.form = {
+                        article_code: g.article_code != null ? String(g.article_code) : '',
+                        name: g.name != null ? String(g.name) : '',
+                        barcode: g.barcode != null ? String(g.barcode) : '',
+                        category: g.category != null ? String(g.category) : '',
+                        unit: g.unit != null ? String(g.unit) : '',
+                        sale_price: g.sale_price != null ? String(g.sale_price) : '',
+                        wholesale_price: g.wholesale_price != null ? String(g.wholesale_price) : '',
+                        min_sale_price: g.min_sale_price != null ? String(g.min_sale_price) : '',
+                        oem: g.oem != null ? String(g.oem) : '',
+                        factory_number: g.factory_number != null ? String(g.factory_number) : '',
+                        min_stock: g.min_stock != null ? String(g.min_stock) : '',
+                    };
+                    const fromApi =
+                        data.categories && Array.isArray(data.categories)
+                            ? data.categories.map((x) => String(x).trim()).filter((s) => s !== '')
+                            : [];
+                    const curCat = (this.form.category || '').trim();
+                    const merged = new Set(fromApi);
+                    if (curCat !== '') {
+                        merged.add(curCat);
+                    }
+                    this.categoryList = Array.from(merged);
+                    this.meta = {
+                        display_name: g.display_name != null ? String(g.display_name) : this.form.name,
+                        aggregated_stock: g.aggregated_stock != null ? Number(g.aggregated_stock) : 0,
+                        aggregated_purchase_price:
+                            g.aggregated_purchase_price != null && g.aggregated_purchase_price !== ''
+                                ? Number(g.aggregated_purchase_price)
+                                : null,
+                    };
+                    this.movements = Array.isArray(data.movements) ? data.movements : [];
+                } catch (e) {
+                    this.loadError = 'Не удалось загрузить карточку товара.';
+                } finally {
+                    this.loading = false;
+                }
+            },
+            sortedCategories() {
+                return [...this.categoryList].sort((a, b) =>
+                    String(a).localeCompare(String(b), 'ru', { sensitivity: 'base' })
+                );
+            },
+            addNewCategory() {
+                const name = (this.newCategoryName || '').trim();
+                if (!name || name.length > 120) {
+                    return;
+                }
+                if (!this.categoryList.includes(name)) {
+                    this.categoryList = [...this.categoryList, name];
+                }
+                this.form.category = name;
+                this.newCategoryName = '';
+                this.showCategoryAdd = false;
+            },
+            fieldErr(key) {
+                const e = this.fieldErrors[key];
+                return Array.isArray(e) && e.length ? e[0] : '';
+            },
+            async saveGood() {
+                if (this.goodId == null || updateUrlTemplate === '' || csrf === '') {
+                    return;
+                }
+                this.saving = true;
+                this.saveError = '';
+                this.fieldErrors = {};
+                const fd = new FormData();
+                fd.append('_token', csrf);
+                fd.append('_method', 'PUT');
+                const keys = [
+                    'article_code',
+                    'name',
+                    'barcode',
+                    'category',
+                    'unit',
+                    'sale_price',
+                    'wholesale_price',
+                    'min_sale_price',
+                    'oem',
+                    'factory_number',
+                    'min_stock',
+                ];
+                keys.forEach((k) => {
+                    fd.append(k, this.form[k] != null ? String(this.form[k]) : '');
+                });
+                try {
+                    const url = updateUrlTemplate.replace('__ID__', String(this.goodId));
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        body: fd,
+                        headers: {
+                            Accept: 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (e2) {
+                        data = {};
+                    }
+                    if (res.status === 422 && data.errors && typeof data.errors === 'object') {
+                        this.fieldErrors = data.errors;
+                        return;
+                    }
+                    if (!res.ok) {
+                        this.saveError =
+                            typeof data.message === 'string' ? data.message : 'Не удалось сохранить изменения.';
+                        return;
+                    }
+                    this.closeModal();
+                    window.location.reload();
+                } catch (e) {
+                    this.saveError = 'Ошибка сети.';
+                } finally {
+                    this.saving = false;
+                }
+            },
+            fmtQty(n, dir) {
+                const x = Number(n);
+                if (!Number.isFinite(x)) {
+                    return '—';
+                }
+                const s = x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+                if (dir === 'in') {
+                    return '+' + s;
+                }
+                if (dir === 'out') {
+                    return '−' + s;
+                }
+                return s;
+            },
+        };
+    });
+
+    /** Карточка услуги (справочник trade.sale-services), поля + категория select. */
+    Alpine.data('saleServiceDetailModal', (config) => {
+        const c = config && typeof config === 'object' ? config : {};
+        const dataUrlTemplate = typeof c.dataUrlTemplate === 'string' ? c.dataUrlTemplate : '';
+        const updateUrlTemplate = typeof c.updateUrlTemplate === 'string' ? c.updateUrlTemplate : '';
+        const csrf = typeof c.csrf === 'string' ? c.csrf : '';
+
+        return {
+            modalOpen: false,
+            loading: false,
+            saving: false,
+            loadError: '',
+            saveError: '',
+            fieldErrors: {},
+            serviceId: null,
+            meta: { display_name: '', article_code: '' },
+            form: {
+                name: '',
+                unit: '',
+                sale_price: '',
+                category: '',
+            },
+            categoryList: [],
+            showCategoryAdd: false,
+            newCategoryName: '',
+            openModal(id) {
+                if (id == null || dataUrlTemplate === '') {
+                    return;
+                }
+                this.loadService(id);
+            },
+            closeModal() {
+                this.modalOpen = false;
+                try {
+                    document.body.style.overflow = '';
+                } catch (e) {}
+                this.loadError = '';
+                this.saveError = '';
+                this.fieldErrors = {};
+                this.showCategoryAdd = false;
+                this.newCategoryName = '';
+            },
+            async loadService(id) {
+                this.loading = true;
+                this.loadError = '';
+                this.saveError = '';
+                this.fieldErrors = {};
+                this.modalOpen = true;
+                try {
+                    document.body.style.overflow = 'hidden';
+                } catch (e) {}
+                this.serviceId = id;
+                this.showCategoryAdd = false;
+                this.newCategoryName = '';
+                try {
+                    const url = dataUrlTemplate.replace('__ID__', String(id));
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) {
+                        throw new Error('load');
+                    }
+                    const data = await res.json();
+                    const g = data.good && typeof data.good === 'object' ? data.good : {};
+                    this.serviceId = g.id != null ? g.id : id;
+                    this.form = {
+                        name: g.name != null ? String(g.name) : '',
+                        unit: g.unit != null ? String(g.unit) : '',
+                        sale_price: g.sale_price != null ? String(g.sale_price) : '',
+                        category: g.category != null ? String(g.category) : '',
+                    };
+                    this.meta = {
+                        display_name: g.name != null ? String(g.name) : '',
+                        article_code: g.article_code != null ? String(g.article_code) : '',
+                    };
+                    const fromApi =
+                        data.categories && Array.isArray(data.categories)
+                            ? data.categories.map((x) => String(x).trim()).filter((s) => s !== '')
+                            : [];
+                    const curCat = (this.form.category || '').trim();
+                    const merged = new Set(fromApi);
+                    if (curCat !== '') {
+                        merged.add(curCat);
+                    }
+                    this.categoryList = Array.from(merged);
+                } catch (e) {
+                    this.loadError = 'Не удалось загрузить карточку услуги.';
+                } finally {
+                    this.loading = false;
+                }
+            },
+            sortedCategories() {
+                return [...this.categoryList].sort((a, b) =>
+                    String(a).localeCompare(String(b), 'ru', { sensitivity: 'base' })
+                );
+            },
+            addNewCategory() {
+                const name = (this.newCategoryName || '').trim();
+                if (!name || name.length > 120) {
+                    return;
+                }
+                if (!this.categoryList.includes(name)) {
+                    this.categoryList = [...this.categoryList, name];
+                }
+                this.form.category = name;
+                this.newCategoryName = '';
+                this.showCategoryAdd = false;
+            },
+            fieldErr(key) {
+                const e = this.fieldErrors[key];
+                return Array.isArray(e) && e.length ? e[0] : '';
+            },
+            async saveService() {
+                if (this.serviceId == null || updateUrlTemplate === '' || csrf === '') {
+                    return;
+                }
+                this.saving = true;
+                this.saveError = '';
+                this.fieldErrors = {};
+                const fd = new FormData();
+                fd.append('_token', csrf);
+                fd.append('_method', 'PUT');
+                ['name', 'unit', 'sale_price', 'category'].forEach((k) => {
+                    fd.append(k, this.form[k] != null ? String(this.form[k]) : '');
+                });
+                try {
+                    const url = updateUrlTemplate.replace('__ID__', String(this.serviceId));
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        body: fd,
+                        headers: {
+                            Accept: 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
+                    let data = {};
+                    try {
+                        data = await res.json();
+                    } catch (e2) {
+                        data = {};
+                    }
+                    if (res.status === 422 && data.errors && typeof data.errors === 'object') {
+                        this.fieldErrors = data.errors;
+                        return;
+                    }
+                    if (!res.ok) {
+                        this.saveError =
+                            typeof data.message === 'string' ? data.message : 'Не удалось сохранить изменения.';
+                        return;
+                    }
+                    this.closeModal();
+                    window.location.reload();
+                } catch (e) {
+                    this.saveError = 'Ошибка сети.';
+                } finally {
+                    this.saving = false;
+                }
             },
         };
     });
@@ -4168,6 +5653,323 @@ document.addEventListener('alpine:init', () => {
         };
     });
 
+    /**
+     * Списки банковских операций с фильтром по контрагенту:
+     * ввод от 2 символов → API поиск → выбор строки задаёт counterparty_id; кнопка — поиск по тексту q.
+     * Конфиг: window.__bankMovementCpListFilterInit — searchUrl, listUrl, initialValue, optional allowedKinds ['buyer','other'] или ['supplier','other'].
+     */
+    Alpine.data('bankMovementCpListFilter', () => {
+        const cfg =
+            typeof window !== 'undefined' &&
+            window.__bankMovementCpListFilterInit &&
+            typeof window.__bankMovementCpListFilterInit === 'object'
+                ? window.__bankMovementCpListFilterInit
+                : {};
+        const searchUrl = typeof cfg.searchUrl === 'string' ? cfg.searchUrl : '';
+        const listUrl = typeof cfg.listUrl === 'string' ? cfg.listUrl : '';
+        const initialValue =
+            typeof cfg.initialValue === 'string' ? cfg.initialValue : '';
+        const appliedCounterpartyId = parseInt(String(cfg.appliedCounterpartyId ?? '0'), 10) || 0;
+        let defaultKinds = ['buyer', 'other'];
+        if (Array.isArray(cfg.allowedKinds) && cfg.allowedKinds.length > 0) {
+            defaultKinds = cfg.allowedKinds.filter((k) => typeof k === 'string');
+        }
+        const allowKinds = new Set(defaultKinds.length > 0 ? defaultKinds : ['buyer', 'other']);
+
+        return {
+            query: initialValue,
+            cpItems: [],
+            cpLoading: false,
+            cpNoHits: false,
+            cpTimer: null,
+            cpBlurTimer: null,
+            cpPos: { top: 0, left: 0, width: 320 },
+            kindLabel(k) {
+                const m = { buyer: 'Покупатель', supplier: 'Поставщик', other: 'Прочее' };
+                return m[k] || k || '';
+            },
+            refreshCpPos(el) {
+                if (!el || !el.getBoundingClientRect) {
+                    return;
+                }
+                const r = el.getBoundingClientRect();
+                const w = Math.max(r.width, 300);
+                let left = r.left;
+                if (left + w > window.innerWidth - 8) {
+                    left = Math.max(8, window.innerWidth - w - 8);
+                }
+                this.cpPos = { top: r.bottom + 3, left, width: w };
+            },
+            showCpDropdown() {
+                const q = (this.query || '').trim();
+                if (q.length < 2) {
+                    return false;
+                }
+                return this.cpLoading || this.cpItems.length > 0 || this.cpNoHits;
+            },
+            closeCpUi() {
+                clearTimeout(this.cpTimer);
+                this.cpItems = [];
+                this.cpLoading = false;
+                this.cpNoHits = false;
+            },
+            onCpEscape() {
+                this.closeCpUi();
+            },
+            onCpFocus(event) {
+                clearTimeout(this.cpBlurTimer);
+                const el = event.target;
+                this.refreshCpPos(el);
+                const q = (this.query || '').trim();
+                if (q.length >= 2) {
+                    clearTimeout(this.cpTimer);
+                    this.cpTimer = setTimeout(() => this.runCpSearch(el, q), 120);
+                }
+            },
+            onCpInput(event) {
+                const el = event.target;
+                this.refreshCpPos(el);
+                clearTimeout(this.cpTimer);
+                const q = ((this.query != null ? String(this.query) : '') || '').trim();
+                if (q.length < 2) {
+                    this.closeCpUi();
+                    return;
+                }
+                this.cpLoading = true;
+                this.cpNoHits = false;
+                this.cpItems = [];
+                this.cpTimer = setTimeout(() => this.runCpSearch(el, q), 280);
+            },
+            onCpBlur() {
+                this.cpBlurTimer = setTimeout(() => {
+                    const root = this.$refs.bankCpListFilterRoot;
+                    if (
+                        root &&
+                        typeof root.contains === 'function' &&
+                        root.contains(document.activeElement)
+                    ) {
+                        return;
+                    }
+                    this.cpItems = [];
+                    this.cpNoHits = false;
+                }, 220);
+            },
+            async runCpSearch(el, q) {
+                if (!searchUrl || q.length < 2) {
+                    return;
+                }
+                this.cpLoading = true;
+                this.cpNoHits = false;
+                this.cpItems = [];
+                try {
+                    const sep = searchUrl.includes('?') ? '&' : '?';
+                    const url = `${searchUrl}${sep}q=${encodeURIComponent(q)}`;
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) {
+                        throw new Error('search');
+                    }
+                    const data = await res.json();
+                    const rows = Array.isArray(data) ? data : [];
+                    this.cpItems = rows.filter((it) => it && allowKinds.has(it.kind));
+                    this.cpNoHits = this.cpItems.length === 0;
+                } catch {
+                    this.cpItems = [];
+                    this.cpNoHits = false;
+                } finally {
+                    this.cpLoading = false;
+                    this.$nextTick(() => this.refreshCpPos(el));
+                }
+            },
+            pickCounterparty(item) {
+                clearTimeout(this.cpBlurTimer);
+                if (!item || !item.id || !listUrl) {
+                    return;
+                }
+                try {
+                    const u = listUrl.startsWith('http')
+                        ? new URL(listUrl)
+                        : new URL(listUrl, window.location.origin);
+                    u.searchParams.set('counterparty_id', String(item.id));
+                    window.location.assign(u.toString());
+                } catch {
+                    const sep = listUrl.includes('?') ? '&' : '?';
+                    window.location.assign(`${listUrl}${sep}counterparty_id=${encodeURIComponent(String(item.id))}`);
+                }
+            },
+            submitTextSearch(ev) {
+                if (ev) {
+                    ev.preventDefault();
+                }
+                const raw = this.query ?? '';
+                const q = typeof raw === 'string' ? raw.trim() : String(raw).trim();
+                if (!listUrl) {
+                    return;
+                }
+                try {
+                    const u = listUrl.startsWith('http')
+                        ? new URL(listUrl)
+                        : new URL(listUrl, window.location.origin);
+                    u.search = '';
+                    if (q !== '') {
+                        u.searchParams.set('q', q);
+                    }
+                    window.location.assign(u.toString());
+                } catch {
+                    let target = listUrl;
+                    const join = listUrl.includes('?') ? '&' : '?';
+                    target = q !== '' ? `${listUrl}${join}q=${encodeURIComponent(q)}` : listUrl.split('?')[0];
+                    window.location.assign(target);
+                }
+            },
+        };
+    });
+
+    /** Банк: поле категории (прочий приход / прочий расход) — подсказки из expense_category по филиалу */
+    Alpine.data('bankCashExpenseCategoryField', () => {
+        const cfg =
+            typeof window !== 'undefined' &&
+            window.__bankCashExpenseCategoryFieldInit &&
+            typeof window.__bankCashExpenseCategoryFieldInit === 'object'
+                ? window.__bankCashExpenseCategoryFieldInit
+                : {};
+        const searchUrl = typeof cfg.searchUrl === 'string' ? cfg.searchUrl : '';
+        const initialValue =
+            typeof cfg.initialValue === 'string' ? cfg.initialValue : '';
+
+        return {
+            query: initialValue,
+            catItems: [],
+            catLoading: false,
+            catNoHits: false,
+            catTimer: null,
+            catBlurTimer: null,
+            catPos: { top: 0, left: 0, width: 320 },
+            refreshCatPos(el) {
+                if (!el || !el.getBoundingClientRect) {
+                    return;
+                }
+                const r = el.getBoundingClientRect();
+                const w = Math.max(r.width, 260);
+                let left = r.left;
+                if (left + w > window.innerWidth - 8) {
+                    left = Math.max(8, window.innerWidth - w - 8);
+                }
+                this.catPos = { top: r.bottom + 3, left, width: w };
+            },
+            showCatDropdown() {
+                const q = (String(this.query ?? '').trim());
+                if (q.length < 2) {
+                    return false;
+                }
+                return this.catLoading || this.catItems.length > 0 || this.catNoHits;
+            },
+            closeCatUi() {
+                clearTimeout(this.catTimer);
+                this.catItems = [];
+                this.catLoading = false;
+                this.catNoHits = false;
+            },
+            onCatEscape() {
+                this.closeCatUi();
+            },
+            onCatFocus(ev) {
+                clearTimeout(this.catBlurTimer);
+                const el = ev.target;
+                this.refreshCatPos(el);
+                const q = (String(this.query ?? '').trim());
+                if (q.length >= 2) {
+                    clearTimeout(this.catTimer);
+                    this.catTimer = setTimeout(() => this.runCatSearch(el, q), 120);
+                }
+            },
+            onCatInput(ev) {
+                const el = ev.target;
+                this.refreshCatPos(el);
+                clearTimeout(this.catTimer);
+                const q = (String(this.query ?? '').trim());
+                if (q.length < 2) {
+                    this.closeCatUi();
+                    return;
+                }
+                this.catLoading = true;
+                this.catNoHits = false;
+                this.catItems = [];
+                this.catTimer = setTimeout(() => this.runCatSearch(el, q), 280);
+            },
+            onCatBlur() {
+                this.catBlurTimer = setTimeout(() => {
+                    const root = this.$refs.catSuggestRoot;
+                    if (
+                        root &&
+                        typeof root.contains === 'function' &&
+                        root.contains(document.activeElement)
+                    ) {
+                        return;
+                    }
+                    this.catItems = [];
+                    this.catNoHits = false;
+                }, 220);
+            },
+            async runCatSearch(el, q) {
+                if (!searchUrl || q.length < 2) {
+                    return;
+                }
+                this.catLoading = true;
+                this.catNoHits = false;
+                this.catItems = [];
+                try {
+                    const sep = searchUrl.includes('?') ? '&' : '?';
+                    const url = `${searchUrl}${sep}q=${encodeURIComponent(q)}`;
+                    const res = await fetch(url, {
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    if (!res.ok) {
+                        throw new Error('bad');
+                    }
+                    const data = await res.json();
+                    const rows = Array.isArray(data) ? data : [];
+                    this.catItems = rows
+                        .map((x) => (typeof x === 'string' ? x : String(x ?? '')))
+                        .map((x) => x.trim())
+                        .filter((x) => x !== '');
+                    this.catNoHits = this.catItems.length === 0;
+                } catch {
+                    this.catItems = [];
+                    this.catNoHits = false;
+                } finally {
+                    this.catLoading = false;
+                    this.$nextTick(() => this.refreshCatPos(el));
+                }
+            },
+            pickCategory(label) {
+                clearTimeout(this.catBlurTimer);
+                const s =
+                    typeof label === 'string'
+                        ? label.trim()
+                        : String(label ?? '').trim();
+                if (!s) {
+                    return;
+                }
+                this.query = s;
+                this.closeCatUi();
+            },
+            confirmTypedCategory(ev) {
+                if (ev) {
+                    ev.preventDefault();
+                }
+                clearTimeout(this.catBlurTimer);
+                const s = String(this.query ?? '').trim();
+                if (!s) {
+                    return;
+                }
+                this.query = s;
+                this.closeCatUi();
+            },
+        };
+    });
+
     Alpine.data('stockInventoryDoc', (config) => ({
         searchUrl: typeof config.searchUrl === 'string' ? config.searchUrl : '',
         warehouseId: Number(config.warehouseId) || 0,
@@ -4177,8 +5979,34 @@ document.addEventListener('alpine:init', () => {
         rows: [],
         extraUnitCost: Boolean(config.extraUnitCost),
         allowManualNewGood: Boolean(config.allowManualNewGood),
+        enableHeaderSearch: Boolean(config.enableHeaderSearch),
+        goodsQuickStoreUrl: typeof config.goodsQuickStoreUrl === 'string' ? config.goodsQuickStoreUrl : '',
+        enableQuickNewGood: Boolean(config.enableQuickNewGood),
+        newGoodIdPrefix: typeof config.newGoodIdPrefix === 'string' ? config.newGoodIdPrefix : 'gqm',
+        stockQuickNewTarget: null,
+        newGoodModalOpen: false,
+        newGoodSaving: false,
+        newGoodError: '',
+        newGoodForm: {
+            name: '',
+            barcode: '',
+            category: '',
+            unit: 'шт.',
+            quantity: '1',
+            unit_price: '',
+            wholesale_price: '',
+            sale_price: '',
+            oem: '',
+            factory_number: '',
+            min_stock: '',
+        },
         selectedRow: null,
         moreOpen: false,
+        headerGoodQuery: '',
+        headerGoodOpen: false,
+        headerGoodLoading: false,
+        headerGoodItems: [],
+        headerGoodBlurTimer: null,
         init() {
             const initial = Array.isArray(config.initialRows) ? config.initialRows : null;
             if (initial && initial.length > 0) {
@@ -4320,7 +6148,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 const data = await res.json();
                 row.results = Array.isArray(data) ? data : [];
-                row.open = row.results.length > 0;
+                row.open = q.length >= 2;
             } catch (e) {
                 row.results = [];
                 row.open = false;
@@ -4356,6 +6184,334 @@ document.addEventListener('alpine:init', () => {
             row.unitManual = 'шт.';
             row.results = [];
             row.open = false;
+        },
+        onHeaderGoodFocus() {
+            if (!this.enableHeaderSearch) {
+                return;
+            }
+            this.headerGoodOpen = true;
+            if ((this.headerGoodQuery || '').trim().length >= 2) {
+                this.fetchHeaderGoods();
+            }
+        },
+        onHeaderGoodInput() {
+            if (!this.enableHeaderSearch) {
+                return;
+            }
+            this.fetchHeaderGoods();
+        },
+        onHeaderGoodBlur() {
+            if (!this.enableHeaderSearch) {
+                return;
+            }
+            clearTimeout(this.headerGoodBlurTimer);
+            this.headerGoodBlurTimer = setTimeout(() => {
+                this.headerGoodOpen = false;
+            }, 200);
+        },
+        onHeaderGoodEnter(ev) {
+            if (!this.enableHeaderSearch) {
+                return;
+            }
+            if (ev.key !== 'Enter') {
+                return;
+            }
+            ev.preventDefault();
+            if (this.headerGoodItems.length === 1) {
+                this.appendLineFromCatalogItem(this.headerGoodItems[0]);
+            }
+        },
+        async fetchHeaderGoods() {
+            if (!this.enableHeaderSearch) {
+                return;
+            }
+            const q = (this.headerGoodQuery || '').trim();
+            if (q.length < 2) {
+                this.headerGoodItems = [];
+                return;
+            }
+            const w = this.effectiveWarehouseId();
+            this.headerGoodLoading = true;
+            try {
+                const url =
+                    this.searchUrl +
+                    '?q=' +
+                    encodeURIComponent(q) +
+                    '&warehouse_id=' +
+                    encodeURIComponent(String(w > 0 ? w : 0)) +
+                    '&exclude_services=1';
+                const res = await fetch(url, {
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                const data = await res.json();
+                this.headerGoodItems = Array.isArray(data) ? data : [];
+                this.headerGoodOpen = true;
+            } catch (e) {
+                this.headerGoodItems = [];
+            } finally {
+                this.headerGoodLoading = false;
+            }
+        },
+        headerStockSoldOut(stockQty) {
+            if (stockQty == null || stockQty === '') {
+                return false;
+            }
+            const n = parseFloat(String(stockQty).replace(/\s/g, '').replace(',', '.'));
+            return Number.isFinite(n) && n <= 0;
+        },
+        formatHeaderStockQty(v) {
+            if (v == null || v === '') {
+                return '';
+            }
+            const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+            if (!Number.isFinite(n)) {
+                return String(v);
+            }
+            return n.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+        },
+        formatHeaderUnitCost(v) {
+            if (v == null || v === '') {
+                return '';
+            }
+            const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.'));
+            if (!Number.isFinite(n)) {
+                return String(v);
+            }
+            return n.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' сом';
+        },
+        headerSuggestHasStockHint(item) {
+            if (!item) {
+                return false;
+            }
+            return (
+                (item.stock_quantity != null && item.stock_quantity !== '') ||
+                (item.opening_unit_cost != null && item.opening_unit_cost !== '')
+            );
+        },
+        appendLineFromCatalogItem(item) {
+            if (!this.enableHeaderSearch || !item) {
+                return;
+            }
+            clearTimeout(this.headerGoodBlurTimer);
+
+            const gid = item.id != null && item.id !== '' ? String(item.id) : '';
+            const existingIdx =
+                gid !== '' ? this.rows.findIndex((r) => String(r.goodId || '') === gid) : -1;
+
+            if (existingIdx >= 0) {
+                const row = this.rows[existingIdx];
+                let cur = parseFloat(String(row.qty ?? '').replace(/\s/g, '').replace(',', '.'));
+                if (!Number.isFinite(cur) || cur < 0) {
+                    cur = 0;
+                }
+                row.qty = String(cur + 1);
+                this.selectedRow = existingIdx;
+            } else {
+                let i = this.rows.findIndex((r) => !r.goodId);
+                if (i < 0) {
+                    if (this.rows.length >= 32) {
+                        return;
+                    }
+                    this.addLine();
+                    i = this.rows.length - 1;
+                }
+                this.pickGood(i, item);
+                this.rows[i].qty = '1';
+                this.selectedRow = i;
+            }
+
+            /* Поиск и список остаются: не очищаем headerGoodQuery / headerGoodItems */
+            this.headerGoodOpen = true;
+            this.$nextTick(() => {
+                clearTimeout(this.headerGoodBlurTimer);
+                document.getElementById('stock_header_good_q')?.focus?.();
+                clearTimeout(this.headerGoodBlurTimer);
+            });
+        },
+        resetNewGoodForm() {
+            this.newGoodForm = {
+                name: '',
+                barcode: '',
+                category: '',
+                unit: 'шт.',
+                quantity: '1',
+                unit_price: '',
+                wholesale_price: '',
+                sale_price: '',
+                oem: '',
+                factory_number: '',
+                min_stock: '',
+            };
+        },
+        closeNewGoodModal() {
+            this.newGoodModalOpen = false;
+            this.newGoodError = '';
+            this.newGoodSaving = false;
+            this.stockQuickNewTarget = null;
+        },
+        openStockQuickNewGoodModal(presetQuery, target) {
+            if (!this.enableQuickNewGood) {
+                return;
+            }
+            this.resetNewGoodForm();
+            const q = presetQuery != null ? String(presetQuery).trim() : '';
+            if (q !== '') {
+                this.newGoodForm.name = q;
+            }
+            this.newGoodError = '';
+            if (target === 'header') {
+                this.stockQuickNewTarget = { mode: 'header' };
+            } else {
+                const idx = Number(target);
+                if (Number.isFinite(idx) && idx >= 0) {
+                    this.stockQuickNewTarget = { mode: 'row', index: idx };
+                } else {
+                    this.stockQuickNewTarget = { mode: 'header' };
+                }
+            }
+            this.newGoodModalOpen = true;
+            this.headerGoodOpen = false;
+            clearTimeout(this.headerGoodBlurTimer);
+            const p = this.newGoodIdPrefix || 'gqm';
+            this.$nextTick(() => {
+                document.getElementById(`${p}_new_good_name`)?.focus();
+            });
+        },
+        normalizeQuickStoreGoodItem(item) {
+            if (!item || typeof item !== 'object') {
+                return item;
+            }
+            const o = { ...item };
+            if (o.stock_quantity == null || o.stock_quantity === '') {
+                o.stock_quantity = '0';
+            }
+            return o;
+        },
+        async submitNewGoodQuickStore() {
+            if (!this.enableQuickNewGood) {
+                return;
+            }
+            const name = String(this.newGoodForm.name ?? '').trim();
+            if (name === '') {
+                this.newGoodError = 'Укажите наименование.';
+                return;
+            }
+            const qtyRaw = String(this.newGoodForm.quantity ?? '').trim();
+            if (qtyRaw === '') {
+                this.newGoodError = 'Укажите количество.';
+                return;
+            }
+            const qNum = parseFloat(qtyRaw.replace(/\s/g, '').replace(',', '.'));
+            if (!Number.isFinite(qNum) || qNum <= 0) {
+                this.newGoodError = 'Количество должно быть числом больше нуля.';
+                return;
+            }
+            if (!this.goodsQuickStoreUrl) {
+                this.newGoodError = 'Создание товара недоступно.';
+                return;
+            }
+            const token =
+                document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+            this.newGoodSaving = true;
+            this.newGoodError = '';
+            /** @type {Record<string, string>} */
+            const body = { name };
+            const addStr = (k, v) => {
+                const t = String(v ?? '').trim();
+                if (t !== '') {
+                    body[k] = t;
+                }
+            };
+            addStr('barcode', this.newGoodForm.barcode);
+            addStr('category', this.newGoodForm.category);
+            addStr('unit', this.newGoodForm.unit);
+            addStr('sale_price', this.newGoodForm.sale_price);
+            addStr('wholesale_price', this.newGoodForm.wholesale_price);
+            addStr('oem', this.newGoodForm.oem);
+            addStr('factory_number', this.newGoodForm.factory_number);
+            addStr('min_stock', this.newGoodForm.min_stock);
+            if (!body.unit) {
+                body.unit = 'шт.';
+            }
+            let url = this.goodsQuickStoreUrl;
+            const w = this.effectiveWarehouseId();
+            if (w > 0) {
+                url += (url.includes('?') ? '&' : '?') + 'warehouse_id=' + encodeURIComponent(String(w));
+            }
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        Accept: 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': token,
+                    },
+                    body: JSON.stringify(body),
+                });
+                /** @type {Record<string, unknown>} */
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch (_) {
+                    data = {};
+                }
+                if (!res.ok) {
+                    let msg =
+                        typeof data.message === 'string'
+                            ? data.message
+                            : 'Не удалось сохранить товар.';
+                    if (data.errors && typeof data.errors === 'object') {
+                        const flat = Object.values(data.errors).flat();
+                        const first = flat[0];
+                        if (typeof first === 'string' && first.trim() !== '') {
+                            msg = first;
+                        }
+                    }
+                    this.newGoodError = msg;
+                    return;
+                }
+                const item = this.normalizeQuickStoreGoodItem(data);
+                let i = -1;
+                const t = this.stockQuickNewTarget;
+                if (t && t.mode === 'row' && typeof t.index === 'number') {
+                    i = t.index;
+                } else {
+                    i = this.rows.findIndex((r) => !r.goodId);
+                    if (i < 0) {
+                        if (this.rows.length >= 32) {
+                            this.newGoodError = 'Достигнут лимит строк (32).';
+                            return;
+                        }
+                        this.addLine();
+                        i = this.rows.length - 1;
+                    }
+                }
+                if (i < 0 || i >= this.rows.length) {
+                    this.newGoodError = 'Не удалось выбрать строку.';
+                    return;
+                }
+                this.pickGood(i, item);
+                this.rows[i].qty = qtyRaw.replace(/\s/g, '').replace(',', '.');
+                const up = String(this.newGoodForm.unit_price ?? '').trim();
+                if (up !== '') {
+                    this.rows[i].unitCost = up.replace(/\s/g, '').replace(',', '.');
+                }
+                const sp = String(this.newGoodForm.sale_price ?? '').trim();
+                if (sp !== '') {
+                    this.rows[i].sale_price = sp.replace(/\s/g, '').replace(',', '.');
+                }
+                this.rows[i].open = false;
+                this.selectedRow = i;
+                this.closeNewGoodModal();
+                this.headerGoodQuery = '';
+                this.headerGoodItems = [];
+                clearTimeout(this.headerGoodBlurTimer);
+            } catch (_) {
+                this.newGoodError = 'Ошибка сети. Повторите попытку.';
+            } finally {
+                this.newGoodSaving = false;
+            }
         },
         clearRow(i) {
             const row = this.rows[i];
@@ -5191,6 +7347,140 @@ document.addEventListener('alpine:init', () => {
                 } finally {
                     this.returnSubmitting = false;
                 }
+            },
+        };
+    });
+
+    /** Модальное окно детализации строки отчёта «Движение товаров» (readonly). */
+    Alpine.data('goodsMovementPeriodModal', (initialMeta) => {
+        const metaDefaults = { from: '', to: '', warehouse: '', warehouseId: 0, ledgerUrl: '' };
+        const merged =
+            initialMeta != null && typeof initialMeta === 'object'
+                ? { ...metaDefaults, ...initialMeta }
+                : metaDefaults;
+
+        function fmtQtyVal(v) {
+            const n = Number(v);
+            if (!Number.isFinite(n)) {
+                return '—';
+            }
+
+            return new Intl.NumberFormat('ru-RU', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+                useGrouping: true,
+            })
+                .format(n)
+                .replace(/\u00a0/g, ' ')
+                .replace(/\u202f/g, ' ');
+        }
+
+        return {
+            meta: merged,
+            modalOpen: false,
+            row: null,
+            ledgerRows: [],
+            ledgerLoading: false,
+            ledgerError: '',
+            _ledgerAbort: null,
+            fmtQty(val) {
+                return fmtQtyVal(val);
+            },
+            fmtLedgerQty(n, dir) {
+                const x = Number(n);
+                if (!Number.isFinite(x)) {
+                    return '—';
+                }
+                const s = x.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+                if (dir === 'in') {
+                    return '+' + s;
+                }
+                if (dir === 'out') {
+                    return '−' + s;
+                }
+                return s;
+            },
+            async openRow(r) {
+                if (!r || typeof r !== 'object') {
+                    return;
+                }
+                this.row = r;
+                this.modalOpen = true;
+                this.ledgerRows = [];
+                this.ledgerError = '';
+                try {
+                    document.body.style.overflow = 'hidden';
+                } catch (e) {}
+
+                const gid = Number(r.good_id);
+                const baseUrl = typeof merged.ledgerUrl === 'string' ? merged.ledgerUrl.trim() : '';
+                if (!Number.isFinite(gid) || gid <= 0 || baseUrl === '') {
+                    return;
+                }
+
+                if (this._ledgerAbort) {
+                    try {
+                        this._ledgerAbort.abort();
+                    } catch (e) {}
+                }
+                const ac = new AbortController();
+                this._ledgerAbort = ac;
+                this.ledgerLoading = true;
+
+                try {
+                    const u = new URL(baseUrl, window.location.origin);
+                    u.searchParams.set('good_id', String(Math.trunc(gid)));
+                    if (merged.from) {
+                        u.searchParams.set('from', String(merged.from));
+                    }
+                    if (merged.to) {
+                        u.searchParams.set('to', String(merged.to));
+                    }
+                    const whId =
+                        merged.warehouseId != null && Number.isFinite(Number(merged.warehouseId))
+                            ? Math.max(0, Math.trunc(Number(merged.warehouseId)))
+                            : 0;
+                    u.searchParams.set('warehouse_id', String(whId));
+
+                    const res = await fetch(u.toString(), {
+                        signal: ac.signal,
+                        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    });
+                    const data = res.ok ? await res.json().catch(() => ({})) : {};
+                    const list = Array.isArray(data.rows) ? data.rows : [];
+                    if (!res.ok) {
+                        this.ledgerError =
+                            typeof data.message === 'string' ? data.message : 'Не удалось загрузить журнал движений.';
+                        return;
+                    }
+                    this.ledgerRows = list;
+                } catch (e) {
+                    if (e != null && e.name === 'AbortError') {
+                        return;
+                    }
+                    this.ledgerError = 'Ошибка сети при загрузке журнала.';
+                } finally {
+                    if (this._ledgerAbort === ac) {
+                        this._ledgerAbort = null;
+                        this.ledgerLoading = false;
+                    }
+                }
+            },
+            closeModal() {
+                this.modalOpen = false;
+                this.row = null;
+                this.ledgerRows = [];
+                this.ledgerError = '';
+                this.ledgerLoading = false;
+                if (this._ledgerAbort) {
+                    try {
+                        this._ledgerAbort.abort();
+                    } catch (e) {}
+                    this._ledgerAbort = null;
+                }
+                try {
+                    document.body.style.overflow = '';
+                } catch (e) {}
             },
         };
     });

@@ -19,12 +19,11 @@ return [
         'children' => [
             ['label' => 'Остатки задним числом', 'route' => 'admin.reports.goods-stock-historical', 'route_is' => 'admin.reports.goods-stock-historical'],
             ['label' => 'Движение товаров', 'route' => 'admin.reports.goods-movement', 'route_is' => 'admin.reports.goods-movement'],
-            ['label' => 'Движение денег', 'route' => 'admin.reports.cash-movement', 'route_is' => 'admin.reports.cash-movement'],
             ['label' => 'Остатки по кассе и счетам', 'route' => 'admin.reports.cash-balances', 'route_is' => 'admin.reports.cash-balances'],
             ['label' => 'Продажи по товарам и услугам', 'route' => 'admin.reports.sales-by-goods', 'route_is' => 'admin.reports.sales-by-goods'],
-            ['label' => 'Расходы по категориям', 'route' => 'admin.reports.expenses-by-category', 'route_is' => 'admin.reports.expenses-by-category'],
             ['label' => 'Продажи по клиентам', 'route' => 'admin.reports.sales-by-clients', 'route_is' => 'admin.reports.sales-by-clients'],
             ['label' => 'Валовая прибыль', 'route' => 'admin.reports.gross-profit', 'route_is' => 'admin.reports.gross-profit'],
+            ['label' => 'Чистая прибыль', 'route' => 'admin.reports.net-profit', 'route_is' => 'admin.reports.net-profit'],
             ['label' => 'Оборотно-сальдовая ведомость', 'route' => 'admin.reports.turnover', 'route_is' => 'admin.reports.turnover'],
             ['label' => 'Сменный отчёт', 'route' => 'admin.reports.shift-report', 'route_is' => 'admin.reports.shift-report*'],
         ],
@@ -57,6 +56,7 @@ return [
             // sell* — шапка, позиции, сохранение; requests* — список, правка, проведение (отдельное право в роли)
             ['label' => 'Мастер: Отправка заявки', 'route' => 'admin.service-sales.sell', 'route_is' => 'admin.service-sales.sell*'],
             ['label' => 'Мастер: Оформление заявок', 'route' => 'admin.service-sales.requests', 'route_is' => 'admin.service-sales.requests*'],
+            ['label' => 'История машин', 'route' => 'admin.vehicle-history.index', 'route_is' => 'admin.vehicle-history.*'],
             ['label' => 'Возврат от покупателя', 'route' => 'admin.customer-returns.index', 'route_is' => 'admin.customer-returns.*'],
         ],
     ],
@@ -77,7 +77,7 @@ return [
         'label' => 'Товары и услуги',
         'icon' => 'box',
         'children' => [
-            ['label' => 'Наименование товаров', 'route' => 'admin.sale-goods.index', 'route_is' => 'admin.sale-goods.*'],
+            ['label' => 'Наименование Товаров', 'route' => 'admin.sale-goods.index', 'route_is' => 'admin.sale-goods.*'],
             ['label' => 'Наименование услуг', 'route' => 'admin.sale-services.index', 'route_is' => 'admin.sale-services.*'],
             ['label' => 'Характеристики товаров', 'route' => 'admin.reports.goods-characteristics', 'route_is' => 'admin.reports.goods-characteristics*'],
             ['label' => 'Остатки товаров', 'route' => 'admin.reports.goods-stock', 'route_is' => 'admin.reports.goods-stock'],

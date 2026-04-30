@@ -14,6 +14,7 @@ use App\Http\Controllers\Admin\EmployeeAdvanceController;
 use App\Http\Controllers\Admin\EmployeeController;
 use App\Http\Controllers\Admin\EmployeePenaltyController;
 use App\Http\Controllers\Admin\EsfController;
+use App\Http\Controllers\Admin\GoodQuickStoreController;
 use App\Http\Controllers\Admin\GoodSearchController;
 use App\Http\Controllers\Admin\LegalEntitySaleController;
 use App\Http\Controllers\Admin\OpeningBalanceController;
@@ -155,10 +156,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::delete('p/trade.return-client/{customerReturn}', [CustomerReturnController::class, 'destroy'])->name('customer-returns.destroy');
         Route::get('p/trade.return-client', [CustomerReturnController::class, 'index'])->name('customer-returns.index');
         Route::post('p/trade.return-client', [CustomerReturnController::class, 'store'])->name('customer-returns.store');
+        Route::get('p/trade.vehicle-history', [ServiceOrderController::class, 'vehicleHistoryIndex'])->name('vehicle-history.index');
+        Route::get('p/trade.vehicle-history/search', [ServiceOrderController::class, 'vehicleHistorySearchJson'])->name('vehicle-history.search');
+        Route::get('p/trade.vehicle-history/{customerVehicle}/json', [ServiceOrderController::class, 'sellVehicleHistoryJson'])->name('vehicle-history.json');
         Route::get('p/trade.sale-services/create', [SaleServiceController::class, 'create'])->name('sale-services.create');
         Route::prefix('p/trade.sale-services/sell')->name('service-sales.')->group(function () {
             Route::get('/', [ServiceOrderController::class, 'sell'])->name('sell');
             Route::post('/', [ServiceOrderController::class, 'storeHeader'])->name('sell.store');
+            Route::get('vehicle-history/{customerVehicle}', [ServiceOrderController::class, 'sellVehicleHistoryJson'])
+                ->name('sell.vehicle-history');
             Route::get('{serviceOrder}/lines', [ServiceOrderController::class, 'sellLines'])->name('sell.lines');
             Route::post('{serviceOrder}/lines', [ServiceOrderController::class, 'storeLines'])->name('sell.lines.store');
         });
@@ -177,6 +183,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('p/trade.sale-services', [SaleServiceController::class, 'store'])->name('sale-services.store');
         Route::post('p/trade.sale-services/import', [SaleServiceController::class, 'import'])->name('sale-services.import');
         Route::get('p/trade.sale-services/sample-import.xlsx', [SaleServiceController::class, 'sampleImport'])->name('sale-services.sample-import');
+        Route::get('p/trade.sale-services/{service}/modal-data', [SaleServiceController::class, 'modalData'])->whereNumber('service')->name('sale-services.modal-data');
         Route::get('p/trade.sale-services/{service}/edit', [SaleServiceController::class, 'edit'])->whereNumber('service')->name('sale-services.edit');
         Route::put('p/trade.sale-services/{service}', [SaleServiceController::class, 'update'])->whereNumber('service')->name('sale-services.update');
         Route::delete('p/trade.sale-services/{service}', [SaleServiceController::class, 'destroy'])->whereNumber('service')->name('sale-services.destroy');
@@ -185,6 +192,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('p/trade.sale-goods', [SaleGoodsController::class, 'store'])->name('sale-goods.store');
         Route::post('p/trade.sale-goods/import', [SaleGoodsController::class, 'import'])->name('sale-goods.import');
         Route::get('p/trade.sale-goods/sample-import.xlsx', [SaleGoodsController::class, 'sampleImport'])->name('sale-goods.sample-import');
+        Route::get('p/trade.sale-goods/{good}/modal-data', [SaleGoodsController::class, 'modalData'])->whereNumber('good')->name('sale-goods.modal-data');
         Route::get('p/trade.sale-goods/{good}/edit', [SaleGoodsController::class, 'edit'])->whereNumber('good')->name('sale-goods.edit');
         Route::put('p/trade.sale-goods/{good}', [SaleGoodsController::class, 'update'])->whereNumber('good')->name('sale-goods.update');
         Route::delete('p/trade.sale-goods/{good}', [SaleGoodsController::class, 'destroy'])->whereNumber('good')->name('sale-goods.destroy');
@@ -205,6 +213,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('p/trade.sale-physical', [RetailSaleController::class, 'index'])->name('retail-sales.index');
         Route::post('p/trade.sale-physical', [RetailSaleController::class, 'store'])->name('retail-sales.store');
         Route::get('api/goods/search', GoodSearchController::class)->name('goods.search');
+        Route::post('api/goods/quick-store', GoodQuickStoreController::class)->name('goods.quick-store');
         Route::post('api/goods/article-code-reserve', [ArticleSequenceController::class, 'reserve'])->name('goods.article-code-reserve');
         Route::get('api/goods/categories', CategorySuggestController::class)->name('goods.categories');
         Route::get('api/counterparties/search', CounterpartySearchController::class)->name('counterparties.search');
@@ -234,6 +243,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('income-client', [BankCashController::class, 'incomeClientIndex'])->name('income-client');
             Route::post('income-client', [BankCashController::class, 'storeIncomeClient'])->name('income-client.store');
             Route::get('income-other/create', [BankCashController::class, 'incomeOtherForm'])->name('income-other.create');
+            Route::get('income-other/categories/search', [BankCashController::class, 'incomeOtherCategorySearch'])->name('income-other.categories-search');
             Route::get('income-other/{cashMovement}/edit', [BankCashController::class, 'editIncomeOther'])->name('income-other.edit')->whereNumber('cashMovement');
             Route::put('income-other/{cashMovement}', [BankCashController::class, 'updateIncomeOther'])->name('income-other.update')->whereNumber('cashMovement');
             Route::get('income-other', [BankCashController::class, 'incomeOtherIndex'])->name('income-other');
@@ -244,6 +254,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('expense-supplier', [BankCashController::class, 'expenseSupplierIndex'])->name('expense-supplier');
             Route::post('expense-supplier', [BankCashController::class, 'storeExpenseSupplier'])->name('expense-supplier.store');
             Route::get('expense-other/create', [BankCashController::class, 'expenseOtherForm'])->name('expense-other.create');
+            Route::get('expense-other/categories/search', [BankCashController::class, 'expenseOtherCategorySearch'])->name('expense-other.categories-search');
             Route::get('expense-other/{cashMovement}/edit', [BankCashController::class, 'editExpenseOther'])->name('expense-other.edit')->whereNumber('cashMovement');
             Route::put('expense-other/{cashMovement}', [BankCashController::class, 'updateExpenseOther'])->name('expense-other.update')->whereNumber('cashMovement');
             Route::get('expense-other', [BankCashController::class, 'expenseOtherIndex'])->name('expense-other');
@@ -268,14 +279,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
             Route::get('goods-stock', [ReportController::class, 'goodsStock'])->name('goods-stock');
             Route::get('goods-stock-historical', [ReportController::class, 'goodsStockHistorical'])->name('goods-stock-historical');
             Route::get('goods-movement', [ReportController::class, 'goodsMovement'])->name('goods-movement');
-            Route::get('cash-movement', [ReportController::class, 'cashMovement'])->name('cash-movement');
+            Route::get('goods-movement/ledger-data', [ReportController::class, 'goodsMovementLedgerData'])->name('goods-movement.ledger-data');
             Route::get('cash-balances', [ReportController::class, 'cashBalances'])->name('cash-balances');
             Route::get('sales-by-goods', [ReportController::class, 'salesByGoods'])->name('sales-by-goods');
             Route::get('sales-by-clients', [ReportController::class, 'salesByClients'])->name('sales-by-clients');
+            Route::get('sales-by-clients/pdf', [ReportController::class, 'salesByClientsPdf'])->name('sales-by-clients.pdf');
             Route::get('gross-profit', [ReportController::class, 'grossProfit'])->name('gross-profit');
-            Route::get('expenses-by-category', [ReportController::class, 'expensesByCategory'])->name('expenses-by-category');
+            Route::get('gross-profit/pdf', [ReportController::class, 'grossProfitPdf'])->name('gross-profit.pdf');
+            Route::get('net-profit', [ReportController::class, 'netProfit'])->name('net-profit');
+            Route::get('net-profit/pdf', [ReportController::class, 'netProfitPdf'])->name('net-profit.pdf');
+            Route::get('net-profit/detail', [ReportController::class, 'netProfitDetail'])->name('net-profit.detail');
             Route::get('turnover', [ReportController::class, 'turnover'])->name('turnover');
+            Route::get('turnover/pdf', [ReportController::class, 'turnoverPdf'])->name('turnover.pdf');
+            Route::get('turnover/detail', [ReportController::class, 'turnoverDetail'])->name('turnover.detail');
             Route::get('shift', [ReportController::class, 'shiftReport'])->name('shift-report');
+            Route::get('shift/pdf', [ReportController::class, 'shiftReportPdf'])->name('shift-report.pdf');
             Route::get('shift/{cashShift}', [ReportController::class, 'shiftReportShow'])->name('shift-report.show');
             Route::get('goods-characteristics', [ReportController::class, 'goodsCharacteristics'])->name('goods-characteristics');
             Route::post('goods-characteristics', [ReportController::class, 'goodsCharacteristicsStore'])->name('goods-characteristics.store');

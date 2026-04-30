@@ -1,10 +1,17 @@
+@php
+    $lesHeaderInputClass = $lesHeaderSearchInputClass
+        ?? 'block w-full rounded-xl border border-slate-200/90 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25';
+    $lesHeaderHideOuterLabel = ! empty($hideOuterLabel);
+@endphp
 {{-- Колонка поиска товара для строки со складом (без обёртки-карточки). --}}
-<div class="relative min-w-[min(100%,14rem)] max-w-6xl flex-1" x-ref="lesHeaderGoodColumn">
-    <label
-        for="les_header_good_q"
-        class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600"
-    >Наименование товара</label>
-    <div class="relative z-[10040]">
+<div class="{{ $lesHeaderOuterClass ?? 'relative min-w-[min(100%,14rem)] max-w-6xl flex-1' }}" x-ref="lesHeaderGoodColumn">
+    @unless ($lesHeaderHideOuterLabel)
+        <label
+            for="les_header_good_q"
+            class="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+        >Наименование товара</label>
+    @endunless
+    <div class="relative {{ trim($lesHeaderZClass ?? 'z-[59990]') }}">
         <input
             id="les_header_good_q"
             type="search"
@@ -15,14 +22,22 @@
             @keydown.enter="onLesHeaderGoodsEnter($event)"
             @blur="onLesHeaderGoodsBlur()"
             autocomplete="off"
-            placeholder="от 2 символов, Enter — в список"
-            class="block w-full rounded-xl border border-slate-200/90 bg-white py-2 pl-3 pr-9 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/5 placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/25"
+            placeholder="{{ $lesHeaderPlaceholder ?? 'от 2 символов, Enter — в список' }}"
+            class="{{ $lesHeaderInputClass }}"
         />
-        <span class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
+        @if (! empty($useHeaderSearchSvgIcon))
+            <span class="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
+            </span>
+        @else
+            <span class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">⌕</span>
+        @endif
         <template x-if="lesHeaderOpen && (lesHeaderLoading || lesHeaderQuery.trim() !== '')">
             <div
                 x-cloak
-                class="absolute left-0 right-0 top-full z-[10050] mt-1 max-h-[min(24rem,70vh)] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl ring-1 ring-slate-300/90"
+                class="absolute left-0 right-0 top-full z-[60000] mt-1 max-h-[min(24rem,70vh)] w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 text-left shadow-xl ring-1 ring-slate-400/40"
                 role="listbox"
                 @mousedown.prevent
             >
@@ -39,7 +54,7 @@
                         type="button"
                         class="w-full rounded-lg border border-emerald-300/90 bg-emerald-50 px-3 py-2 text-center text-[12px] font-semibold leading-snug text-emerald-950 shadow-sm hover:bg-emerald-100/95"
                         @mousedown.prevent.stop
-                        @click.prevent.stop="appendLesLineFromHeaderFreeText()"
+                        @click.prevent.stop="openNewGoodModal(lesHeaderQuery)"
                     >
                         Добавить новый товар
                     </button>

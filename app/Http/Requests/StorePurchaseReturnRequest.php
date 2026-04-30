@@ -10,6 +10,34 @@ use Illuminate\Validation\Validator;
 
 class StorePurchaseReturnRequest extends FormRequest
 {
+    /**
+     * Для текста ошибок: наименование из строки документа, иначе из карточки товара, иначе артикул.
+     */
+    private static function lineLabel(array $line, string $articleCode, ?Good $good = null): string
+    {
+        $fromLine = trim((string) ($line['name'] ?? ''));
+        if ($fromLine !== '') {
+            return $fromLine;
+        }
+        if ($good !== null) {
+            $fromGood = trim((string) ($good->name ?? ''));
+            if ($fromGood !== '') {
+                return $fromGood;
+            }
+        }
+
+        return $articleCode;
+    }
+
+    private static function formatStockQty(float $quantity): string
+    {
+        if (abs($quantity - round($quantity)) < 1e-9) {
+            return (string) (int) round($quantity);
+        }
+
+        return rtrim(rtrim(sprintf('%.10f', $quantity), '0'), '.');
+    }
+
     public function authorize(): bool
     {
         return $this->user()?->branch_id !== null;
@@ -63,31 +91,33 @@ class StorePurchaseReturnRequest extends FormRequest
                 $hasAny = true;
                 $articleCounts[$code] = ($articleCounts[$code] ?? 0) + 1;
 
+                $good = Good::query()
+                    ->where('branch_id', $branchId)
+                    ->where('article_code', $code)
+                    ->first();
+
+                $label = self::lineLabel($line, $code, $good);
+
                 if (trim((string) ($line['name'] ?? '')) === '') {
                     $v->errors()->add("lines.{$i}.name", 'Укажите наименование для артикула «'.$code.'».');
                 }
 
                 $qty = $line['quantity'] ?? null;
                 if ($qty === null || $qty === '') {
-                    $v->errors()->add("lines.{$i}.quantity", 'Укажите количество для «'.$code.'».');
+                    $v->errors()->add("lines.{$i}.quantity", 'Укажите количество для «'.$label.'».');
                 } elseif (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $qty)) || (float) str_replace([' ', ','], ['', '.'], (string) $qty) <= 0) {
                     $v->errors()->add("lines.{$i}.quantity", 'Количество должно быть числом больше 0.');
                 }
 
                 $price = $line['unit_price'] ?? null;
                 if ($price === null || $price === '') {
-                    $v->errors()->add("lines.{$i}.unit_price", 'Укажите цену возврата для «'.$code.'».');
+                    $v->errors()->add("lines.{$i}.unit_price", 'Укажите цену возврата для «'.$label.'».');
                 } elseif (! is_numeric(str_replace([' ', ','], ['', '.'], (string) $price)) || (float) str_replace([' ', ','], ['', '.'], (string) $price) < 0) {
                     $v->errors()->add("lines.{$i}.unit_price", 'Цена возврата не может быть отрицательной.');
                 }
 
-                $good = Good::query()
-                    ->where('branch_id', $branchId)
-                    ->where('article_code', $code)
-                    ->first();
-
                 if ($good === null) {
-                    $v->errors()->add("lines.{$i}.article_code", 'Товар «'.$code.'» не найден — заведите карточку через поступление или начальные остатки.');
+                    $v->errors()->add("lines.{$i}.article_code", 'Товар «'.$label.'» не найден — заведите карточку через поступление или начальные остатки.');
 
                     continue;
                 }
@@ -102,7 +132,7 @@ class StorePurchaseReturnRequest extends FormRequest
                     if ($avail + 1e-9 < $qNum) {
                         $v->errors()->add(
                             "lines.{$i}.quantity",
-                            'На складе недостаточно «'.$code.'» для возврата (доступно: '.rtrim(rtrim((string) $avail, '0'), '.').').'
+                            'На складе недостаточно «'.$label.'» для возврата (доступно: '.self::formatStockQty($avail).').'
                         );
                     }
                 }

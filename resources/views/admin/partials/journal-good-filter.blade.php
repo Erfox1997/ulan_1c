@@ -6,6 +6,7 @@
     'filterGoodSummary' => '',
     'returnsUrl' => null,
     'boxed' => true,
+    'filterTitle' => null,
 ])
 <div
     @class([
@@ -23,7 +24,7 @@
     <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
         <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <label class="text-xs font-medium text-slate-600">Поиск по товару (для контроля продаж и возврата)</label>
+                <label class="text-xs font-medium text-slate-600">{{ $filterTitle ?? 'Поиск по товару (для контроля продаж и возврата)' }}</label>
                 @if ($returnsUrl)
                     <a href="{{ $returnsUrl }}" class="text-xs font-semibold text-emerald-800 hover:underline">Возвраты от клиентов</a>
                 @endif

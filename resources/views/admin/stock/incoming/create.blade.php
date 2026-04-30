@@ -4,7 +4,7 @@
     $noteValue = old('note', $isEdit ? ($document->note ?? '') : '');
     $whName = $warehouses->firstWhere('id', $selectedWarehouseId)?->name ?? '';
 @endphp
-<x-admin-layout :pageTitle="$pageTitle" main-class="px-3 py-6 sm:px-6 lg:px-8">
+<x-admin-layout :pageTitle="$pageTitle" main-class="px-3 py-5 sm:px-5 lg:px-7 bg-[#f0f4f8]">
     @include('admin.partials.cp-brush')
     <div class="cp-root mx-auto w-full max-w-[min(100%,112rem)] space-y-6">
         @include('admin.partials.status-flash')
@@ -54,6 +54,7 @@
             @endif
 
             @include('admin.purchase-receipts.partials.form-document-styles')
+            @include('admin.stock.partials.doc-create-layout-styles')
 
             @if (! $isEdit && $selectedWarehouseId === 0)
                 <div
@@ -68,29 +69,38 @@
                         mode: 'single',
                         warehouseFromId: 0,
                         warehouseId: {{ (int) $selectedWarehouseId }},
-                        extraUnitCost: true,
+                        extraUnitCost: false,
                         qtyField: 'quantity',
                         rowCount: {{ $isEdit ? 0 : 1 }},
                         initialRows: @js($initialRows ?? []),
                         allowManualNewGood: false,
+                        enableHeaderSearch: true,
+                        goodsQuickStoreUrl: @js(route('admin.goods.quick-store')),
+                        enableQuickNewGood: true,
+                        newGoodIdPrefix: 'stk_inc',
                     })"
-                    class="space-y-6"
+                    @keydown.escape.window="if (newGoodModalOpen) closeNewGoodModal()"
+                    class="stock-doc-create-page grid min-h-0 w-full min-w-0 max-w-full grid-cols-1 items-stretch gap-5"
                 >
-                    <form method="POST" action="{{ $formAction }}" class="space-y-6">
-                        @csrf
-                        @if ($isEdit)
-                            @method('PUT')
-                        @endif
+                    @include('admin.stock.partials.header-good-search-panel')
+                    @include('admin.partials.good-quick-create-modal', ['idPrefix' => 'stk_inc'])
 
-                        @if (! $isEdit)
-                            <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
-                        @endif
+                    <div class="flex h-full min-h-0 min-w-0 w-full max-w-full flex-col">
+                        <form method="POST" action="{{ $formAction }}" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+                            @csrf
+                            @if ($isEdit)
+                                @method('PUT')
+                            @endif
 
-                        <div
-                            class="rounded-[1.75rem] bg-gradient-to-br from-sky-100/60 via-white to-emerald-100/50 p-[3px] shadow-[0_12px_40px_-12px_rgba(14,165,233,0.2)] ring-1 ring-sky-200/50"
-                        >
-                            <div class="overflow-visible rounded-[1.65rem] bg-gradient-to-b from-white/95 to-slate-50/90">
-                                <div class="ob-1c-scope overflow-visible rounded-[1.5rem] bg-white/95">
+                            @if (! $isEdit)
+                                <input type="hidden" name="warehouse_id" value="{{ $selectedWarehouseId }}" />
+                            @endif
+
+                            <div class="stock-doc-lines-card flex min-h-0 flex-1 flex-col overflow-hidden border bg-white ring-1 ring-teal-900/[0.05]">
+                                <div class="pr-panel-header-teal shrink-0">
+                                    Строки документа
+                                </div>
+                                <div class="ob-1c-scope flex min-h-0 flex-1 flex-col overflow-visible bg-white">
                                     <div
                                         class="border-b border-emerald-200/55 bg-gradient-to-r from-emerald-50/95 via-white to-sky-50/50 px-4 py-3 sm:px-5"
                                     >
@@ -177,7 +187,7 @@
                                         </div>
                                     @endif
 
-                                    @include('admin.stock.partials.line-form-1c', ['mode' => 'single', 'extraUnitCost' => true, 'qtyField' => 'quantity', 'allowManualNewGood' => false])
+                                    @include('admin.stock.partials.line-form-1c', ['mode' => 'single', 'extraUnitCost' => false, 'qtyField' => 'quantity', 'allowManualNewGood' => false, 'showSalePrice' => false, 'enableQuickNewGood' => true])
 
                                     <div class="ob-1c-foot">
                                         <a
@@ -190,8 +200,8 @@
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                    </form>
+                        </form>
+                    </div>
                 </div>
             @endif
         @endif

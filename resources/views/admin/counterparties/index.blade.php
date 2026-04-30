@@ -83,6 +83,46 @@
                 </div>
             </div>
             <x-input-error class="px-4 pt-3 sm:px-5" :messages="$errors->get('file')" />
+
+            <form
+                method="GET"
+                action="{{ route('admin.counterparties.index') }}"
+                class="relative z-[1] border-b border-slate-200/80 bg-slate-50/70 px-4 py-3 sm:px-5"
+                role="search"
+            >
+                <label for="cp_index_q" class="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Поиск
+                </label>
+                <div class="flex flex-wrap items-stretch gap-2 sm:items-center">
+                    <div class="relative min-w-[min(100%,28rem)] flex-1">
+                        <input
+                            type="search"
+                            name="q"
+                            id="cp_index_q"
+                            value="{{ $searchQuery ?? '' }}"
+                            autocomplete="off"
+                            placeholder="Наименование, полное наименование, ИНН, телефон, адрес…"
+                            class="w-full rounded-xl border border-slate-200/90 bg-white py-2.5 pl-3 pr-10 text-sm text-slate-900 shadow-sm ring-1 ring-slate-900/[0.04] placeholder:text-slate-400 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                        />
+                        <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 select-none" aria-hidden="true">⌕</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button
+                            type="submit"
+                            class="inline-flex shrink-0 items-center justify-center rounded-xl border border-emerald-300/90 bg-gradient-to-b from-emerald-50 to-white px-4 py-2.5 text-sm font-semibold text-emerald-950 shadow-sm hover:from-emerald-100/90"
+                        >
+                            Найти
+                        </button>
+                        @if (trim($searchQuery ?? '') !== '')
+                            <a
+                                href="{{ route('admin.counterparties.index') }}"
+                                class="shrink-0 text-sm font-semibold text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
+                            >Сбросить</a>
+                        @endif
+                    </div>
+                </div>
+            </form>
+
             <div class="cp-table-wrap bg-gradient-to-b from-slate-50/30 via-white to-emerald-50/20">
                 <table class="cp-table cp-directory-table">
                     <thead>
@@ -129,20 +169,28 @@
                         @empty
                             <tr>
                                 <td colspan="7" class="py-14 text-center text-[13px] text-slate-600">
-                                    Контрагентов нет —
-                                    <a
-                                        href="{{ route('admin.counterparties.create') }}"
-                                        class="cp-link font-semibold text-sky-700 hover:text-sky-900"
-                                    >создать</a>
-                                    или
-                                    <button
-                                        type="button"
-                                        class="cp-link font-semibold text-sky-700 hover:text-sky-900"
-                                        onclick="document.getElementById('counterparty_import_file').click()"
-                                    >
-                                        загрузить Excel
-                                    </button>
-                                    .
+                                    @if (trim($searchQuery ?? '') !== '')
+                                        По запросу ничего не найдено.
+                                        <a
+                                            href="{{ route('admin.counterparties.index') }}"
+                                            class="cp-link font-semibold text-sky-700 hover:text-sky-900"
+                                        >Показать всех</a>
+                                    @else
+                                        Контрагентов нет —
+                                        <a
+                                            href="{{ route('admin.counterparties.create') }}"
+                                            class="cp-link font-semibold text-sky-700 hover:text-sky-900"
+                                        >создать</a>
+                                        или
+                                        <button
+                                            type="button"
+                                            class="cp-link font-semibold text-sky-700 hover:text-sky-900"
+                                            onclick="document.getElementById('counterparty_import_file').click()"
+                                        >
+                                            загрузить Excel
+                                        </button>
+                                        .
+                                    @endif
                                 </td>
                             </tr>
                         @endforelse

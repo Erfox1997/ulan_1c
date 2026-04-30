@@ -151,7 +151,7 @@
                                             <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-slate-900">{{ $r->document_date->format('d.m.Y') }}</td>
                                             <td class="border border-slate-300 px-3 py-2.5 text-slate-900">{{ $r->warehouse->name }}</td>
                                             <td class="border border-slate-300 px-3 py-2.5 text-slate-800">{{ $r->buyer_name !== '' ? $r->buyer_name : '—' }}</td>
-                                            <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-900">{{ $r->lines->count() }}</td>
+                                            <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-900">{{ $r->lines_count }}</td>
                                             <td data-doc-action class="border border-slate-300 px-2 py-2 text-center" @click.stop>
                                                 <form
                                                     method="POST"

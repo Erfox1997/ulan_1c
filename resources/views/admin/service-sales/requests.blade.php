@@ -27,11 +27,41 @@
             </div>
         @endif
 
-        <div class="flex flex-wrap items-center justify-end">
-            <div class="inline-flex rounded-xl border border-slate-200/90 bg-white p-1 shadow-sm ring-1 ring-slate-900/[0.04]">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <form
+                method="GET"
+                action="{{ route('admin.service-sales.requests') }}"
+                class="flex min-w-0 max-w-xl flex-1 flex-wrap items-center gap-2"
+                role="search"
+            >
+                <input type="hidden" name="status" value="{{ $statusFilter }}" />
+                <label for="service-requests-q" class="sr-only">Поиск заявок</label>
+                <input
+                    id="service-requests-q"
+                    type="search"
+                    name="q"
+                    value="{{ $searchQuery ?? '' }}"
+                    placeholder="№ заявки, клиент, марка, гос№, VIN…"
+                    autocomplete="off"
+                    class="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                />
+                <button
+                    type="submit"
+                    class="inline-flex shrink-0 items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                >
+                    Найти
+                </button>
+                @if (($searchQuery ?? '') !== '')
+                    <a
+                        href="{{ route('admin.service-sales.requests', ['status' => $statusFilter]) }}"
+                        class="shrink-0 text-sm font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
+                    >Сбросить</a>
+                @endif
+            </form>
+            <div class="inline-flex shrink-0 rounded-xl border border-slate-200/90 bg-white p-1 shadow-sm ring-1 ring-slate-900/[0.04]">
                 @foreach (['awaiting', 'fulfilled', 'all'] as $key)
                     <a
-                        href="{{ route('admin.service-sales.requests', ['status' => $key]) }}"
+                        href="{{ route('admin.service-sales.requests', array_filter(['status' => $key, 'q' => ($searchQuery ?? '') !== '' ? $searchQuery : null])) }}"
                         class="rounded-lg px-3 py-2 text-xs font-bold transition sm:px-4 sm:text-sm {{ $statusFilter === $key
                             ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-900/15'
                             : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900' }}"
@@ -138,8 +168,21 @@
                         @empty
                             <tr>
                                 <td colspan="8" class="px-4 py-14 text-center">
-                                    <p class="text-sm font-medium text-slate-600">Нет заявок в этом разделе</p>
-                                    <p class="mt-1 text-xs text-slate-400">Смените фильтр выше или создайте заявку на странице продажи услуг</p>
+                                    <p class="text-sm font-medium text-slate-600">
+                                        @if (($searchQuery ?? '') !== '')
+                                            Ничего не найдено по запросу «{{ $searchQuery }}»
+                                        @else
+                                            Нет заявок в этом разделе
+                                        @endif
+                                    </p>
+                                    <p class="mt-1 text-xs text-slate-400">
+                                        @if (($searchQuery ?? '') !== '')
+                                            Измените текст поиска или
+                                            <a href="{{ route('admin.service-sales.requests', ['status' => $statusFilter]) }}" class="font-medium text-emerald-800 underline hover:no-underline">сбросьте фильтр</a>
+                                        @else
+                                            Смените фильтр выше или создайте заявку на странице продажи услуг
+                                        @endif
+                                    </p>
                                 </td>
                             </tr>
                         @endforelse

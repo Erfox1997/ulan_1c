@@ -9,6 +9,7 @@ use App\Http\Requests\FulfillServiceOrderRetailRequest;
 use App\Http\Requests\StoreServiceOrderHeaderRequest;
 use App\Http\Requests\StoreServiceOrderLinesRequest;
 use App\Models\Counterparty;
+use App\Models\CustomerVehicle;
 use App\Models\Employee;
 use App\Models\Good;
 use App\Models\LegalEntitySale;
@@ -25,9 +26,13 @@ use App\Models\Warehouse;
 use App\Services\BranchAccessService;
 use App\Services\OpeningBalanceService;
 use App\Support\InvoiceNakladnayaFormatter;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use RuntimeException;
@@ -78,10 +83,144 @@ class ServiceOrderController extends Controller
             'counterpartyQuickUrl' => route('admin.counterparties.quick-store'),
             'customerVehiclesIndexUrl' => route('admin.customer-vehicles.index'),
             'customerVehiclesStoreUrl' => route('admin.customer-vehicles.store'),
+            'vehicleHistoryUrlBase' => $this->sellVehicleHistoryUrlBase(),
             'masters' => $masters,
             'defaultDocumentDate' => now()->toDateString(),
             'recentPending' => $recentPending,
         ]);
+    }
+
+    /**
+     * JSON: история заявок по автомобилю (пробег и услуги по визитам).
+     */
+    public function sellVehicleHistoryJson(CustomerVehicle $customerVehicle): JsonResponse
+    {
+        return response()->json($this->vehicleHistoryPayloadArray($customerVehicle));
+    }
+
+    /**
+     * Страница поиска автомобилей по марке / госномеру / клиенту и просмотр истории обслуживания.
+     */
+    public function vehicleHistoryIndex(): View
+    {
+        $placeholderId = 887766554433;
+        // Относительные URL — чтобы fetch всегда шёл на тот же origin, что открыта страница (избежать блокировки из‑за несовпадения localhost / 127.0.0.1 с APP_URL).
+        $fullJsonUrl = route('admin.vehicle-history.json', ['customerVehicle' => $placeholderId], false);
+        $vehicleHistoryJsonBase = Str::beforeLast($fullJsonUrl, '/'.$placeholderId);
+
+        return view('admin.vehicle-history.index', [
+            'vehicleHistoryJsonBase' => $vehicleHistoryJsonBase,
+            'vehicleSearchUrl' => route('admin.vehicle-history.search', [], false),
+        ]);
+    }
+
+    /**
+     * Подсказки для строки поиска (не менее 2 символов).
+     */
+    public function vehicleHistorySearchJson(Request $request): JsonResponse
+    {
+        $qRaw = trim((string) $request->query('q', ''));
+        if (Str::length($qRaw) < 2) {
+            return response()->json(['vehicles' => []]);
+        }
+
+        $branchId = (int) auth()->user()->branch_id;
+        $vehicles = $this->vehiclesMatchingHistorySearchQuery($qRaw, $branchId, 40);
+
+        $out = $vehicles->map(function (CustomerVehicle $v) {
+            $cp = $v->counterparty;
+            $clientLabel = $cp ? trim((string) ($cp->full_name ?: $cp->name)) : '—';
+
+            return [
+                'id' => $v->id,
+                'label' => $v->label(),
+                'client_label' => $clientLabel,
+            ];
+        })->values()->all();
+
+        return response()->json(['vehicles' => $out]);
+    }
+
+    /**
+     * @return Collection<int, CustomerVehicle>
+     */
+    private function vehiclesMatchingHistorySearchQuery(string $qRaw, int $branchId, int $limit)
+    {
+        return CustomerVehicle::query()
+            ->where('branch_id', $branchId)
+            ->with(['counterparty:id,name,full_name'])
+            ->where(function ($sub) use ($qRaw) {
+                $pat = '%'.$qRaw.'%';
+                $sub->where('vehicle_brand', 'like', $pat)
+                    ->orWhere('plate_number', 'like', $pat)
+                    ->orWhere('vin', 'like', $pat)
+                    ->orWhereHas('counterparty', function ($cp) use ($pat) {
+                        $cp->where('name', 'like', $pat)
+                            ->orWhere('full_name', 'like', $pat);
+                    });
+            })
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+    }
+
+    /**
+     * @return array{vehicle: array<string, mixed>, visits: list<array<string, mixed>>}
+     */
+    private function vehicleHistoryPayloadArray(CustomerVehicle $customerVehicle): array
+    {
+        $branchId = (int) auth()->user()->branch_id;
+
+        $orders = ServiceOrder::query()
+            ->where('branch_id', $branchId)
+            ->where('customer_vehicle_id', $customerVehicle->id)
+            ->where('status', '!=', ServiceOrder::STATUS_CANCELLED)
+            ->with([
+                'lines' => fn ($q) => $q->orderBy('id')->with([
+                    'good' => fn ($gq) => $gq->select('id', 'is_service'),
+                ]),
+            ])
+            ->orderByDesc('document_date')
+            ->orderByDesc('id')
+            ->limit(150)
+            ->get();
+
+        $visits = $orders->map(function (ServiceOrder $order) {
+            $serviceLines = $order->lines->filter(function (ServiceOrderLine $line) {
+                $g = $line->good;
+                if ($g !== null && $g->is_service) {
+                    return true;
+                }
+                if ($line->performer_employee_id !== null && (int) $line->performer_employee_id > 0) {
+                    return true;
+                }
+
+                return false;
+            });
+
+            return [
+                'service_order_id' => $order->id,
+                'document_date' => $order->document_date?->format('Y-m-d'),
+                'mileage_km' => $order->mileage_km !== null ? (string) $order->mileage_km : null,
+                'status' => $order->status,
+                'services' => $serviceLines->values()->map(fn (ServiceOrderLine $line) => [
+                    'name' => (string) $line->name,
+                    'quantity' => (string) $line->quantity,
+                ])->all(),
+            ];
+        })->values()->all();
+
+        return [
+            'vehicle' => [
+                'id' => $customerVehicle->id,
+                'label' => $customerVehicle->label(),
+                'vehicle_brand' => $customerVehicle->vehicle_brand,
+                'vin' => $customerVehicle->vin,
+                'vehicle_year' => $customerVehicle->vehicle_year,
+                'plate_number' => $customerVehicle->plate_number,
+            ],
+            'visits' => $visits,
+        ];
     }
 
     public function storeHeader(StoreServiceOrderHeaderRequest $request): RedirectResponse
@@ -323,6 +462,7 @@ class ServiceOrderController extends Controller
                         'retail_sale_id' => $retailSale->id,
                         'organization_bank_account_id' => $accountId,
                         'amount' => $saleTotal,
+                        'recorded_by_user_id' => auth()->id(),
                     ]);
                     $retailSale->update([
                         'total_amount' => $saleTotal,
@@ -419,6 +559,7 @@ class ServiceOrderController extends Controller
             'masters' => $masters,
             'initialCounterparty' => $initialCounterparty,
             'defaultDocumentDate' => $serviceOrder->document_date?->toDateString() ?? now()->toDateString(),
+            'vehicleHistoryUrlBase' => $this->sellVehicleHistoryUrlBase(),
         ]);
     }
 
@@ -495,9 +636,11 @@ class ServiceOrderController extends Controller
         $status = $request->query('status');
         $status = is_string($status) && $status !== '' ? $status : 'awaiting';
 
+        $searchQuery = trim((string) $request->query('q', ''));
+
         $q = ServiceOrder::query()
             ->where('branch_id', $branchId)
-            ->with(['lines', 'warehouse', 'user', 'retailSale', 'legalEntitySale', 'counterparty', 'customerVehicle']);
+            ->with(['warehouse', 'user', 'counterparty', 'customerVehicle']);
 
         if ($status === 'awaiting') {
             $q->awaitingFulfillmentQueue();
@@ -509,6 +652,10 @@ class ServiceOrderController extends Controller
             $q->awaitingFulfillmentQueue();
         }
 
+        if ($searchQuery !== '') {
+            $this->applyRequestsIndexSearch($q, $searchQuery);
+        }
+
         $orders = $q->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit(200)
@@ -517,7 +664,48 @@ class ServiceOrderController extends Controller
         return view('admin.service-sales.requests', [
             'orders' => $orders,
             'statusFilter' => $status,
+            'searchQuery' => $searchQuery,
         ]);
+    }
+
+    /**
+     * Поиск по списку заявок: №, контакт, контрагент, марка/гос№/VIN авто.
+     */
+    private function applyRequestsIndexSearch(Builder $query, string $search): void
+    {
+        $search = trim($search);
+        if ($search === '') {
+            return;
+        }
+
+        $escaped = '%'.addcslashes($search, '%_\\').'%';
+        $idCastSql = in_array(DB::connection()->getDriverName(), ['sqlite', 'pgsql'], true)
+            ? 'CAST(service_orders.id AS TEXT)'
+            : 'CAST(service_orders.id AS CHAR)';
+        $digitsOnly = preg_replace('/\D/u', '', $search) ?? '';
+        $idForLike = $digitsOnly !== '' ? '%'.addcslashes($digitsOnly, '%_\\').'%' : '%';
+        $stripHash = ltrim($search, '#');
+
+        $query->where(function (Builder $w) use ($escaped, $idCastSql, $idForLike, $stripHash, $digitsOnly) {
+            if ($stripHash !== '' && ctype_digit($stripHash)) {
+                $w->where(function (Builder $w2) use ($stripHash, $idCastSql, $idForLike, $digitsOnly) {
+                    $w2->where('service_orders.id', (int) $stripHash);
+                    if ($digitsOnly !== '') {
+                        $w2->orWhereRaw("{$idCastSql} LIKE ?", [$idForLike]);
+                    }
+                });
+            }
+            $w->orWhere('service_orders.contact_name', 'like', $escaped);
+            $w->orWhereHas('counterparty', function (Builder $cq) use ($escaped) {
+                $cq->where('counterparties.name', 'like', $escaped)
+                    ->orWhere('counterparties.full_name', 'like', $escaped);
+            });
+            $w->orWhereHas('customerVehicle', function (Builder $vq) use ($escaped) {
+                $vq->where('customer_vehicles.vehicle_brand', 'like', $escaped)
+                    ->orWhere('customer_vehicles.plate_number', 'like', $escaped)
+                    ->orWhere('customer_vehicles.vin', 'like', $escaped);
+            });
+        });
     }
 
     public function printWorkOrder(ServiceOrder $serviceOrder): View|RedirectResponse
@@ -890,6 +1078,7 @@ class ServiceOrderController extends Controller
                     'retail_sale_id' => $sale->id,
                     'organization_bank_account_id' => $accountId,
                     'amount' => $total,
+                    'recorded_by_user_id' => auth()->id(),
                 ]);
 
                 $serviceOrder->update([
@@ -1243,6 +1432,15 @@ class ServiceOrderController extends Controller
                 'line_sum' => $lineSum,
             ]);
         }
+    }
+
+    /** Базовый URL без ID автомобиля для JSON истории визитов на странице заявки. */
+    private function sellVehicleHistoryUrlBase(): string
+    {
+        $placeholderId = 887766554433;
+        $full = route('admin.service-sales.sell.vehicle-history', ['customerVehicle' => $placeholderId]);
+
+        return Str::beforeLast($full, '/'.$placeholderId);
     }
 
     /** Черновик заявки и оформленная заявка (без отменённых); оформленные правятся только при отдельном праве. */

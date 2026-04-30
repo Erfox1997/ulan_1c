@@ -8,10 +8,12 @@ use App\Models\OrganizationBankAccount;
 use App\Models\RetailSale;
 use App\Models\RetailSalePayment;
 use App\Models\RetailSaleRefund;
+use App\Support\InvoiceNakladnayaFormatter;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class CashLedgerService
 {
@@ -229,11 +231,15 @@ class CashLedgerService
             if ($cat !== '') {
                 $detail = $cat.($detail !== '' ? ' · '.$detail : '');
             }
+            if ($m->counterparty) {
+                $creditor = 'Кредитор (прочее): '.$m->counterparty->name;
+                $detail = $detail !== '' ? $creditor.' · '.$detail : $creditor;
+            }
             if ($m->our_account_id) {
                 $affected[] = $m->our_account_id;
                 $deltas[$m->our_account_id] = $in;
             }
-            $title = 'Приход: прочие';
+            $title = $m->counterparty ? 'Приход: займ / прочее (кредитор)' : 'Приход: прочие';
         } elseif ($m->kind === CashMovement::KIND_EXPENSE_SUPPLIER) {
             $out = (float) $m->amount;
             $accountLabel = $m->ourAccount?->movementReportLabel() ?? '—';
@@ -297,6 +303,124 @@ class CashLedgerService
     }
 
     /**
+     * Обороты за период по строкам, совпадающим с пунктами «Банк и касса» и продажей ФЛ.
+     * Колонки сальдо на начало/конец для таких агрегатов не определены — в интерфейсе показываются как пустые.
+     *
+     * @return array{
+     *   rows: list<array{key: string, label: string, to_debit: float, to_credit: float}>,
+     *   grand: array{to_debit: float, to_credit: float}
+     * }
+     */
+    public function cashTurnoverByMenuKinds(int $branchId, CarbonInterface $from, CarbonInterface $to): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+
+        $incomeClient = (float) (CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'));
+
+        $incomeOther = (float) (CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'));
+
+        $expenseSupplier = (float) (CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'));
+
+        $expenseOther = (float) (CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'));
+
+        $transferVolume = (float) (CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_TRANSFER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'));
+
+        $retailPayments = (float) (RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->sum('retail_sale_payments.amount'));
+
+        $retailRefunds = (float) (RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->sum('retail_sale_refunds.amount'));
+
+        $rows = [
+            [
+                'key' => 'income_client',
+                'label' => 'Приход: оплата от покупателя',
+                'to_debit' => round($incomeClient, 2),
+                'to_credit' => 0.0,
+            ],
+            [
+                'key' => 'retail_individuals',
+                'label' => 'Продажа физ. лицам',
+                'to_debit' => round($retailPayments, 2),
+                'to_credit' => round($retailRefunds, 2),
+            ],
+            [
+                'key' => 'income_other',
+                'label' => 'Приход: прочие / займы',
+                'to_debit' => round($incomeOther, 2),
+                'to_credit' => 0.0,
+            ],
+            [
+                'key' => 'expense_supplier',
+                'label' => 'Расход: оплата поставщику',
+                'to_debit' => 0.0,
+                'to_credit' => round($expenseSupplier, 2),
+            ],
+            [
+                'key' => 'expense_other',
+                'label' => 'Расход: прочие',
+                'to_debit' => 0.0,
+                'to_credit' => round($expenseOther, 2),
+            ],
+            [
+                'key' => 'transfer',
+                'label' => 'Переводы между счетами',
+                'to_debit' => round($transferVolume, 2),
+                'to_credit' => round($transferVolume, 2),
+            ],
+        ];
+
+        $grandDebit = 0.0;
+        $grandCredit = 0.0;
+        foreach ($rows as $r) {
+            $grandDebit += (float) $r['to_debit'];
+            $grandCredit += (float) $r['to_credit'];
+        }
+
+        return [
+            'rows' => $rows,
+            'grand' => [
+                'to_debit' => round($grandDebit, 2),
+                'to_credit' => round($grandCredit, 2),
+            ],
+        ];
+    }
+
+    /**
      * Сводка движения по дням: приход (клиент, прочий приход, розница), расход поставщику, прочие расходы, переводы между счетами.
      *
      * @return array{rows: Collection<int, array{date: string, date_sort: string, income: float, expense_supplier: float, expense_other: float, transfer: float}>, totals: array{income: float, expense_supplier: float, expense_other: float, transfer: float}}
@@ -323,6 +447,7 @@ class CashLedgerService
             ->where('branch_id', $branchId)
             ->whereDate('occurred_on', '>=', $fromStr)
             ->whereDate('occurred_on', '<=', $toStr)
+            ->select(['id', 'kind', 'occurred_on', 'amount'])
             ->get();
 
         foreach ($manual as $m) {
@@ -343,23 +468,22 @@ class CashLedgerService
             }
         }
 
-        $retailPayments = RetailSalePayment::query()
-            ->whereHas('retailSale', function ($q) use ($branchId, $fromStr, $toStr) {
-                $q->where('branch_id', $branchId)
-                    ->whereDate('document_date', '>=', $fromStr)
-                    ->whereDate('document_date', '<=', $toStr);
-            })
-            ->with('retailSale')
+        $retailDaySums = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->groupBy(DB::raw('DATE(rs.document_date)'))
+            ->selectRaw('DATE(rs.document_date) as bucket_date, SUM(retail_sale_payments.amount) as total')
             ->get();
 
-        foreach ($retailPayments as $payment) {
-            $sale = $payment->retailSale;
-            if ($sale === null) {
-                continue;
-            }
-            $d = $sale->document_date->format('Y-m-d');
+        foreach ($retailDaySums as $row) {
+            $bd = $row->bucket_date;
+            $d = $bd instanceof \DateTimeInterface
+                ? $bd->format('Y-m-d')
+                : substr((string) $bd, 0, 10);
             $ensure($d);
-            $bucket[$d]['income'] += (float) $payment->amount;
+            $bucket[$d]['income'] += (float) $row->total;
         }
 
         $refundSums = RetailSaleRefund::query()
@@ -372,7 +496,7 @@ class CashLedgerService
             ->get();
 
         foreach ($refundSums as $rs) {
-            $d = $rs->d instanceof \Carbon\CarbonInterface ? $rs->d->format('Y-m-d') : (string) $rs->d;
+            $d = $rs->d instanceof CarbonInterface ? $rs->d->format('Y-m-d') : (string) $rs->d;
             $ensure($d);
             $bucket[$d]['income'] -= (float) $rs->s;
         }
@@ -413,8 +537,9 @@ class CashLedgerService
     }
 
     /**
-     * Изменение остатка по счёту за интервал смены [from, until] (по created_at у розницы и cash_movements).
-     * Учитывает: розницу (ФЛ), приход от клиента, расходы поставщику/прочие, переводы между счетами.
+     * Изменение остатка по счёту за интервал смены [from, until].
+     * Розничные платежи: время факта записи платежа (retail_sale_payments.created_at) и кассир
+     * (recorded_by_user_id, при пустом — user_id продажи). Ручные операции CashMovement по created_at.
      *
      * Если задан $cashierUserId — только операции этого пользователя (смена привязана к кассиру).
      *
@@ -435,9 +560,11 @@ class CashLedgerService
         $retailRows = RetailSalePayment::query()
             ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
             ->where('rs.branch_id', $branchId)
-            ->where('rs.created_at', '>=', $from)
-            ->where('rs.created_at', '<=', $until)
-            ->when($cashierUserId !== null, fn ($q) => $q->where('rs.user_id', $cashierUserId))
+            ->where('retail_sale_payments.created_at', '>=', $from)
+            ->where('retail_sale_payments.created_at', '<=', $until)
+            ->when($cashierUserId !== null, function ($q) use ($cashierUserId) {
+                $q->whereRaw('COALESCE(retail_sale_payments.recorded_by_user_id, rs.user_id) = ?', [$cashierUserId]);
+            })
             ->selectRaw('retail_sale_payments.organization_bank_account_id as aid, SUM(retail_sale_payments.amount) as s')
             ->groupBy('retail_sale_payments.organization_bank_account_id')
             ->get();
@@ -587,7 +714,7 @@ class CashLedgerService
     }
 
     /**
-     * Сводка по видам операций за интервал смены (тот же кассир и created_at, что и в netCashChangeByAccountInShiftWindow).
+     * Сводка по видам за интервал смены. Розница: платежи по времени строки платежа и кто принял (recorded_by_user_id).
      *
      * @return array{retail_checks: int, retail_payments: float, refunds: float, income_client: float, income_other: float, expense_supplier: float, expense_other: float, transfer_volume: float}
      */
@@ -596,9 +723,9 @@ class CashLedgerService
         $retailPayments = (float) (RetailSalePayment::query()
             ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
             ->where('rs.branch_id', $branchId)
-            ->where('rs.created_at', '>=', $from)
-            ->where('rs.created_at', '<=', $until)
-            ->where('rs.user_id', $cashierUserId)
+            ->where('retail_sale_payments.created_at', '>=', $from)
+            ->where('retail_sale_payments.created_at', '<=', $until)
+            ->whereRaw('COALESCE(retail_sale_payments.recorded_by_user_id, rs.user_id) = ?', [$cashierUserId])
             ->sum('retail_sale_payments.amount'));
 
         $retailChecks = (int) RetailSale::query()
@@ -654,6 +781,414 @@ class CashLedgerService
             'expense_other' => round($expenseOther, 2),
             'transfer_volume' => round($transferVolume, 2),
         ];
+    }
+
+    /**
+     * Построчная детализация показателей сменного отчёта (совпадает с {@see shiftMoneyKindBreakdown}).
+     *
+     * @return array{
+     *   retail_payments: list<array{at:string, sale_id:int, sale_doc:string, account:string, amount:number, amount_fmt:string}>,
+     *   refunds: list<array{at:string, sale_id:int, return_doc:string, account:string, amount:number, amount_fmt:string}>,
+     *   income_client: list<array{at:string, op_date:string, account:string, amount:number, amount_fmt:string, note:string}>,
+     *   income_other: list<array{at:string, op_date:string, account:string, amount:number, amount_fmt:string, note:string}>,
+     *   expense_supplier: list<array{at:string, op_date:string, account:string, amount:number, amount_fmt:string, note:string}>,
+     *   expense_other: list<array{at:string, op_date:string, account:string, amount:number, amount_fmt:string, note:string}>
+     * }
+     */
+    public function shiftKindDetailLists(int $branchId, CarbonInterface $from, CarbonInterface $until, int $cashierUserId): array
+    {
+        $retailPaymentModels = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->where('retail_sale_payments.created_at', '>=', $from)
+            ->where('retail_sale_payments.created_at', '<=', $until)
+            ->whereRaw('COALESCE(retail_sale_payments.recorded_by_user_id, rs.user_id) = ?', [$cashierUserId])
+            ->select('retail_sale_payments.*')
+            ->orderBy('retail_sale_payments.created_at')
+            ->with(['organizationBankAccount.organization', 'retailSale'])
+            ->get();
+
+        $retailPayments = [];
+        foreach ($retailPaymentModels as $p) {
+            $amt = round((float) $p->amount, 2);
+            $saleDoc = $p->retailSale?->document_date?->format('d.m.Y') ?? '—';
+            $acc = $p->organizationBankAccount?->movementReportLabel() ?? '—';
+            $retailPayments[] = [
+                'at' => $p->created_at?->format('d.m.Y H:i:s') ?? '—',
+                'sale_id' => (int) $p->retail_sale_id,
+                'sale_doc' => $saleDoc,
+                'account' => $acc,
+                'amount' => $amt,
+                'amount_fmt' => InvoiceNakladnayaFormatter::formatMoney($amt),
+            ];
+        }
+
+        $refundModels = RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->where('retail_sale_refunds.created_at', '>=', $from)
+            ->where('retail_sale_refunds.created_at', '<=', $until)
+            ->whereHas('retailSale', fn ($q) => $q->where('user_id', $cashierUserId))
+            ->select('retail_sale_refunds.*')
+            ->orderBy('retail_sale_refunds.created_at')
+            ->with(['organizationBankAccount.organization', 'retailSale', 'customerReturn'])
+            ->get();
+
+        $refunds = [];
+        foreach ($refundModels as $r) {
+            $amt = round((float) $r->amount, 2);
+            $returnDoc = $r->customerReturn?->document_date?->format('d.m.Y') ?? '—';
+            $acc = $r->organizationBankAccount?->movementReportLabel() ?? '—';
+            $refunds[] = [
+                'at' => $r->created_at?->format('d.m.Y H:i:s') ?? '—',
+                'sale_id' => (int) $r->retail_sale_id,
+                'return_doc' => $returnDoc,
+                'account' => $acc,
+                'amount' => $amt,
+                'amount_fmt' => InvoiceNakladnayaFormatter::formatMoney($amt),
+            ];
+        }
+
+        $mapMovements = function (string $kind) use ($branchId, $from, $until, $cashierUserId): array {
+            $list = CashMovement::query()
+                ->where('branch_id', $branchId)
+                ->where('created_at', '>=', $from)
+                ->where('created_at', '<=', $until)
+                ->where('user_id', $cashierUserId)
+                ->where('kind', $kind)
+                ->orderBy('created_at')
+                ->with(['ourAccount.organization', 'counterparty'])
+                ->get();
+
+            $rows = [];
+            foreach ($list as $m) {
+                $amt = round((float) $m->amount, 2);
+                $rows[] = [
+                    'at' => $m->created_at?->format('d.m.Y H:i:s') ?? '—',
+                    'op_date' => $m->occurred_on?->format('d.m.Y') ?? '—',
+                    'account' => $m->ourAccount?->movementReportLabel() ?? '—',
+                    'amount' => $amt,
+                    'amount_fmt' => InvoiceNakladnayaFormatter::formatMoney($amt),
+                    'note' => $this->cashMovementShiftDetailNote($m),
+                ];
+            }
+
+            return $rows;
+        };
+
+        return [
+            'retail_payments' => $retailPayments,
+            'refunds' => $refunds,
+            'income_client' => $mapMovements(CashMovement::KIND_INCOME_CLIENT),
+            'income_other' => $mapMovements(CashMovement::KIND_INCOME_OTHER),
+            'expense_supplier' => $mapMovements(CashMovement::KIND_EXPENSE_SUPPLIER),
+            'expense_other' => $mapMovements(CashMovement::KIND_EXPENSE_OTHER),
+        ];
+    }
+
+    private function cashMovementShiftDetailNote(CashMovement $m): string
+    {
+        $comment = trim((string) $m->comment);
+
+        return match ($m->kind) {
+            CashMovement::KIND_INCOME_CLIENT => $m->counterparty
+                ? 'Клиент: '.$m->counterparty->name.($comment !== '' ? ' · '.$comment : '')
+                : $comment,
+            CashMovement::KIND_INCOME_OTHER => $this->prependCategory(trim((string) $m->expense_category), $comment),
+            CashMovement::KIND_EXPENSE_SUPPLIER => $m->counterparty
+                ? 'Поставщик: '.$m->counterparty->name.($comment !== '' ? ' · '.$comment : '')
+                : $comment,
+            CashMovement::KIND_EXPENSE_OTHER => $this->prependCategory(trim((string) $m->expense_category), $comment),
+            default => $comment,
+        };
+    }
+
+    private function prependCategory(string $category, string $comment): string
+    {
+        if ($category !== '') {
+            return $comment !== '' ? $category.' · '.$comment : $category;
+        }
+
+        return $comment;
+    }
+
+    /**
+     * Расшифровка ячейки ОСВ по деньгам (начало, оборот Дт/Кт, конец) для модального окна.
+     *
+     * @param  'opening'|'turnover_debit'|'turnover_credit'|'closing'  $kind
+     * @return array{
+     *   account_code: string,
+     *   account_label: string,
+     *   kind: string,
+     *   kind_label: string,
+     *   lines: list< array{date?: string|null, title: string, detail: string, amount: float, amount_fmt: string}>,
+     *   total?: float,
+     *   total_fmt?: string,
+     *   footer_note?: string
+     * }
+     */
+    public function turnoverOsvCellDetail(int $branchId, int $accountId, CarbonInterface $from, CarbonInterface $to, string $kind): array
+    {
+        $acc = OrganizationBankAccount::query()
+            ->where('id', $accountId)
+            ->whereHas('organization', fn ($q) => $q->where('branch_id', $branchId))
+            ->firstOrFail();
+
+        $code = str_pad((string) ($accountId % 10000), 4, '0', STR_PAD_LEFT);
+        if ($code === '0000') {
+            $code = '9999';
+        }
+
+        $kindLabels = [
+            'opening' => 'Сальдо на начало периода',
+            'turnover_debit' => 'Оборот за период — дебет (поступления)',
+            'turnover_credit' => 'Оборот за период — кредит (списания)',
+            'closing' => 'Сальдо на конец периода',
+        ];
+        if (! isset($kindLabels[$kind])) {
+            throw new \InvalidArgumentException('Invalid turnover detail kind.');
+        }
+
+        $base = [
+            'account_code' => $code,
+            'account_label' => $acc->summaryLabel(),
+            'kind' => $kind,
+            'kind_label' => $kindLabels[$kind],
+        ];
+
+        $toExclusive = Carbon::parse($to->format('Y-m-d'))->addDay();
+
+        if ($kind === 'opening') {
+            $lines = $this->turnoverOsvOpeningLedgerLines($branchId, $accountId, $from);
+            $total = round($this->balanceAtDateExclusive($branchId, $accountId, $from), 2);
+
+            return $base + [
+                'lines' => $lines,
+                'total' => $total,
+                'total_fmt' => $this->turnoverOsvFormatSignedAmount($total),
+                'footer_note' => 'Строки накапливают сальдо до даты начала периода (без движений с '.$from->format('d.m.Y').'). «Начальный остаток» — поле при настройке счёта в организации.',
+            ];
+        }
+
+        if ($kind === 'turnover_debit' || $kind === 'turnover_credit') {
+            $wantIn = $kind === 'turnover_debit';
+            $history = $this->historyRows($branchId, $from, $to);
+            $lines = [];
+            foreach ($history as $row) {
+                $d = (float) ($row['delta_by_account'][$accountId] ?? 0);
+                if (abs($d) < 0.00001) {
+                    continue;
+                }
+                if ($wantIn && $d <= 0) {
+                    continue;
+                }
+                if (! $wantIn && $d >= 0) {
+                    continue;
+                }
+                $lines[] = [
+                    'date' => $row['date'] ?? null,
+                    'title' => (string) ($row['title'] ?? '—'),
+                    'detail' => (string) ($row['detail'] ?? ''),
+                    'amount' => round($d, 2),
+                    'amount_fmt' => $this->turnoverOsvFormatSignedAmount($d),
+                ];
+            }
+            $total = round(array_sum(array_column($lines, 'amount')), 2);
+            $note = $wantIn
+                ? 'Все поступления на счёт за период '.$from->format('d.m.Y').' — '.$to->format('d.m.Y').'.'
+                : 'Все списания и возвраты с счёта за период '.$from->format('d.m.Y').' — '.$to->format('d.m.Y').'.';
+
+            return $base + [
+                'lines' => $lines,
+                'total' => $total,
+                'total_fmt' => abs($total) >= 0.005
+                    ? $this->turnoverOsvFormatSignedAmount($total)
+                    : '0,00',
+                'footer_note' => $note,
+            ];
+        }
+
+        $openB = round($this->balanceAtDateExclusive($branchId, $accountId, $from), 2);
+        $closeB = round($this->balanceAtDateExclusive($branchId, $accountId, $toExclusive), 2);
+        $history = $this->historyRows($branchId, $from, $to);
+        $dt = 0.0;
+        $ct = 0.0;
+        foreach ($history as $row) {
+            $d = (float) ($row['delta_by_account'][$accountId] ?? 0);
+            if ($d > 0) {
+                $dt += $d;
+            } elseif ($d < 0) {
+                $ct += -$d;
+            }
+        }
+        $dt = round($dt, 2);
+        $ct = round($ct, 2);
+
+        $lines = [
+            [
+                'date' => null,
+                'title' => 'Сальдо на начало',
+                'detail' => 'На '.$from->format('d.m.Y'),
+                'amount' => $openB,
+                'amount_fmt' => $this->turnoverOsvFormatSignedAmount($openB),
+            ],
+            [
+                'date' => null,
+                'title' => 'Поступления (оборот по дебету)',
+                'detail' => 'За период',
+                'amount' => $dt,
+                'amount_fmt' => ($dt >= 0 ? '+ ' : '− ').InvoiceNakladnayaFormatter::formatMoney(abs($dt)),
+            ],
+            [
+                'date' => null,
+                'title' => 'Списания (оборот по кредиту)',
+                'detail' => 'За период',
+                'amount' => -$ct,
+                'amount_fmt' => '− '.InvoiceNakladnayaFormatter::formatMoney($ct),
+            ],
+            [
+                'date' => null,
+                'title' => 'Сальдо на конец',
+                'detail' => 'На '.$to->format('d.m.Y'),
+                'amount' => $closeB,
+                'amount_fmt' => $this->turnoverOsvFormatSignedAmount($closeB),
+            ],
+        ];
+
+        return $base + [
+            'lines' => $lines,
+            'total' => $closeB,
+            'total_fmt' => $this->turnoverOsvFormatSignedAmount($closeB),
+            'footer_note' => 'Проверка: на конец = на начало + поступления − списания (с учётом округлений).',
+        ];
+    }
+
+    /**
+     * Строки, формирующие сальдо на начало периода (движения до даты начала, плюс ввод остатка).
+     *
+     * @return list<array{date?: string|null, title: string, detail: string, amount: float, amount_fmt: string}>
+     */
+    private function turnoverOsvOpeningLedgerLines(int $branchId, int $accountId, CarbonInterface $periodFrom): array
+    {
+        $beforeStr = $periodFrom->copy()->startOfDay()->toDateString();
+
+        $acc = OrganizationBankAccount::query()
+            ->where('id', $accountId)
+            ->whereHas('organization', fn ($q) => $q->where('branch_id', $branchId))
+            ->firstOrFail();
+
+        $bucket = [];
+
+        $ob = round((float) $acc->opening_balance, 2);
+        if (abs($ob) >= 0.005) {
+            $bucket[] = [
+                'sort_key' => [0, 0],
+                'date' => null,
+                'title' => 'Начальный остаток (ввод при настройке счёта)',
+                'detail' => '',
+                'amount' => $ob,
+            ];
+        }
+
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where(function ($q) use ($accountId) {
+                $q->where('our_account_id', $accountId)
+                    ->orWhere('from_account_id', $accountId)
+                    ->orWhere('to_account_id', $accountId);
+            })
+            ->whereDate('occurred_on', '<', $beforeStr)
+            ->orderBy('occurred_on')
+            ->orderBy('id')
+            ->with(['ourAccount', 'fromAccount', 'toAccount', 'counterparty'])
+            ->get();
+
+        foreach ($movements as $m) {
+            $row = $this->rowFromCashMovement($m);
+            $d = (float) (($row['delta_by_account'][$accountId] ?? 0));
+            if (abs($d) < 0.00001) {
+                continue;
+            }
+            $bucket[] = [
+                'sort_key' => [1, $m->occurred_on->timestamp, (int) $m->id],
+                'date' => $m->occurred_on->format('d.m.Y'),
+                'title' => $row['title'],
+                'detail' => $row['detail'],
+                'amount' => round($d, 2),
+            ];
+        }
+
+        $payments = RetailSalePayment::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->where('retail_sale_payments.organization_bank_account_id', $accountId)
+            ->whereDate('rs.document_date', '<', $beforeStr)
+            ->orderBy('rs.document_date')
+            ->orderBy('retail_sale_payments.id')
+            ->select('retail_sale_payments.*')
+            ->with('retailSale')
+            ->get();
+
+        foreach ($payments as $p) {
+            $sale = $p->retailSale;
+            $amt = round((float) $p->amount, 2);
+            $ts = $sale?->document_date?->copy()->startOfDay()->timestamp ?? 0;
+            $bucket[] = [
+                'sort_key' => [1, $ts, 1000000 + (int) $p->id],
+                'date' => $sale?->document_date?->format('d.m.Y'),
+                'title' => 'Розничная продажа (ФЛ)',
+                'detail' => 'Документ № '.($sale?->id ?? $p->retail_sale_id),
+                'amount' => $amt,
+            ];
+        }
+
+        $refunds = RetailSaleRefund::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->where('retail_sale_refunds.organization_bank_account_id', $accountId)
+            ->whereDate('cr.document_date', '<', $beforeStr)
+            ->orderBy('cr.document_date')
+            ->orderBy('retail_sale_refunds.id')
+            ->select('retail_sale_refunds.*')
+            ->with(['retailSale', 'customerReturn'])
+            ->get();
+
+        foreach ($refunds as $r) {
+            $crModel = $r->customerReturn;
+            $sale = $r->retailSale;
+            $amt = round((float) $r->amount, 2);
+            $ts = $crModel?->document_date?->copy()->startOfDay()->timestamp ?? 0;
+            $bucket[] = [
+                'sort_key' => [1, $ts, 2000000 + (int) $r->id],
+                'date' => $crModel?->document_date?->format('d.m.Y'),
+                'title' => 'Возврат покупателю (розница, ФЛ)',
+                'detail' => $sale ? 'Чек № '.$sale->id.' · возврат' : 'Возврат № '.$r->id,
+                'amount' => -$amt,
+            ];
+        }
+
+        usort($bucket, fn (array $a, array $b): int => $a['sort_key'] <=> $b['sort_key']);
+
+        $out = [];
+        foreach ($bucket as $item) {
+            $amt = (float) $item['amount'];
+            unset($item['sort_key']);
+            $item['amount_fmt'] = $this->turnoverOsvFormatSignedAmount($amt);
+            $item['amount'] = round($amt, 2);
+            $out[] = $item;
+        }
+
+        return $out;
+    }
+
+    private function turnoverOsvFormatSignedAmount(float $v): string
+    {
+        if (abs($v) < 0.005) {
+            return '0,00';
+        }
+        $sign = $v > 0 ? '+ ' : '− ';
+
+        return $sign.InvoiceNakladnayaFormatter::formatMoney(abs($v));
     }
 
     /**

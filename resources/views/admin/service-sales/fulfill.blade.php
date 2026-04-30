@@ -125,7 +125,6 @@
                                     @focus="if (query.trim().length >= 2) { onInput() }"
                                     @keydown.escape="open = false"
                                     autocomplete="off"
-                                    placeholder="От 2 букв…"
                                     class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                 />
                                 <div
@@ -192,7 +191,6 @@
                                             type="text"
                                             x-model="quickName"
                                             class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm text-slate-900"
-                                            placeholder="Как в договоре"
                                         />
                                     </div>
                                     <div>

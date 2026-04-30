@@ -51,6 +51,7 @@
                     counterpartyQuickUrl: @json($counterpartyQuickUrl),
                     customerVehiclesIndexUrl: @json($customerVehiclesIndexUrl),
                     customerVehiclesStoreUrl: @json($customerVehiclesStoreUrl),
+                    vehicleHistoryUrlBase: @json($vehicleHistoryUrlBase),
                     csrf: @json(csrf_token()),
                     masters: @json($masters->map(fn ($e) => ['id' => $e->id, 'full_name' => $e->full_name])->values()),
                     initialCounterparty: @json($initialCp),

@@ -3,7 +3,12 @@
     'extraUnitCost' => false,
     'qtyField' => 'quantity',
     'allowManualNewGood' => false,
+    'showSalePrice' => true,
+    'enableQuickNewGood' => false,
 ])
+@php
+    $colCount = 5 + ($extraUnitCost ? 1 : 0) + ($showSalePrice ? 1 : 0);
+@endphp
 <div class="min-w-0">
     @if ($mode === 'transfer')
         <p class="border-b border-emerald-100 bg-emerald-50/50 px-3 py-2 text-[11px] text-slate-600">
@@ -33,14 +38,16 @@
                             Кол-во *
                         @endif
                     </th>
-                    <th>Продажная цена</th>
+                    @if ($showSalePrice)
+                        <th>Продажная цена</th>
+                    @endif
                 </tr>
             </thead>
             <tbody>
                 <tr x-show="rows.length === 0">
                     <td
                         class="px-4 py-10 text-center align-middle text-sm text-slate-600"
-                        :colspan="extraUnitCost ? 7 : 6"
+                        colspan="{{ $colCount }}"
                     >
                         Нет строк — нажмите «Добавить» на панели выше.
                     </td>
@@ -57,6 +64,12 @@
                             @click.outside="row.open = false"
                         >
                             <input type="hidden" :name="'lines[' + i + '][good_id]'" :value="row.goodId" />
+                            @if (! $extraUnitCost)
+                                <input type="hidden" :name="'lines[' + i + '][unit_cost]'" :value="row.unitCost" />
+                            @endif
+                            @if (! $showSalePrice)
+                                <input type="hidden" :name="'lines[' + i + '][sale_price]'" :value="row.sale_price" />
+                            @endif
                             @if ($allowManualNewGood)
                                 <input type="hidden" :name="'lines[' + i + '][article_code]'" :value="row.articleManual" :disabled="!!row.goodId" />
                                 <input type="hidden" :name="'lines[' + i + '][manual_name]'" :value="row.nameManual" :disabled="!!row.goodId" />
@@ -67,15 +80,16 @@
                                 class="ob-inp"
                                 x-model="row.query"
                                 @input.debounce.300ms="searchRow(i)"
-                                @focus="row.open = row.results.length > 0; selectedRow = i"
+                                @focus="row.open = (row.query || '').trim().length >= 2; selectedRow = i"
                                 autocomplete="off"
                                 placeholder="Артикул или название…"
                             />
                             <div
                                 class="absolute left-0 right-0 top-full z-[210] mt-0.5 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
-                                x-show="row.open && row.results.length"
+                                x-show="row.open && (row.query || '').trim().length >= 2"
                                 x-transition
                             >
+                                <div x-show="row.loading" class="px-3 py-2 text-xs text-slate-500">Поиск…</div>
                                 <template x-for="g in row.results" :key="g.id">
                                     <button
                                         type="button"
@@ -86,6 +100,25 @@
                                         <span class="block font-medium text-slate-900" x-text="g.name"></span>
                                     </button>
                                 </template>
+                                @if ($enableQuickNewGood)
+                                    <div
+                                        x-show="!row.loading && (!row.results || row.results.length === 0)"
+                                        class="border-t border-slate-100 px-2 py-2"
+                                    >
+                                        <button
+                                            type="button"
+                                            class="w-full rounded-lg border border-teal-300/80 bg-teal-50/90 px-3 py-2 text-left text-xs font-semibold text-teal-900 hover:bg-teal-100/80"
+                                            @click.stop="openStockQuickNewGoodModal((row.query || '').trim(), i)"
+                                        >
+                                            + Новый товар…
+                                        </button>
+                                    </div>
+                                @else
+                                    <div
+                                        x-show="!row.loading && (!row.results || row.results.length === 0)"
+                                        class="px-3 py-2 text-xs text-slate-500"
+                                    >Ничего не найдено</div>
+                                @endif
                             </div>
                             <p class="truncate px-2 pb-0.5 pt-0.5 text-[10px] text-slate-500" x-show="row.name && row.goodId" x-text="row.name"></p>
                             @if ($allowManualNewGood)
@@ -169,18 +202,20 @@
                                 placeholder="0"
                             />
                         </td>
-                        <td class="min-w-[4.5rem] ob-numr">
-                            <input
-                                type="text"
-                                inputmode="decimal"
-                                class="ob-inp tabular-nums"
-                                x-model="row.sale_price"
-                                :name="'lines[' + i + '][sale_price]'"
-                                placeholder=""
-                                autocomplete="off"
-                                :class="!row.goodId ? 'text-slate-400' : ''"
-                            />
-                        </td>
+                        @if ($showSalePrice)
+                            <td class="min-w-[4.5rem] ob-numr">
+                                <input
+                                    type="text"
+                                    inputmode="decimal"
+                                    class="ob-inp tabular-nums"
+                                    x-model="row.sale_price"
+                                    :name="'lines[' + i + '][sale_price]'"
+                                    placeholder=""
+                                    autocomplete="off"
+                                    :class="!row.goodId ? 'text-slate-400' : ''"
+                                />
+                            </td>
+                        @endif
                     </tr>
                 </template>
             </tbody>

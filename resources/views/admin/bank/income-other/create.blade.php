@@ -1,6 +1,10 @@
 @php
     $isEdit = isset($movement) && $movement !== null;
     $defaultIncomeKind = old('income_kind', $isEdit && $movement->counterparty_id ? 'loan' : 'plain');
+    $bankCashExpenseCategoryFieldInit = [
+        'searchUrl' => route('admin.bank.income-other.categories-search'),
+        'initialValue' => old('expense_category', $isEdit ? (string) ($movement->expense_category ?? '') : ''),
+    ];
 @endphp
 <x-admin-layout pageTitle="{{ $isEdit ? 'Редактирование: прочий приход / займ' : 'Новая операция: прочий приход / займ' }}" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
     @include('admin.partials.cp-brush')
@@ -91,10 +95,44 @@
             background: rgb(236 253 245);
             border-color: rgb(52 211 153);
         }
-        .page-income-other .bank-1c-cp-wrap .bank-1c-dd .cp-quick {
-            padding: 0.75rem;
-            background: rgb(255 255 255);
-            border-top: 1px solid rgb(226 232 240);
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd {
+            border-radius: 0.5rem;
+            border: 1px solid rgb(203 213 225);
+            background: #fff;
+            box-shadow:
+                0 4px 6px -1px rgb(0 0 0 / 0.07),
+                0 10px 24px -8px rgb(5 150 105 / 0.18);
+            overflow: hidden;
+            max-height: min(17rem, 65vh);
+            overflow-y: auto;
+        }
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd button.cat-suggest-row {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 0.55rem 0.75rem;
+            border: 0;
+            border-bottom: 1px solid rgb(241 245 249);
+            font-size: 13px;
+            color: rgb(15 23 42);
+            background: #fff;
+            cursor: pointer;
+        }
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd button.cat-suggest-row:last-of-type {
+            border-bottom: 0;
+        }
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd button.cat-suggest-row:hover,
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd button.cat-suggest-row:focus {
+            background: rgb(236 253 245);
+            outline: none;
+        }
+        .page-income-other .income-other-cat-wrap .income-other-cat-dd .bank-cp-dd-status {
+            margin: 0;
+            padding: 0.5rem 0.75rem;
+            font-size: 12px;
+            color: rgb(71 85 105);
+            background: rgb(248 250 252);
+            border-bottom: 1px solid rgb(241 245 249);
         }
     </style>
 
@@ -110,6 +148,7 @@
         @if ($accounts->isNotEmpty())
             <script>
                 window.__bankCounterpartyFieldInit = @json($cpField);
+                window.__bankCashExpenseCategoryFieldInit = @json($bankCashExpenseCategoryFieldInit);
                 /** Показ блока кредитора без Alpine (надёжнее внутри form + grid). */
                 window.incomeOtherToggleLoanCp = function (form) {
                     if (!form) {
@@ -302,12 +341,62 @@
                                             </div>
                                     </div>
                                     <div class="bank-1c-span-full">
-                                        <span class="bank-1c-field-label">Категория / назначение</span>
-                                        <input
-                                            type="text"
-                                            name="expense_category"
-                                            value="{{ old('expense_category', $isEdit ? (string) ($movement->expense_category ?? '') : '') }}"
-                                        />
+                                        <div
+                                            class="relative income-other-cat-wrap"
+                                            x-data="bankCashExpenseCategoryField()"
+                                            x-ref="catSuggestRoot"
+                                            @keydown.escape="onCatEscape()"
+                                        >
+                                            <span class="bank-1c-field-label">Категория / назначение</span>
+                                            <input
+                                                type="text"
+                                                name="expense_category"
+                                                maxlength="255"
+                                                autocomplete="off"
+                                                placeholder="От 2 букв — подсказки из уже сохранённых категорий по филиалу"
+                                                class="block w-full"
+                                                x-model="query"
+                                                @input="onCatInput($event)"
+                                                @focus="onCatFocus($event)"
+                                                @blur="onCatBlur()"
+                                            />
+                                            <div
+                                                x-cloak
+                                                x-show="showCatDropdown()"
+                                                class="income-other-cat-dd fixed z-[210]"
+                                                role="listbox"
+                                                aria-label="Категории"
+                                                @mousedown.prevent
+                                                x-bind:style="'top:' + catPos.top + 'px;left:' + catPos.left + 'px;width:' + catPos.width + 'px'"
+                                            >
+                                                <div x-show="catLoading" class="bank-cp-dd-status rounded-t-lg">Поиск…</div>
+                                                <template x-for="(label, idx) in catItems" :key="'ioc-' + idx + '-' + label">
+                                                    <button
+                                                        type="button"
+                                                        class="cat-suggest-row"
+                                                        @mousedown.prevent
+                                                        @click="pickCategory(label)"
+                                                        role="option"
+                                                        x-text="label"
+                                                    ></button>
+                                                </template>
+                                                <div
+                                                    x-show="!catLoading && catNoHits && catItems.length === 0"
+                                                    class="bank-cp-dd-empty rounded-b-lg"
+                                                    x-cloak
+                                                >
+                                                    <p>В списке операций этой категории ещё не было.</p>
+                                                    <button
+                                                        type="button"
+                                                        class="bank-cp-dd-add"
+                                                        @mousedown.prevent
+                                                        @click="confirmTypedCategory($event)"
+                                                    >
+                                                        Добавить категорию «<span x-text="query"></span>»
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
                                         <x-input-error class="mt-1" :messages="$errors->get('expense_category')" />
                                     </div>
                                     <div class="bank-1c-span-full">

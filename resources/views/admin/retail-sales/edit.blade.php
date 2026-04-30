@@ -83,6 +83,7 @@
                                     type="button"
                                     class="flex w-full flex-col items-start gap-0.5 border-b px-4 py-2.5 text-left transition"
                                     :class="goodsRowOutOfStock(row) ? 'border-red-100 bg-red-50 hover:bg-red-100/90' : 'border-slate-50 hover:bg-emerald-50/80'"
+                                    @mousedown.prevent
                                     @click="addProduct(row)"
                                 >
                                     <span class="font-medium" :class="goodsRowOutOfStock(row) ? 'text-red-950' : 'text-slate-900'" x-text="row.name"></span>

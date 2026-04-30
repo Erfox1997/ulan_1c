@@ -12,6 +12,7 @@ use App\Http\Requests\StoreBankCashTransferRequest;
 use App\Models\CashMovement;
 use App\Models\Counterparty;
 use App\Services\CashLedgerService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -21,7 +22,50 @@ class BankCashController extends Controller
 {
     use RequiresOpenCashShift;
 
-    public function incomeClientIndex(): View|RedirectResponse
+    /**
+     * Подсказки для поля «категория»: уникальные expense_category из операций филиала заданного вида (прочий приход / прочий расход).
+     */
+    public function incomeOtherCategorySearch(Request $request): JsonResponse
+    {
+        return $this->expenseCategorySearchForCashKind($request, CashMovement::KIND_INCOME_OTHER);
+    }
+
+    public function expenseOtherCategorySearch(Request $request): JsonResponse
+    {
+        return $this->expenseCategorySearchForCashKind($request, CashMovement::KIND_EXPENSE_OTHER);
+    }
+
+    private function expenseCategorySearchForCashKind(Request $request, string $cashKind): JsonResponse
+    {
+        $branchId = auth()->user()?->branch_id;
+        if ($branchId === null) {
+            return response()->json([]);
+        }
+
+        $term = trim((string) $request->query('q', ''));
+        if (mb_strlen($term) < 2) {
+            return response()->json([]);
+        }
+
+        $pattern = '%'.$term.'%';
+
+        $categories = CashMovement::query()
+            ->where('branch_id', (int) $branchId)
+            ->where('kind', $cashKind)
+            ->whereNotNull('expense_category')
+            ->where('expense_category', '!=', '')
+            ->where('expense_category', 'like', $pattern)
+            ->distinct()
+            ->orderBy('expense_category')
+            ->limit(25)
+            ->pluck('expense_category')
+            ->values()
+            ->all();
+
+        return response()->json($categories);
+    }
+
+    public function incomeClientIndex(Request $request): View|RedirectResponse
     {
         if ($redirect = $this->redirectIfNoOpenCashShift()) {
             return $redirect;
@@ -29,10 +73,52 @@ class BankCashController extends Controller
 
         $branchId = (int) auth()->user()->branch_id;
 
+        $counterpartyFilterIdRaw = $request->query('counterparty_id');
+        $counterpartyFilterId = is_numeric($counterpartyFilterIdRaw)
+            ? (int) $counterpartyFilterIdRaw
+            : null;
+        if ($counterpartyFilterId !== null && $counterpartyFilterId <= 0) {
+            $counterpartyFilterId = null;
+        }
+
+        $q = trim((string) $request->query('q', ''));
+
+        $filterCounterpartyLabel = '';
+        if ($counterpartyFilterId !== null) {
+            $fcp = Counterparty::query()
+                ->where('branch_id', $branchId)
+                ->find($counterpartyFilterId);
+            if ($fcp !== null) {
+                $filterCounterpartyLabel = trim((string) $fcp->full_name);
+                if ($filterCounterpartyLabel === '') {
+                    $filterCounterpartyLabel = Counterparty::buildFullName($fcp->legal_form, (string) $fcp->name);
+                }
+            } else {
+                $counterpartyFilterId = null;
+            }
+        }
+
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_INCOME_CLIENT)
-            ->with(['ourAccount.organization', 'counterparty', 'user'])
+            ->with([
+                'ourAccount',
+                'counterparty' => static fn ($q) => $q->select('id', 'name', 'full_name', 'legal_form'),
+                'user' => static fn ($q) => $q->select('id', 'name'),
+            ])
+            ->when($counterpartyFilterId !== null, function ($query) use ($counterpartyFilterId) {
+                $query->where('counterparty_id', $counterpartyFilterId);
+            })
+            ->when($counterpartyFilterId === null && $q !== '', function ($query) use ($q) {
+                $pattern = '%'.$q.'%';
+                $query->whereHas('counterparty', function ($cp) use ($pattern) {
+                    $cp->where(function ($sub) use ($pattern) {
+                        $sub->where('name', 'like', $pattern)
+                            ->orWhere('full_name', 'like', $pattern)
+                            ->orWhere('inn', 'like', $pattern);
+                    });
+                });
+            })
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)
@@ -40,6 +126,9 @@ class BankCashController extends Controller
 
         return view('admin.bank.income-client.index', [
             'movements' => $movements,
+            'searchQuery' => $q,
+            'filterCounterpartyId' => $counterpartyFilterId,
+            'filterCounterpartyLabel' => $filterCounterpartyLabel,
         ]);
     }
 
@@ -148,7 +237,11 @@ class BankCashController extends Controller
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_INCOME_OTHER)
-            ->with(['ourAccount.organization', 'counterparty', 'user'])
+            ->with([
+                'ourAccount',
+                'counterparty' => static fn ($q) => $q->select('id', 'name', 'full_name', 'legal_form'),
+                'user' => static fn ($q) => $q->select('id', 'name'),
+            ])
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)
@@ -271,7 +364,7 @@ class BankCashController extends Controller
             ->with('status', 'Операция №'.$movement->id.' обновлена.');
     }
 
-    public function expenseSupplierIndex(): View|RedirectResponse
+    public function expenseSupplierIndex(Request $request): View|RedirectResponse
     {
         if ($redirect = $this->redirectIfNoOpenCashShift()) {
             return $redirect;
@@ -279,10 +372,52 @@ class BankCashController extends Controller
 
         $branchId = (int) auth()->user()->branch_id;
 
+        $counterpartyFilterIdRaw = $request->query('counterparty_id');
+        $counterpartyFilterId = is_numeric($counterpartyFilterIdRaw)
+            ? (int) $counterpartyFilterIdRaw
+            : null;
+        if ($counterpartyFilterId !== null && $counterpartyFilterId <= 0) {
+            $counterpartyFilterId = null;
+        }
+
+        $q = trim((string) $request->query('q', ''));
+
+        $filterCounterpartyLabel = '';
+        if ($counterpartyFilterId !== null) {
+            $fcp = Counterparty::query()
+                ->where('branch_id', $branchId)
+                ->find($counterpartyFilterId);
+            if ($fcp !== null) {
+                $filterCounterpartyLabel = trim((string) $fcp->full_name);
+                if ($filterCounterpartyLabel === '') {
+                    $filterCounterpartyLabel = Counterparty::buildFullName($fcp->legal_form, (string) $fcp->name);
+                }
+            } else {
+                $counterpartyFilterId = null;
+            }
+        }
+
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
-            ->with(['ourAccount.organization', 'counterparty', 'user'])
+            ->with([
+                'ourAccount',
+                'counterparty' => static fn ($q) => $q->select('id', 'name', 'full_name', 'legal_form'),
+                'user' => static fn ($q) => $q->select('id', 'name'),
+            ])
+            ->when($counterpartyFilterId !== null, function ($query) use ($counterpartyFilterId) {
+                $query->where('counterparty_id', $counterpartyFilterId);
+            })
+            ->when($counterpartyFilterId === null && $q !== '', function ($query) use ($q) {
+                $pattern = '%'.$q.'%';
+                $query->whereHas('counterparty', function ($cp) use ($pattern) {
+                    $cp->where(function ($sub) use ($pattern) {
+                        $sub->where('name', 'like', $pattern)
+                            ->orWhere('full_name', 'like', $pattern)
+                            ->orWhere('inn', 'like', $pattern);
+                    });
+                });
+            })
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)
@@ -290,6 +425,9 @@ class BankCashController extends Controller
 
         return view('admin.bank.expense-supplier.index', [
             'movements' => $movements,
+            'searchQuery' => $q,
+            'filterCounterpartyId' => $counterpartyFilterId,
+            'filterCounterpartyLabel' => $filterCounterpartyLabel,
         ]);
     }
 
@@ -424,7 +562,10 @@ class BankCashController extends Controller
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
-            ->with(['ourAccount.organization', 'user'])
+            ->with([
+                'ourAccount',
+                'user' => static fn ($q) => $q->select('id', 'name'),
+            ])
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)
@@ -524,7 +665,11 @@ class BankCashController extends Controller
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_TRANSFER)
-            ->with(['fromAccount.organization', 'toAccount.organization', 'user'])
+            ->with([
+                'fromAccount',
+                'toAccount',
+                'user' => static fn ($q) => $q->select('id', 'name'),
+            ])
             ->orderByDesc('occurred_on')
             ->orderByDesc('id')
             ->limit(500)

@@ -95,11 +95,12 @@
             </style>
 
             @php
-                $crFormUrls = [
-                    'goodsSearch' => route('admin.goods.search'),
-                    'counterpartySearch' => route('admin.counterparties.search', ['for' => 'sale']),
-                    'counterpartyQuick' => route('admin.counterparties.quick-store'),
-                ];
+                    $crFormUrls = [
+                        'goodsSearch' => route('admin.goods.search'),
+                        'goodsQuickStore' => route('admin.goods.quick-store'),
+                        'counterpartySearch' => route('admin.counterparties.search', ['for' => 'sale']),
+                        'counterpartyQuick' => route('admin.counterparties.quick-store'),
+                    ];
             @endphp
             <script>
                 window.__customerReturnInit = {
@@ -337,6 +338,7 @@
                                     >
                                         <td class="ob-num" x-text="index + 1"></td>
                                         <td class="min-w-[10rem]">
+                                            <input type="hidden" :name="`lines[${index}][good_id]`" x-model="row.good_id" />
                                             <input
                                                 type="text"
                                                 :name="`lines[${index}][name]`"
@@ -428,6 +430,7 @@
                         </button>
                     </div>
                 </div>
+            @include('admin.partials.good-quick-create-modal', ['idPrefix' => 'les'])
             </form>
         @endif
     </div>

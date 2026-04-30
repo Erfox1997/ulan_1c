@@ -30,7 +30,8 @@ class CounterpartySearchController extends Controller
                 ->where('kind', Counterparty::KIND_BUYER)
                 ->where(function ($q) use ($like) {
                     $q->where('name', 'like', $like)
-                        ->orWhere('full_name', 'like', $like);
+                        ->orWhere('full_name', 'like', $like)
+                        ->orWhere('inn', 'like', $like);
                 })
                 ->orderBy('name')
                 ->limit(25)
@@ -46,7 +47,8 @@ class CounterpartySearchController extends Controller
             ->where('branch_id', (int) $branchId)
             ->where(function ($q) use ($like) {
                 $q->where('name', 'like', $like)
-                    ->orWhere('full_name', 'like', $like);
+                    ->orWhere('full_name', 'like', $like)
+                    ->orWhere('inn', 'like', $like);
             });
 
         if ($for === 'sale') {

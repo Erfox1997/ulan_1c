@@ -45,7 +45,8 @@ class PurchaseReceiptController extends Controller
         $recentReceipts = PurchaseReceipt::query()
             ->where('branch_id', $branchId)
             ->when($selectedWarehouseId > 0, fn ($q) => $q->where('warehouse_id', $selectedWarehouseId))
-            ->with(['warehouse', 'lines'])
+            ->with(['warehouse'])
+            ->withCount('lines')
             ->orderByDesc('document_date')
             ->orderByDesc('id')
             ->limit(500)
@@ -96,6 +97,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
+                    'good_id' => (string) ($line['good_id'] ?? ''),
                     'markup_percent' => (string) ($line['markup_percent'] ?? ''),
                     'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                     'quantity' => (string) ($line['quantity'] ?? ''),
@@ -142,6 +144,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) ($line['article_code'] ?? ''),
                     'name' => (string) ($line['name'] ?? ''),
                     'barcode' => (string) ($line['barcode'] ?? ''),
+                    'good_id' => (string) ($line['good_id'] ?? ''),
                     'markup_percent' => (string) ($line['markup_percent'] ?? ''),
                     'unit' => trim((string) ($line['unit'] ?? '')) ?: 'шт.',
                     'quantity' => (string) ($line['quantity'] ?? ''),
@@ -160,6 +163,7 @@ class PurchaseReceiptController extends Controller
                     'article_code' => (string) $line->article_code,
                     'name' => (string) $line->name,
                     'barcode' => $good?->barcode ? (string) $good->barcode : '',
+                    'good_id' => $line->good_id !== null ? (string) $line->good_id : '',
                     'markup_percent' => self::impliedMarkupPercentHint($line->unit_price, $line->sale_price),
                     'unit' => trim((string) ($line->unit ?? '')) ?: 'шт.',
                     'quantity' => (string) $line->quantity,

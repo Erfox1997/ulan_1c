@@ -167,8 +167,14 @@ class GoodSearchController extends Controller
                     ->orWhere('goods.category', 'like', $like)
                     ->orWhere('goods.oem', 'like', $like)
                     ->orWhere('goods.factory_number', 'like', $like);
+                // Только для запросов без букв (напр. штрихкод / чисто цифры): иначе «acv50» давало бы
+                // «50» и подтягивало лишние позиции, тогда как «acv5» так не ломалось (одна цифра < 2).
                 $barcodeDigits = preg_replace('/\D+/', '', $token);
-                if ($barcodeDigits !== '' && strlen($barcodeDigits) >= 2) {
+                if (
+                    $barcodeDigits !== ''
+                    && strlen($barcodeDigits) >= 2
+                    && ! preg_match('/\p{L}/u', $token)
+                ) {
                     $q->orWhereRaw(
                         "REPLACE(REPLACE(COALESCE(goods.barcode, ''), ' ', ''), '-', '') like ?",
                         ['%'.$barcodeDigits.'%']

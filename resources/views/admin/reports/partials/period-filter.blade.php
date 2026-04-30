@@ -2,8 +2,21 @@
     'action',
     'filterFrom',
     'filterTo',
+    /** @var array<string, scalar|null> $preserveQuery */
+    'preserveQuery' => [],
+    /** Если false — только поля периода (без &lt;form&gt;), для вложения в родительскую форму. */
+    'wrapForm' => true,
 ])
-<form method="GET" action="{{ $action }}" class="flex flex-wrap items-end gap-3">
+@if ($wrapForm)
+    <form method="GET" action="{{ $action }}" class="flex flex-wrap items-end gap-3">
+@else
+    <div class="flex flex-wrap items-end gap-3">
+@endif
+    @foreach ($preserveQuery ?? [] as $paramName => $paramValue)
+        @if ($paramValue !== null && $paramValue !== '')
+            <input type="hidden" name="{{ $paramName }}" value="{{ $paramValue }}" />
+        @endif
+    @endforeach
     <div>
         <label class="mb-1 block text-xs font-semibold text-slate-700">С даты</label>
         <input
@@ -30,4 +43,8 @@
     >
         Сформировать
     </button>
-</form>
+@if ($wrapForm)
+    </form>
+@else
+    </div>
+@endif

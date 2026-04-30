@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+    /* Таблицы сменных отчётов: заголовки — однотонный зелёный + белый текст (не теряются из‑за порядка в CSS / purge). */
+    .shift-report-table thead th {
+        background-color: #047857;
+        color: #fff;
+        font-weight: 600;
+        border: 1px solid #065f46;
+    }
+}
+
 [x-cloak] {
     display: none !important;
 }

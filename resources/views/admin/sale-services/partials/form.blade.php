@@ -45,6 +45,26 @@
             />
             <x-input-error class="mt-1.5 text-xs text-red-700" :messages="$errors->get('unit')" />
         </div>
+        <div class="col-span-2 min-w-0 max-sm:col-span-1">
+            <label for="svc_category">Категория</label>
+            <input
+                id="svc_category"
+                name="category"
+                type="text"
+                class="mt-1 w-full"
+                value="{{ old('category', $service->category ?? '') }}"
+                maxlength="120"
+                list="svc_category_datalist"
+                placeholder="Выберите или введите новую"
+                autocomplete="off"
+            />
+            <datalist id="svc_category_datalist">
+                @foreach ($serviceCategories ?? [] as $c)
+                    <option value="{{ $c }}"></option>
+                @endforeach
+            </datalist>
+            <x-input-error class="mt-1.5 text-xs text-red-700" :messages="$errors->get('category')" />
+        </div>
         <div class="min-w-0">
             <label for="svc_price">Цена (сом)</label>
             <input

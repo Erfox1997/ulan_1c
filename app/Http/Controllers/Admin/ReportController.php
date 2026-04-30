@@ -4,23 +4,26 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreGoodsCharacteristicsRequest;
-use App\Models\CashMovement;
 use App\Models\CashShift;
+use App\Models\Good;
 use App\Models\OrganizationBankAccount;
-use App\Models\RetailSale;
-use App\Models\RetailSaleRefund;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\BranchReportService;
 use App\Services\CashLedgerService;
 use App\Services\GoodsCharacteristicsService;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\Response;
 
 class ReportController extends Controller
 {
@@ -30,6 +33,9 @@ class ReportController extends Controller
     private const GOODS_CHARACTERISTICS_PER_PAGE = 50;
 
     private const GOODS_MOVEMENT_PER_PAGE = 75;
+
+    /** Совпадает с логикой trade.sale-goods: параметр категории «без категории». */
+    private const GOODS_MOVEMENT_NO_CATEGORY = '__no_category__';
 
     private const GOODS_STOCK_HISTORICAL_PER_PAGE = 100;
 
@@ -246,7 +252,9 @@ class ReportController extends Controller
             $needle = mb_strtolower($searchQuery, 'UTF-8');
             $allRows = $allRows->filter(function (array $r) use ($needle): bool {
                 $hay = mb_strtolower(
-                    ($r['article'] ?? '') . ' ' . ($r['name'] ?? ''),
+                    ($r['article'] ?? '')
+                    .' '.($r['name'] ?? '')
+                    .' '.($r['category'] ?? ''),
                     'UTF-8'
                 );
 
@@ -256,15 +264,110 @@ class ReportController extends Controller
 
         $totals = $this->aggregateGoodsMovementTotals($allRows);
 
+        $detailGoodId = max(0, (int) $request->integer('good', 0));
+        if ($detailGoodId > 0) {
+            $detailRow = $allRows->first(fn (array $r) => (int) ($r['good_id'] ?? 0) === $detailGoodId);
+            if ($detailRow === null) {
+                return redirect()->route('admin.reports.goods-movement', Arr::except($request->query(), ['good', 'category', 'page']));
+            }
+            $catRaw = trim((string) ($detailRow['category'] ?? ''));
+            $detailCategoryKey = $catRaw === '' ? self::GOODS_MOVEMENT_NO_CATEGORY : $catRaw;
+            $detailCategoryTitle = $catRaw === '' ? 'Без категории' : $catRaw;
+
+            $ledgerRows = $this->reports->goodMovementLedgerForGoodInPeriod(
+                $branchId,
+                $detailGoodId,
+                $from,
+                $to,
+                $warehouseId,
+                400
+            )->map(fn (array $r): array => [
+                'date_human' => (string) $r['date_human'],
+                'label' => (string) $r['label'],
+                'warehouse' => (string) $r['warehouse'],
+                'quantity' => (float) $r['quantity'],
+                'direction' => (string) $r['direction'],
+            ])->values()->all();
+
+            return view('admin.reports.goods-movement', [
+                'pageTitle' => 'Движение товаров',
+                'viewMode' => 'good',
+                'warehouses' => $warehouses,
+                'selectedWarehouseId' => $warehouseId,
+                'detailRow' => $detailRow,
+                'detailGoodId' => $detailGoodId,
+                'detailCategoryKey' => $detailCategoryKey,
+                'detailCategoryTitle' => $detailCategoryTitle,
+                'ledgerRows' => $ledgerRows,
+                'totals' => $totals,
+                'catalogGoodsCount' => $catalogGoodsCount,
+                'filteredGoodsCount' => $allRows->count(),
+                'categoryGoodsCount' => null,
+                'searchQuery' => $searchQuery,
+                'onlyWithMovement' => $onlyWithMovement,
+                'filterFrom' => $from->format('Y-m-d'),
+                'filterTo' => $to->format('Y-m-d'),
+                'categories' => collect(),
+                'rowsPaginator' => null,
+                'categoryTitle' => null,
+                'selectedCategoryKey' => null,
+                'totalsInCategory' => null,
+            ]);
+        }
+
+        $rawCategory = $request->query('category');
+
+        if ($rawCategory === null || ! is_string($rawCategory) || trim($rawCategory) === '') {
+            return view('admin.reports.goods-movement', [
+                'pageTitle' => 'Движение товаров',
+                'viewMode' => 'categories',
+                'categories' => $this->goodsMovementCategoryFolders($allRows),
+                'warehouses' => $warehouses,
+                'selectedWarehouseId' => $warehouseId,
+                'totals' => $totals,
+                'catalogGoodsCount' => $catalogGoodsCount,
+                'filteredGoodsCount' => $allRows->count(),
+                'categoryGoodsCount' => null,
+                'searchQuery' => $searchQuery,
+                'onlyWithMovement' => $onlyWithMovement,
+                'filterFrom' => $from->format('Y-m-d'),
+                'filterTo' => $to->format('Y-m-d'),
+                'rowsPaginator' => null,
+                'detailRow' => null,
+                'detailGoodId' => null,
+                'detailCategoryKey' => null,
+                'detailCategoryTitle' => null,
+                'categoryTitle' => null,
+                'selectedCategoryKey' => null,
+                'totalsInCategory' => null,
+            ]);
+        }
+
+        $categoryQueryParam = trim($rawCategory);
+        $categoryFilter = $categoryQueryParam === self::GOODS_MOVEMENT_NO_CATEGORY ? '' : $categoryQueryParam;
+
+        $categoryRows = $allRows->filter(function (array $r) use ($categoryFilter): bool {
+            $c = trim((string) ($r['category'] ?? ''));
+
+            if ($categoryFilter === '') {
+                return $c === '';
+            }
+
+            return $c === $categoryFilter;
+        })->values();
+
+        $categoryTitle = $categoryFilter === '' ? 'Без категории' : $categoryFilter;
+        $totalsInCategory = $this->aggregateGoodsMovementTotals($categoryRows);
+
         $page = max(1, (int) $request->integer('page', 1));
-        $total = $allRows->count();
+        $total = $categoryRows->count();
         $lastPage = max(1, (int) ceil($total / self::GOODS_MOVEMENT_PER_PAGE));
         if ($page > $lastPage) {
             $page = $lastPage;
         }
 
         $rowsPaginator = new LengthAwarePaginator(
-            $allRows->forPage($page, self::GOODS_MOVEMENT_PER_PAGE)->values(),
+            $categoryRows->forPage($page, self::GOODS_MOVEMENT_PER_PAGE)->values(),
             $total,
             self::GOODS_MOVEMENT_PER_PAGE,
             $page,
@@ -278,33 +381,95 @@ class ReportController extends Controller
 
         return view('admin.reports.goods-movement', [
             'pageTitle' => 'Движение товаров',
+            'viewMode' => 'goods',
+            'categories' => collect(),
             'warehouses' => $warehouses,
             'selectedWarehouseId' => $warehouseId,
             'rowsPaginator' => $rowsPaginator,
             'totals' => $totals,
+            'totalsInCategory' => $totalsInCategory,
             'catalogGoodsCount' => $catalogGoodsCount,
-            'filteredGoodsCount' => $total,
+            'filteredGoodsCount' => $allRows->count(),
+            'categoryGoodsCount' => $total,
             'searchQuery' => $searchQuery,
             'onlyWithMovement' => $onlyWithMovement,
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
+            'detailRow' => null,
+            'detailGoodId' => null,
+            'detailCategoryKey' => null,
+            'detailCategoryTitle' => null,
+            'categoryTitle' => $categoryTitle,
+            'selectedCategoryKey' => $categoryQueryParam,
         ]);
     }
 
-    public function cashMovement(Request $request): View
+    /** JSON: журнал движений по товару (для модального окна отчёта «Движение товаров»). */
+    public function goodsMovementLedgerData(Request $request): JsonResponse
     {
         $branchId = (int) auth()->user()->branch_id;
         [$from, $to] = $this->parsePeriod($request);
+        $warehouseId = (int) $request->integer('warehouse_id');
+        $goodId = max(0, (int) $request->integer('good_id'));
 
-        $daily = $this->cashLedger->movementDailyByKind($branchId, $from, $to);
+        $allowedWh = Warehouse::query()
+            ->where('branch_id', $branchId)
+            ->pluck('id')
+            ->all();
 
-        return view('admin.reports.cash-movement', [
-            'summary' => $this->cashLedger->periodAccountSummary($branchId, $from, $to),
-            'dailyRows' => $daily['rows'],
-            'dailyTotals' => $daily['totals'],
-            'filterFrom' => $from->format('Y-m-d'),
-            'filterTo' => $to->format('Y-m-d'),
+        if ($warehouseId !== 0 && ! in_array($warehouseId, $allowedWh, true)) {
+            $warehouseId = 0;
+        }
+
+        if ($goodId <= 0) {
+            return response()->json(['message' => 'Не указан товар.'], 422);
+        }
+
+        $rows = $this->reports->goodMovementLedgerForGoodInPeriod(
+            $branchId,
+            $goodId,
+            $from,
+            $to,
+            $warehouseId,
+            400
+        );
+
+        return response()->json([
+            'rows' => $rows->map(fn (array $r): array => [
+                'date_human' => (string) $r['date_human'],
+                'label' => (string) $r['label'],
+                'warehouse' => (string) $r['warehouse'],
+                'quantity' => (float) $r['quantity'],
+                'direction' => (string) $r['direction'],
+            ])->values()->all(),
         ]);
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return Collection<int, array{label: string, count: int, category_key: string}>
+     */
+    private function goodsMovementCategoryFolders(Collection $rows): Collection
+    {
+        $groups = $rows->groupBy(function (array $r): string {
+            $c = trim((string) ($r['category'] ?? ''));
+
+            return $c === '' ? '' : $c;
+        })->map(fn (Collection $group, string $key): array => [
+            'label' => $key === '' ? 'Без категории' : $key,
+            'count' => $group->count(),
+            'category_key' => $key === '' ? self::GOODS_MOVEMENT_NO_CATEGORY : $key,
+        ]);
+
+        return $groups->values()->sort(function (array $a, array $b): int {
+            $aUncat = $a['category_key'] === self::GOODS_MOVEMENT_NO_CATEGORY;
+            $bUncat = $b['category_key'] === self::GOODS_MOVEMENT_NO_CATEGORY;
+            if ($aUncat !== $bUncat) {
+                return $aUncat ? 1 : -1;
+            }
+
+            return strcasecmp((string) $a['label'], (string) $b['label']);
+        })->values();
     }
 
     public function cashBalances(Request $request): View
@@ -329,16 +494,109 @@ class ReportController extends Controller
         [$from, $to] = $this->parsePeriod($request);
         $data = $this->reports->salesByGoods($branchId, $from, $to);
 
+        $filterGoodId = (int) $request->integer('good_id');
+        $filterGood = null;
+        $filterGoodSummary = '';
+        if ($filterGoodId > 0) {
+            $filterGood = Good::query()
+                ->where('branch_id', $branchId)
+                ->whereKey($filterGoodId)
+                ->first();
+            if ($filterGood === null) {
+                $filterGoodId = 0;
+            } else {
+                $code = trim((string) $filterGood->article_code);
+                $name = trim((string) $filterGood->name);
+                $filterGoodSummary = $code !== '' && $name !== ''
+                    ? $code.' · '.$name
+                    : ($name !== '' ? $name : ($code !== '' ? $code : '—'));
+            }
+        }
+
+        $goodsCatRaw = $request->query('goods_category');
+        $goodsCategorySelected = is_string($goodsCatRaw) && trim($goodsCatRaw) !== ''
+            ? trim($goodsCatRaw)
+            : null;
+
+        $svcCatRaw = $request->query('services_category');
+        $servicesCategorySelected = is_string($svcCatRaw) && trim($svcCatRaw) !== ''
+            ? trim($svcCatRaw)
+            : null;
+
+        $goodsRows = $data['rows'];
+        $serviceRows = $data['serviceRows'];
+
+        if ($filterGoodId > 0 && $filterGood !== null) {
+            $goodsRows = $goodsRows->where('good_id', $filterGoodId)->values();
+            $serviceRows = $serviceRows->where('good_id', $filterGoodId)->values();
+            $cat = trim((string) $filterGood->category);
+            if ($cat === '') {
+                $cat = 'Без категории';
+            }
+            if ($filterGood->is_service) {
+                $servicesCategorySelected = $cat;
+                $goodsCategorySelected = null;
+            } else {
+                $goodsCategorySelected = $cat;
+                $servicesCategorySelected = null;
+            }
+        }
+
+        $goodsBlock = $this->recomputeSalesByGoodsAggregates($goodsRows);
+        $svcBlock = $this->recomputeSalesByGoodsAggregates($serviceRows);
+
+        $goodsByCategory = $goodsBlock['rows']->groupBy('category');
+        $goodsFolderRows = collect($goodsBlock['categoryRows'])
+            ->map(function (array $cr) use ($goodsByCategory): array {
+                $grp = $goodsByCategory->get($cr['category']) ?? collect();
+
+                return array_merge($cr, [
+                    'goods_count' => $grp->count(),
+                    'quantity_sum' => round((float) $grp->sum('quantity'), 2),
+                ]);
+            })
+            ->values();
+
+        $servicesByCategory = $svcBlock['rows']->groupBy('category');
+        $serviceFolderRows = collect($svcBlock['categoryRows'])
+            ->map(function (array $cr) use ($servicesByCategory): array {
+                $grp = $servicesByCategory->get($cr['category']) ?? collect();
+
+                return array_merge($cr, [
+                    'goods_count' => $grp->count(),
+                    'quantity_sum' => round((float) $grp->sum('quantity'), 2),
+                ]);
+            })
+            ->values();
+
+        $filteredGoodsRows = collect();
+        if ($goodsCategorySelected !== null) {
+            $filteredGoodsRows = (($goodsByCategory->get($goodsCategorySelected)) ?? collect())->values();
+        }
+
+        $filteredServiceRows = collect();
+        if ($servicesCategorySelected !== null) {
+            $filteredServiceRows = (($servicesByCategory->get($servicesCategorySelected)) ?? collect())->values();
+        }
+
         return view('admin.reports.sales-by-goods', [
             'pageTitle' => 'Продажи по товарам и услугам',
-            'rows' => $data['rows'],
-            'categoryRows' => $data['categoryRows'],
-            'totalRevenue' => $data['totalRevenue'],
-            'serviceRows' => $data['serviceRows'],
-            'serviceCategoryRows' => $data['serviceCategoryRows'],
-            'totalServiceRevenue' => $data['totalServiceRevenue'],
+            'rows' => $goodsBlock['rows'],
+            'categoryRows' => $goodsBlock['categoryRows'],
+            'totalRevenue' => $goodsBlock['totalRevenue'],
+            'serviceRows' => $svcBlock['rows'],
+            'serviceCategoryRows' => $svcBlock['categoryRows'],
+            'totalServiceRevenue' => $svcBlock['totalRevenue'],
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
+            'goodsFolderRows' => $goodsFolderRows,
+            'serviceFolderRows' => $serviceFolderRows,
+            'goodsCategorySelected' => $goodsCategorySelected,
+            'servicesCategorySelected' => $servicesCategorySelected,
+            'filteredGoodsRows' => $filteredGoodsRows,
+            'filteredServiceRows' => $filteredServiceRows,
+            'filterGoodId' => $filterGoodId,
+            'filterGoodSummary' => $filterGoodSummary,
         ]);
     }
 
@@ -374,25 +632,40 @@ class ReportController extends Controller
         ]);
     }
 
-    public function expensesByCategory(Request $request): View
+    public function netProfit(Request $request): View
     {
         $branchId = (int) auth()->user()->branch_id;
         [$from, $to] = $this->parsePeriod($request);
-        $rows = $this->reports->expensesByCategory($branchId, $from, $to);
+        $summary = $this->reports->netProfitCashSummary($branchId, $from, $to);
 
-        return view('admin.reports.expenses-by-category', [
-            'pageTitle' => 'Расходы по категориям',
-            'rows' => $rows,
+        return view('admin.reports.net-profit', [
+            'pageTitle' => 'Чистая прибыль',
+            'summary' => $summary,
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
         ]);
+    }
+
+    public function netProfitDetail(Request $request): JsonResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $kind = trim((string) $request->query('kind', ''));
+
+        try {
+            $data = $this->reports->netProfitCashDetail($branchId, $from, $to, $kind);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage() ?: 'Некорректный запрос.'], 422);
+        }
+
+        return response()->json($data);
     }
 
     public function turnover(Request $request): View
     {
         $branchId = (int) auth()->user()->branch_id;
         [$from, $to] = $this->parsePeriod($request);
-        $osv = $this->reports->cashTurnoverOsv($branchId, $from, $to);
+        $osv = $this->reports->fullTurnoverOsv($branchId, $from, $to);
         $user = $request->user();
         $user?->loadMissing('branch');
         $branch = $user?->branch;
@@ -405,6 +678,35 @@ class ReportController extends Controller
             'filterTo' => $to->format('Y-m-d'),
             'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
         ]);
+    }
+
+    public function turnoverDetail(Request $request): JsonResponse
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        $accountId = $request->integer('account_id');
+        if ($accountId === 0) {
+            return response()->json(['message' => 'Укажите счёт.'], 422);
+        }
+        $from = Carbon::parse((string) $request->query('from'))->startOfDay();
+        $to = Carbon::parse((string) $request->query('to'))->startOfDay();
+        if ($to->lt($from)) {
+            [$from, $to] = [$to, $from];
+        }
+        $kind = (string) $request->query('kind');
+
+        try {
+            if ($accountId < 0) {
+                $data = $this->reports->turnoverOsvSyntheticDetail($branchId, $accountId, $kind, $from, $to);
+            } else {
+                $data = $this->cashLedger->turnoverOsvCellDetail($branchId, $accountId, $from, $to, $kind);
+            }
+        } catch (ModelNotFoundException) {
+            return response()->json(['message' => 'Счёт не найден или недоступен для этого филиала.'], 404);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage() ?: 'Неизвестный тип ячейки.'], 422);
+        }
+
+        return response()->json($data);
     }
 
     public function shiftReport(Request $request): View
@@ -428,20 +730,7 @@ class ReportController extends Controller
             ->paginate(20)
             ->withQueryString();
 
-        $summaries = [];
-        foreach ($shifts as $shift) {
-            $until = $shift->closed_at ?? Carbon::now();
-            $net = $this->cashLedger->netCashChangeByAccountInShiftWindow(
-                $branchId,
-                $shift->opened_at,
-                $until,
-                (int) $shift->user_id
-            );
-            $summaries[$shift->id] = [
-                'opening_total' => $this->shiftOpeningTotal($shift),
-                'movement_total' => round((float) array_sum($net), 2),
-            ];
-        }
+        $summaries = $this->shiftSummariesForCollection($branchId, $shifts->getCollection());
 
         return view('admin.reports.shift-report', [
             'pageTitle' => 'Сменный отчёт',
@@ -452,6 +741,111 @@ class ReportController extends Controller
             'filterFrom' => $from->format('Y-m-d'),
             'filterTo' => $to->format('Y-m-d'),
         ]);
+    }
+
+    public function salesByClientsPdf(Request $request): Response
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $data = $this->reports->salesByClients($branchId, $from, $to);
+        $filename = 'prodazhi-po-klientam-'.$from->format('Y-m-d').'-'.$to->format('Y-m-d').'.pdf';
+
+        return Pdf::loadView('admin.reports.pdf.sales-by-clients', [
+            'pageTitle' => 'Продажи по клиентам',
+            'rows' => $data['rows'],
+            'totals' => $data['totals'],
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
+            'branchName' => $request->user()?->branch?->name,
+        ])->setPaper('a4', 'portrait')->download($filename);
+    }
+
+    public function grossProfitPdf(Request $request): Response
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $data = $this->reports->grossProfit($branchId, $from, $to);
+        $filename = 'valovaya-pribyl-'.$from->format('Y-m-d').'-'.$to->format('Y-m-d').'.pdf';
+
+        return Pdf::loadView('admin.reports.pdf.gross-profit', [
+            'pageTitle' => 'Валовая прибыль',
+            'revenue' => $data['revenue'],
+            'cost' => $data['cost'],
+            'profit' => $data['profit'],
+            'lines' => $data['lines'],
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
+            'branchName' => $request->user()?->branch?->name,
+        ])->setPaper('a4', 'landscape')->download($filename);
+    }
+
+    public function netProfitPdf(Request $request): Response
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $summary = $this->reports->netProfitCashSummary($branchId, $from, $to);
+        $filename = 'chistaya-pribyl-'.$from->format('Y-m-d').'-'.$to->format('Y-m-d').'.pdf';
+
+        return Pdf::loadView('admin.reports.pdf.net-profit', [
+            'pageTitle' => 'Чистая прибыль',
+            'summary' => $summary,
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
+            'branchName' => $request->user()?->branch?->name,
+        ])->setPaper('a4', 'portrait')->download($filename);
+    }
+
+    public function turnoverPdf(Request $request): Response
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $osv = $this->reports->fullTurnoverOsv($branchId, $from, $to);
+        $user = $request->user();
+        $user?->loadMissing('branch');
+        $filename = 'oborotno-saldovaya-'.$from->format('Y-m-d').'-'.$to->format('Y-m-d').'.pdf';
+
+        return Pdf::loadView('admin.reports.pdf.turnover', [
+            'pageTitle' => 'Оборотно-сальдовая ведомость',
+            'osv' => $osv,
+            'branchName' => $user?->branch?->name,
+            'filterFrom' => $from->format('Y-m-d'),
+            'filterTo' => $to->format('Y-m-d'),
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
+        ])->setPaper('a4', 'landscape')->download($filename);
+    }
+
+    public function shiftReportPdf(Request $request): Response
+    {
+        $branchId = (int) auth()->user()->branch_id;
+        [$from, $to] = $this->parsePeriod($request);
+        $cashierId = (int) $request->integer('user_id');
+
+        $users = User::query()
+            ->where('branch_id', $branchId)
+            ->orderBy('name')
+            ->get();
+
+        $shifts = CashShift::query()
+            ->where('branch_id', $branchId)
+            ->where('opened_at', '>=', $from->copy()->startOfDay())
+            ->where('opened_at', '<=', $to->copy()->endOfDay())
+            ->when($cashierId > 0, fn ($q) => $q->where('user_id', $cashierId))
+            ->with('user')
+            ->orderByDesc('opened_at')
+            ->get();
+
+        $summaries = $this->shiftSummariesForCollection($branchId, collect($shifts->all()));
+        $cashierLabel = $cashierId > 0
+            ? ($users->firstWhere('id', $cashierId)?->name ?? '—')
+            : 'Все';
+
+        $filename = 'smennyy-otchet-'.$from->format('Y-m-d').'-'.$to->format('Y-m-d').'.pdf';
+
+        return Pdf::loadView('admin.reports.pdf.shift-report', [
+            'pageTitle' => 'Сменный отчёт',
+            'shifts' => $shifts,
+            'summaries' => $summaries,
+            'periodLabel' => 'с '.$from->format('d.m.Y').' по '.$to->format('d.m.Y'),
+            'branchName' => $request->user()?->branch?->name,
+            'cashierLabel' => $cashierLabel,
+        ])->setPaper('a4', 'landscape')->download($filename);
     }
 
     public function shiftReportShow(CashShift $cashShift): View
@@ -466,36 +860,12 @@ class ReportController extends Controller
             $until,
             (int) $cashShift->user_id
         );
-
-        $retailSales = RetailSale::query()
-            ->where('branch_id', $branchId)
-            ->where('user_id', $cashShift->user_id)
-            ->where('created_at', '>=', $cashShift->opened_at)
-            ->where('created_at', '<=', $until)
-            ->with(['payments.organizationBankAccount'])
-            ->orderBy('created_at')
-            ->orderBy('id')
-            ->get();
-
-        $cashMovements = CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('user_id', $cashShift->user_id)
-            ->where('created_at', '>=', $cashShift->opened_at)
-            ->where('created_at', '<=', $until)
-            ->with(['ourAccount', 'fromAccount', 'toAccount', 'counterparty'])
-            ->orderBy('created_at')
-            ->orderBy('id')
-            ->get();
-
-        $refunds = RetailSaleRefund::query()
-            ->where('created_at', '>=', $cashShift->opened_at)
-            ->where('created_at', '<=', $until)
-            ->whereHas('customerReturn', fn ($q) => $q->where('branch_id', $branchId))
-            ->whereHas('retailSale', fn ($q) => $q->where('user_id', $cashShift->user_id))
-            ->with(['customerReturn', 'retailSale', 'organizationBankAccount'])
-            ->orderBy('created_at')
-            ->orderBy('id')
-            ->get();
+        $kindDetailLists = $this->cashLedger->shiftKindDetailLists(
+            $branchId,
+            $cashShift->opened_at,
+            $until,
+            (int) $cashShift->user_id
+        );
 
         $cashShift->load('user');
 
@@ -523,12 +893,9 @@ class ReportController extends Controller
         return view('admin.reports.shift-report-show', [
             'pageTitle' => 'Смена № '.$cashShift->id,
             'shift' => $cashShift,
-            'until' => $until,
             'closingTable' => $closingTable,
             'kindBreakdown' => $kindBreakdown,
-            'retailSales' => $retailSales,
-            'cashMovements' => $cashMovements,
-            'refunds' => $refunds,
+            'kindDetailLists' => $kindDetailLists,
             'closingFactRows' => $closingFactRows,
         ]);
     }
@@ -660,7 +1027,7 @@ class ReportController extends Controller
     }
 
     /**
-     * @param  LengthAwarePaginator<\App\Models\Good>  $paginator
+     * @param  LengthAwarePaginator<Good>  $paginator
      * @return list<array<string, mixed>>
      */
     private function buildGoodsCharacteristicsLinesForForm(LengthAwarePaginator $paginator): array
@@ -820,19 +1187,19 @@ class ReportController extends Controller
 
         return mb_strtolower(
             $article
-            . ' ' . (string) ($r['name'] ?? '')
-            . ' ' . $barcode
-            . ' ' . (string) ($r['category'] ?? '')
-            . ' ' . $oem
-            . ' ' . $factory
-            . ' ' . (string) ($r['warehouse'] ?? '')
-            . ' ' . (string) ($r['good_id'] ?? '')
-            . ' ' . $articleCompact
-            . ' ' . $barcodeCompact
+            .' '.(string) ($r['name'] ?? '')
+            .' '.$barcode
+            .' '.(string) ($r['category'] ?? '')
+            .' '.$oem
+            .' '.$factory
+            .' '.(string) ($r['warehouse'] ?? '')
+            .' '.(string) ($r['good_id'] ?? '')
+            .' '.$articleCompact
+            .' '.$barcodeCompact
             // Варианты без пробелов и дефисов — один и тот же ОЭМ в разных карточках часто пишут по-разному
-            . ' ' . $oemCompact
-            . ' ' . $factoryCompact
-            . ' ' . $articleTokenCompact,
+            .' '.$oemCompact
+            .' '.$factoryCompact
+            .' '.$articleTokenCompact,
             'UTF-8'
         );
     }
@@ -854,6 +1221,75 @@ class ReportController extends Controller
         }
 
         return round((float) $shift->opening_cash, 2);
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, CashShift>  $shifts
+     * @return array<int, array{opening_total: float, movement_total: float}>
+     */
+    private function shiftSummariesForCollection(int $branchId, Collection $shifts): array
+    {
+        $summaries = [];
+        foreach ($shifts as $shift) {
+            $until = $shift->closed_at ?? Carbon::now();
+            $net = $this->cashLedger->netCashChangeByAccountInShiftWindow(
+                $branchId,
+                $shift->opened_at,
+                $until,
+                (int) $shift->user_id
+            );
+            $summaries[$shift->id] = [
+                'opening_total' => $this->shiftOpeningTotal($shift),
+                'movement_total' => round((float) array_sum($net), 2),
+            ];
+        }
+
+        return $summaries;
+    }
+
+    /**
+     * Пересчёт долей и сводки по категориям после фильтрации строк (например по good_id).
+     *
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return array{
+     *     rows: Collection<int, array<string, mixed>>,
+     *     categoryRows: Collection<int, array{category: string, revenue: float, revenue_share_pct: float}>,
+     *     totalRevenue: float
+     * }
+     */
+    private function recomputeSalesByGoodsAggregates(Collection $rows): array
+    {
+        $totalRevenue = round((float) $rows->sum('revenue'), 2);
+        $rows = $rows->map(function (array $row) use ($totalRevenue): array {
+            $pct = $totalRevenue > 0.0
+                ? round((float) $row['revenue'] / $totalRevenue * 100, 2)
+                : 0.0;
+
+            return $row + ['revenue_share_pct' => $pct];
+        })->values();
+
+        $categoryRows = $rows
+            ->groupBy('category')
+            ->map(function (Collection $group) use ($totalRevenue): array {
+                $revenue = round((float) $group->sum('revenue'), 2);
+                $pct = $totalRevenue > 0.0
+                    ? round($revenue / $totalRevenue * 100, 2)
+                    : 0.0;
+
+                return [
+                    'category' => (string) $group->first()['category'],
+                    'revenue' => $revenue,
+                    'revenue_share_pct' => $pct,
+                ];
+            })
+            ->sortByDesc('revenue')
+            ->values();
+
+        return [
+            'rows' => $rows,
+            'categoryRows' => $categoryRows,
+            'totalRevenue' => $totalRevenue,
+        ];
     }
 
     /**

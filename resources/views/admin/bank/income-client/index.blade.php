@@ -1,14 +1,88 @@
 @php
     $fmtMoney = static fn ($v): string => number_format((float) $v, 2, ',', ' ');
+    $cpIdFilter = isset($filterCounterpartyId) && $filterCounterpartyId !== null ? (int) $filterCounterpartyId : null;
+    $hasSearch =
+        $cpIdFilter !== null
+        || (isset($searchQuery) && $searchQuery !== '');
+    $filterInputValue =
+        $cpIdFilter !== null && isset($filterCounterpartyLabel) && $filterCounterpartyLabel !== ''
+            ? $filterCounterpartyLabel
+            : ($searchQuery ?? '');
+    $bankMovementCpListFilterInit = [
+        'searchUrl' => route('admin.counterparties.search', ['for' => 'sale']),
+        'listUrl' => route('admin.bank.income-client'),
+        'initialValue' => $filterInputValue,
+        'appliedCounterpartyId' => $cpIdFilter,
+        'allowedKinds' => ['buyer', 'other'],
+    ];
 @endphp
 <x-admin-layout pageTitle="Приход: оплата от покупателя" main-class="bg-slate-100/80 px-3 py-5 sm:px-6 lg:px-8">
+    <style>
+        .income-client-cp-dd {
+            max-height: 16rem;
+            overflow-y: auto;
+            border: 1px solid rgb(226 232 240);
+            border-radius: 0.75rem;
+            background: #fff;
+            box-shadow:
+                0 10px 15px -3px rgb(15 23 42 / 0.12),
+                0 4px 6px -4px rgb(15 23 42 / 0.08);
+        }
+        .income-client-cp-dd button.cp-row-in {
+            display: flex;
+            width: 100%;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+            font-size: 0.8125rem;
+            line-height: 1.35;
+            border: 0;
+            border-bottom: 1px solid rgb(241 245 249);
+            background: #fff;
+            cursor: pointer;
+            color: rgb(15 23 42);
+        }
+        .income-client-cp-dd button.cp-row-in:last-of-type {
+            border-bottom: 0;
+        }
+        .income-client-cp-dd button.cp-row-in:hover,
+        .income-client-cp-dd button.cp-row-in:focus {
+            background: rgb(240 249 255);
+            outline: none;
+        }
+        .income-client-cp-dd .cp-kind-in {
+            font-size: 10px;
+            font-weight: 600;
+            color: rgb(100 116 139);
+        }
+        .income-client-cp-dd .cp-foot-in {
+            padding: 0.5rem 0.75rem;
+            font-size: 11px;
+            line-height: 1.4;
+            color: rgb(100 116 139);
+            background: rgb(248 250 252);
+            border-top: 1px solid rgb(241 245 249);
+        }
+    </style>
+
     <div class="mx-auto w-full max-w-5xl space-y-4">
         @include('admin.partials.status-flash')
 
         <div class="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div class="min-w-0">
                 <p class="text-[11px] font-bold uppercase tracking-[0.14em] text-sky-800/90">Банк и касса</p>
-                <p class="mt-0.5 text-sm text-slate-600">Операции прихода от покупателей по филиалу (последние 500 записей).</p>
+                <p class="mt-0.5 text-sm text-slate-600">
+                    Операции прихода от покупателей по филиалу (последние 500 записей).
+                    @if ($hasSearch)
+                        @if ($cpIdFilter !== null)
+                            Фильтр по контрагенту: «{{ $filterCounterpartyLabel }}».
+                        @else
+                            Поиск по тексту: «{{ $searchQuery }}».
+                        @endif
+                    @endif
+                </p>
             </div>
             <a
                 href="{{ route('admin.bank.income-client.create') }}"
@@ -17,6 +91,84 @@
                 + Создать операцию
             </a>
         </div>
+
+        <script>
+            window.__bankMovementCpListFilterInit = @json($bankMovementCpListFilterInit);
+        </script>
+
+        <form
+            method="get"
+            action="{{ route('admin.bank.income-client') }}"
+            class="rounded-2xl border border-slate-200/90 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.04] sm:flex sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-3"
+            role="search"
+            x-data="bankMovementCpListFilter()"
+            @keydown.escape.window="onCpEscape()"
+            @submit="submitTextSearch($event)"
+        >
+            <div class="relative min-w-0 flex-1" x-ref="bankCpListFilterRoot">
+                <label for="income_client_q" class="mb-1 block text-xs font-semibold text-slate-600">Клиент (контрагент)</label>
+                <input
+                    id="income_client_q"
+                    type="search"
+                    autocomplete="off"
+                    x-model="query"
+                    x-on:input="onCpInput($event)"
+                    x-on:focus="onCpFocus($event)"
+                    x-on:blur="onCpBlur()"
+                    class="min-h-[2.75rem] w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner shadow-slate-900/[0.03] placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/25"
+                    placeholder="Введите от 2 букв — список под полем"
+                />
+
+                <div
+                    x-cloak
+                    x-show="showCpDropdown()"
+                    class="income-client-cp-dd fixed z-[220]"
+                    role="listbox"
+                    aria-label="Подходящие контрагенты"
+                    @mousedown.prevent
+                    x-bind:style="'top:' + cpPos.top + 'px;left:' + cpPos.left + 'px;width:' + cpPos.width + 'px'"
+                >
+                    <div x-show="cpLoading" class="cp-foot-in text-slate-600">Поиск…</div>
+                    <template x-for="item in cpItems" :key="item.id">
+                        <button
+                            type="button"
+                            class="cp-row-in"
+                            @mousedown.prevent
+                            x-on:click="pickCounterparty(item)"
+                            role="option"
+                        >
+                            <span x-text="item.full_name || item.name"></span>
+                            <span class="cp-kind-in" x-text="kindLabel(item.kind)"></span>
+                        </button>
+                    </template>
+                    <div
+                        x-show="!cpLoading && cpNoHits && cpItems.length === 0"
+                        class="cp-foot-in"
+                        x-cloak
+                    >
+                        Нет совпадений в справочнике.&nbsp;<span class="font-medium text-slate-700">Найти по тексту</span> можно кнопкой ниже —
+                        по строке в наименовании, полном имени или ИНН.
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-2 flex shrink-0 flex-wrap gap-2 sm:mt-7">
+                <button
+                    type="submit"
+                    class="inline-flex min-h-[2.75rem] items-center justify-center rounded-xl border border-sky-700/25 bg-sky-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
+                >
+                    Найти по тексту
+                </button>
+                @if ($hasSearch)
+                    <a
+                        href="{{ route('admin.bank.income-client') }}"
+                        class="inline-flex min-h-[2.75rem] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+                    >
+                        Сбросить
+                    </a>
+                @endif
+            </div>
+        </form>
 
         <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-md ring-1 ring-slate-900/[0.04]">
             <div
@@ -71,7 +223,17 @@
                         @empty
                             <tr>
                                 <td colspan="6" class="px-4 py-12 text-center text-sm text-slate-500">
-                                    Пока нет операций. Нажмите «Создать операцию», чтобы записать приход от покупателя.
+                                    @if ($hasSearch)
+                                        @if ($cpIdFilter !== null)
+                                            По выбранному контрагенту операций не найдено.
+                                            <a href="{{ route('admin.bank.income-client') }}" class="font-semibold text-sky-800 underline decoration-sky-400 underline-offset-2 hover:text-sky-950">Показать все</a>
+                                        @else
+                                            По запросу «{{ $searchQuery }}» операций не найдено.
+                                            <a href="{{ route('admin.bank.income-client') }}" class="font-semibold text-sky-800 underline decoration-sky-400 underline-offset-2 hover:text-sky-950">Показать все</a>
+                                        @endif
+                                    @else
+                                        Пока нет операций. Нажмите «Создать операцию», чтобы записать приход от покупателя.
+                                    @endif
                                 </td>
                             </tr>
                         @endforelse

@@ -19,18 +19,36 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class CounterpartyController extends Controller
 {
-    public function index(): View
+    public function index(Request $request): View
     {
         $branchId = (int) auth()->user()->branch_id;
 
+        $q = trim((string) $request->query('q', ''));
+
         $counterparties = Counterparty::query()
             ->where('branch_id', $branchId)
-            ->withCount('bankAccounts')
+            ->withCount('bankAccounts');
+
+        if ($q !== '') {
+            $like = '%'.$this->escapeLikePattern($q).'%';
+            $counterparties->where(function ($query) use ($like) {
+                $query->where('name', 'like', $like)
+                    ->orWhere('full_name', 'like', $like)
+                    ->orWhere('phone', 'like', $like)
+                    ->orWhere('inn', 'like', $like)
+                    ->orWhere('address', 'like', $like);
+            });
+        }
+
+        $counterparties = $counterparties
             ->orderBy('kind')
             ->orderBy('name')
             ->get();
 
-        return view('admin.counterparties.index', compact('counterparties'));
+        return view('admin.counterparties.index', [
+            'counterparties' => $counterparties,
+            'searchQuery' => $q,
+        ]);
     }
 
     public function create(): View
@@ -359,5 +377,10 @@ class CounterpartyController extends Controller
         if ((int) $counterparty->branch_id !== (int) auth()->user()->branch_id) {
             abort(403);
         }
+    }
+
+    private function escapeLikePattern(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
     }
 }

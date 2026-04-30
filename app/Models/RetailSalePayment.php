@@ -11,6 +11,7 @@ class RetailSalePayment extends Model
         'retail_sale_id',
         'organization_bank_account_id',
         'amount',
+        'recorded_by_user_id',
     ];
 
     protected function casts(): array
@@ -23,6 +24,11 @@ class RetailSalePayment extends Model
     public function retailSale(): BelongsTo
     {
         return $this->belongsTo(RetailSale::class);
+    }
+
+    public function recordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recorded_by_user_id');
     }
 
     public function organizationBankAccount(): BelongsTo

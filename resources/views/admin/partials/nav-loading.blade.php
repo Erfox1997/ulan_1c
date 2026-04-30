@@ -92,11 +92,8 @@
                 if (u.origin !== window.location.origin) {
                     return false;
                 }
-                if (
-                    u.pathname === window.location.pathname &&
-                    u.search === window.location.search &&
-                    u.hash !== ''
-                ) {
+                // Тот же путь без полной перезагрузки — браузер не откроет новую страницу, pageshow не сработает
+                if (u.pathname === window.location.pathname && u.search === window.location.search) {
                     return false;
                 }
             } catch (e) {
@@ -108,18 +105,24 @@
         document.addEventListener(
             'click',
             function (e) {
+                if (e.defaultPrevented) {
+                    return;
+                }
                 var a = e.target.closest('a');
                 if (!a || !adminNavShouldShowForLink(a)) {
                     return;
                 }
                 adminNavShowLoading();
             },
-            true
+            false
         );
 
         document.addEventListener(
             'submit',
             function (e) {
+                if (e.defaultPrevented) {
+                    return;
+                }
                 var form = e.target;
                 if (!(form instanceof HTMLFormElement)) {
                     return;
@@ -129,7 +132,7 @@
                 }
                 adminNavShowLoading();
             },
-            true
+            false
         );
 
         window.addEventListener('pageshow', function () {

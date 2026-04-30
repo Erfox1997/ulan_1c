@@ -57,6 +57,7 @@
                 @php
                     $crFormUrls = [
                         'goodsSearch' => route('admin.goods.search'),
+                        'goodsQuickStore' => route('admin.goods.quick-store'),
                         'counterpartySearch' => route('admin.counterparties.search', ['for' => 'sale']),
                         'counterpartyQuick' => route('admin.counterparties.quick-store'),
                     ];
@@ -295,6 +296,7 @@
                                                     >
                                                         <td class="ob-num" x-text="index + 1"></td>
                                                         <td class="min-w-[10rem]">
+                                                            <input type="hidden" :name="`lines[${index}][good_id]`" x-model="row.good_id" />
                                                             <input
                                                                 type="text"
                                                                 :name="`lines[${index}][name]`"
@@ -383,6 +385,7 @@
                             </div>
                         </div>
                     </form>
+                    @include('admin.partials.good-quick-create-modal', ['idPrefix' => 'les'])
                 </div>
             @endif
         @endif

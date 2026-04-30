@@ -35,6 +35,7 @@ class StoreLegalEntitySaleRequest extends FormRequest
             'comment' => ['nullable', 'string', 'max:5000'],
             'issue_esf' => ['sometimes', 'boolean'],
             'lines' => ['required', 'array'],
+            'lines.*.good_id' => ['nullable', 'string', 'max:32'],
             'lines.*.article_code' => ['nullable', 'string', 'max:128'],
             'lines.*.name' => ['nullable', 'string', 'max:500'],
             'lines.*.barcode' => ['nullable', 'string', 'max:128'],
@@ -114,9 +115,7 @@ class StoreLegalEntitySaleRequest extends FormRequest
                             $availText = '0';
                         }
                         $goodName = trim((string) ($good->name ?? ''));
-                        $itemLabel = $goodName !== ''
-                            ? '«'.$code.'», наименование: «'.$goodName.'»'
-                            : '«'.$code.'»';
+                        $itemLabel = $goodName !== '' ? '«'.$goodName.'»' : '«'.$code.'»';
                         $v->errors()->add(
                             "lines.{$i}.quantity",
                             'На складе недостаточно '.$itemLabel.' (доступно: '.$availText.').'

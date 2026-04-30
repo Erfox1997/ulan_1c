@@ -181,7 +181,7 @@
                                                     —
                                                 @endif
                                             </td>
-                                            <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-900">{{ $r->lines->count() }}</td>
+                                            <td class="border border-slate-300 whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-slate-900">{{ $r->lines_count }}</td>
                                             <td data-doc-action class="border border-slate-300 px-2 py-2 text-center" @click.stop>
                                                 <form
                                                     method="POST"

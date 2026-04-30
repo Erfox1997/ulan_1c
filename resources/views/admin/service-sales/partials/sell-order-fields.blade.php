@@ -50,8 +50,7 @@
                 @input.debounce.300ms="searchCp()"
                 @keydown.escape="cpOpen = false"
                 autocomplete="off"
-                placeholder="Начните вводить имя или наименование…"
-                class="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                class="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
             <button
                 type="button"
@@ -102,23 +101,31 @@
             value="{{ old('contact_name', $o?->contact_name) }}"
             required
             autocomplete="name"
-            placeholder="Кто примет работу или представляет клиента"
-            class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
         />
-        <p class="mt-1 text-[11px] text-slate-500">Отдельно от наименования в поле «Клиент» (ОсОО, ИП и т.д.).</p>
     </div>
 
     <div class="space-y-2">
         <div class="flex flex-wrap items-end justify-between gap-2">
             <label class="block text-[10px] font-bold uppercase text-slate-500">Автомобиль *</label>
-            <button
-                type="button"
-                class="text-xs font-semibold text-emerald-700 hover:underline disabled:opacity-40"
-                :disabled="!counterpartyId"
-                @click="openVehicleModal()"
-            >
-                Добавить авто
-            </button>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <button
+                    type="button"
+                    class="text-xs font-semibold text-emerald-700 hover:underline disabled:opacity-40"
+                    :disabled="!counterpartyId"
+                    @click="openVehicleModal()"
+                >
+                    Добавить авто
+                </button>
+                <button
+                    type="button"
+                    class="text-xs font-semibold text-sky-800 hover:underline disabled:opacity-40"
+                    :disabled="!customerVehicleId || !vehicleHistoryUrlBase"
+                    @click="openVehicleHistory()"
+                >
+                    История машины
+                </button>
+            </div>
         </div>
         <select
             name="customer_vehicle_id"
@@ -168,8 +175,7 @@
             id="svc_req_notes"
             name="notes"
             rows="2"
-            class="mt-1 w-full resize-y rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-            placeholder="Необязательно"
+            class="mt-1 w-full resize-y rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm leading-snug text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
         >{{ old('notes', $o?->notes) }}</textarea>
     </div>
 
@@ -204,7 +210,6 @@
                         type="text"
                         x-model="quickName"
                         class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm text-slate-900"
-                        placeholder="Как в договоре или паспорте"
                     />
                 </div>
                 <div>
@@ -214,7 +219,6 @@
                         x-model="quickPhone"
                         inputmode="tel"
                         class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm text-slate-900"
-                        placeholder="+996 …"
                     />
                 </div>
                 <p x-show="quickError" class="text-sm text-red-600" x-text="quickError"></p>
@@ -277,7 +281,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-slate-700">Объём двигателя</label>
-                    <input type="text" x-model="vEngine" placeholder="напр. 2.0" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm" />
+                    <input type="text" x-model="vEngine" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm" />
                 </div>
                 <div class="sm:col-span-2">
                     <label class="block text-xs font-semibold text-slate-700">Гос. номер</label>
@@ -300,6 +304,79 @@
                     @click="saveVehicle()"
                 >
                     Сохранить
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {{-- Модальное окно: история визитов по автомобилю --}}
+    <div
+        x-cloak
+        x-show="vehicleHistoryOpen"
+        class="fixed inset-0 z-[300] flex items-end justify-center bg-black/40 p-3 sm:items-center"
+        @keydown.escape.window="closeVehicleHistory()"
+    >
+        <div
+            class="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+            @click.outside="closeVehicleHistory()"
+        >
+            <div class="shrink-0 border-b border-slate-100 bg-slate-50/90 px-4 py-3">
+                <h3 class="text-sm font-bold text-slate-900">История машины</h3>
+                <p
+                    class="mt-1 text-xs text-slate-600"
+                    x-show="vehicleHistoryPayload && vehicleHistoryPayload.vehicle"
+                    x-text="vehicleHistoryPayload && vehicleHistoryPayload.vehicle ? vehicleHistoryPayload.vehicle.label : ''"
+                ></p>
+            </div>
+            <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                <div x-show="vehicleHistoryLoading" class="py-8 text-center text-sm text-slate-500">Загрузка…</div>
+                <p x-show="vehicleHistoryError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" x-text="vehicleHistoryError"></p>
+                <template x-if="vehicleHistoryPayload && !vehicleHistoryLoading && !vehicleHistoryError">
+                    <div class="space-y-4">
+                        <template x-if="!vehicleHistoryPayload.visits || vehicleHistoryPayload.visits.length === 0">
+                            <p class="text-sm text-slate-600">По этому автомобилю пока нет сохранённых заявок (или все отменены).</p>
+                        </template>
+                        <template x-for="visit in (vehicleHistoryPayload.visits || [])" :key="visit.service_order_id + '-' + visit.document_date">
+                            <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                                <div class="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-100 pb-2">
+                                    <div class="text-sm font-semibold text-slate-900">
+                                        <span x-text="formatVisitDate(visit.document_date)"></span>
+                                        <span class="text-slate-400"> · </span>
+                                        Пробег <span class="tabular-nums text-slate-800" x-text="mileageDisplay(visit.mileage_km)"></span>
+                                    </div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="text-[11px] font-medium text-slate-500">№ <span class="font-mono" x-text="visit.service_order_id"></span></span>
+                                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700" x-text="visitStatusLabel(visit.status)"></span>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    <p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Услуги</p>
+                                    <template x-if="visit.services && visit.services.length">
+                                        <ul class="mt-1 space-y-1 text-sm text-slate-800">
+                                            <template x-for="(svc, si) in visit.services" :key="si">
+                                                <li class="flex gap-2">
+                                                    <span class="min-w-0 flex-1" x-text="svc.name"></span>
+                                                    <span class="shrink-0 tabular-nums text-slate-600" x-text="'× ' + svc.quantity"></span>
+                                                </li>
+                                            </template>
+                                        </ul>
+                                    </template>
+                                    <template x-if="!visit.services || visit.services.length === 0">
+                                        <p class="mt-1 text-xs text-slate-500">Услуги в строках не найдены (учитываются позиции с типом «услуга» или с исполнителем).</p>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+            <div class="shrink-0 border-t border-slate-100 bg-slate-50/90 px-4 py-3 text-right">
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    @click="closeVehicleHistory()"
+                >
+                    Закрыть
                 </button>
             </div>
         </div>
