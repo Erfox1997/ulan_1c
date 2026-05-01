@@ -46,11 +46,19 @@
             text-align: left;
         }
         table.grid td.num { text-align: right; white-space: nowrap; }
+        table.grid td.section {
+            font-size: 8pt;
+            font-weight: bold;
+            background: #f5f5f5;
+            color: #333;
+        }
         tfoot th, tfoot td {
             font-weight: bold;
             background: #e8f5e9;
             font-size: 10pt;
         }
+        .sub td { font-size: 8.5pt; color: #444; }
+        .sub td:first-child { padding-left: 14px; }
     </style>
 </head>
 <body>
@@ -62,49 +70,78 @@
         Период: {{ $periodLabel }}
     </div>
     <p class="hint">
-        Свод по статьям движения денег: поступления минус выплаты (переводы между счетами не учитываются).
-        Детализация по строкам доступна только на экране отчёта.
+        Отчёт о финансовых результатах (упрощённо): выручка и себестоимость по документам продаж и возвратов;
+        операционные расходы и прочие доходы — по дате записи в журнале «Банк и касса». Не является отчётом о движении денежных средств.
+        Итог — прибыль до налога на прибыль (налог в системе не ведётся). Детализация по строкам — в экранной версии отчёта.
     </p>
     <table class="grid">
         <thead>
             <tr>
-                <th>Статья</th>
-                <th style="width: 35%">Сумма</th>
+                <th>Показатель</th>
+                <th style="width: 38%">Сумма</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>Приход от покупателя</td>
-                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['income_client']) }}</td>
+                <td>Выручка — реализация товаров</td>
+                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_goods']) }}</td>
             </tr>
             <tr>
-                <td>Приход прочие</td>
-                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['income_other']) }}</td>
+                <td>Выручка — услуги</td>
+                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_services']) }}</td>
             </tr>
             <tr>
-                <td>Расход поставщику</td>
-                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['expense_supplier']) }}</td>
+                <td>Возвраты от покупателей</td>
+                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['returns_revenue']) }}</td>
             </tr>
             <tr>
-                <td>Прочие расходы (без зарплаты)</td>
-                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['expense_other']) }}</td>
+                <td><strong>Итого выручка</strong></td>
+                <td class="num"><strong>{{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_net']) }}</strong></td>
             </tr>
             <tr>
-                <td>Продажа физлицам (оплаты по чекам)</td>
-                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['retail_payments']) }}</td>
+                <td colspan="2" class="section">Себестоимость</td>
+            </tr>
+            @if ($summary['cogs_goods_sold'] > 0.00001 || $summary['cogs_returns_reversal'] > 0.00001)
+                <tr class="sub">
+                    <td>в т.ч. себестоимость проданных товаров</td>
+                    <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_goods_sold']) }}</td>
+                </tr>
+                <tr class="sub">
+                    <td>в т.ч. уменьшение на возвраты на склад</td>
+                    <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_returns_reversal']) }}</td>
+                </tr>
+            @endif
+            <tr>
+                <td>Себестоимость продаж (нетто)</td>
+                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_net']) }}</td>
             </tr>
             <tr>
-                <td>Возврат покупателю (розница)</td>
-                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['retail_refunds']) }}</td>
+                <td><strong>Валовая прибыль</strong></td>
+                <td class="num"><strong>{{ InvoiceNakladnayaFormatter::formatMoney($summary['gross_profit']) }}</strong></td>
             </tr>
             <tr>
-                <td>Выплаты зарплаты и авансы</td>
-                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['payroll_advances_total']) }}</td>
+                <td colspan="2" class="section">Операционные расходы (факт оплаты)</td>
+            </tr>
+            <tr>
+                <td>Зарплата</td>
+                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['opex_salary']) }}</td>
+            </tr>
+            <tr>
+                <td>Прочие операционные расходы</td>
+                <td class="num">− {{ InvoiceNakladnayaFormatter::formatMoney($summary['opex_other']) }}</td>
+            </tr>
+            <tr>
+                <td><strong>Прибыль от продаж</strong></td>
+                <td class="num"><strong>{{ InvoiceNakladnayaFormatter::formatMoney($summary['operating_profit']) }}</strong></td>
+            </tr>
+            <tr>
+                <td>Прочие доходы</td>
+                <td class="num">+ {{ InvoiceNakladnayaFormatter::formatMoney($summary['other_income']) }}</td>
             </tr>
         </tbody>
         <tfoot>
             <tr>
-                <th>Чистая прибыль</th>
+                <th>Чистая прибыль (до налога на прибыль)</th>
                 <td class="num">{{ InvoiceNakladnayaFormatter::formatMoney($summary['net_profit']) }}</td>
             </tr>
         </tfoot>

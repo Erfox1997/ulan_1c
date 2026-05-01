@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\CashMovement;
 use App\Models\Counterparty;
 use App\Models\CustomerReturnLine;
-use App\Models\EmployeeAdvance;
 use App\Models\Good;
 use App\Models\LegalEntitySale;
 use App\Models\LegalEntitySaleLine;
@@ -16,7 +15,6 @@ use App\Models\PurchaseReturnLine;
 use App\Models\RetailSale;
 use App\Models\RetailSaleLine;
 use App\Models\RetailSalePayment;
-use App\Models\RetailSaleRefund;
 use App\Models\StockSurplusLine;
 use App\Models\StockTransferLine;
 use App\Models\StockWriteoffLine;
@@ -1320,25 +1318,31 @@ class BranchReportService
     }
 
     /**
-     * Сводный отчёт «чистая прибыль» за период: денежные поступления минус выплаты по выбранным статьям.
+     * Упрощённый отчёт о финансовых результатах («чистая прибыль»): логика близка к форме ОФР при ограниченном наборе данных в системе.
      *
-     * — Приход от покупателя / прочие приходы / расход поставщику / прочие расходы — из журнала «Банк и касса» (дата операции).
-     * — Прочие расходы без выплат зарплаты (категория «Зарплата» учитывается отдельной строкой).
-     * — Розница: оплаты по чекам за период и возвраты покупателю (денежная выплата по возврату) по дате документа возврата — отдельные строки в отчёте, в итоге считаются как оплаты минус возвраты.
-     * — Авансы: суммы записей модуля «Авансы» по дате записи (отдельный учёт от проводок кассы).
-     * Переводы между счетами не включаются.
+     * — Выручка (товары и услуги) и уменьшение на возвраты — по дате документа реализации / возврата.
+     * — Себестоимость проданных товаров и корректировка на возвраты товаров на склад — по тем же продажам/возвратам и учётным ценам остатков (как в отчёте «Валовая прибыль»).
+     * — Услуги учитываются в выручке; отдельная себестоимость услуг в модуле не списывается.
+     * — Операционные расходы (зарплата и прочие) — по дате операции в журнале «Банк и касса» (факт оплаты). Категория расхода «Зарплата» выделена отдельно.
+     * — Прочие доходы — проводки «Приход прочие» в том же журнале.
+     * — Оплаты от покупателей и поставщикам в результат не включаются (иначе двойной учёт с выручкой и себестоимостью).
+     * — Авансы сотрудникам — расчёты, не расход периода по ОФР.
+     * — Налог на прибыль в системе не ведётся: итог — прибыль до налогообложения.
      *
      * @return array{
-     *     income_client: float,
-     *     income_other: float,
-     *     expense_supplier: float,
-     *     expense_other: float,
-     *     retail_payments: float,
-     *     retail_refunds: float,
-     *     retail_net: float,
-     *     salary_payouts: float,
-     *     employee_advances: float,
-     *     payroll_advances_total: float,
+     *     revenue_goods: float,
+     *     revenue_services: float,
+     *     returns_revenue: float,
+     *     revenue_net: float,
+     *     cogs_goods_sold: float,
+     *     cogs_returns_reversal: float,
+     *     cogs_net: float,
+     *     gross_profit: float,
+     *     opex_salary: float,
+     *     opex_other: float,
+     *     opex_total: float,
+     *     operating_profit: float,
+     *     other_income: float,
      *     net_profit: float
      * }
      */
@@ -1347,28 +1351,43 @@ class BranchReportService
         $fromStr = $from->format('Y-m-d');
         $toStr = $to->format('Y-m-d');
 
-        $incomeClient = (float) CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_INCOME_CLIENT)
-            ->whereDate('occurred_on', '>=', $fromStr)
-            ->whereDate('occurred_on', '<=', $toStr)
-            ->sum('amount');
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $revenueGoods = round((float) $gp['revenue'], 2);
+        $cogsGoodsSold = round((float) $gp['cost'], 2);
 
-        $incomeOther = (float) CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_INCOME_OTHER)
-            ->whereDate('occurred_on', '>=', $fromStr)
-            ->whereDate('occurred_on', '<=', $toStr)
-            ->sum('amount');
+        $retailServicesRev = (float) RetailSaleLine::query()
+            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_lines.retail_sale_id')
+            ->where('rs.branch_id', $branchId)
+            ->whereDate('rs.document_date', '>=', $fromStr)
+            ->whereDate('rs.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('retail_sale_lines.line_sum');
 
-        $expenseSupplier = (float) CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_EXPENSE_SUPPLIER)
-            ->whereDate('occurred_on', '>=', $fromStr)
-            ->whereDate('occurred_on', '<=', $toStr)
-            ->sum('amount');
+        $legalServicesRev = (float) LegalEntitySaleLine::query()
+            ->join('legal_entity_sales as ls', 'ls.id', '=', 'legal_entity_sale_lines.legal_entity_sale_id')
+            ->where('ls.branch_id', $branchId)
+            ->whereDate('ls.document_date', '>=', $fromStr)
+            ->whereDate('ls.document_date', '<=', $toStr)
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->sum('legal_entity_sale_lines.line_sum');
 
-        $salaryPayouts = (float) CashMovement::query()
+        $revenueServices = round($retailServicesRev + $legalServicesRev, 2);
+
+        $returnsRevenue = round((float) CustomerReturnLine::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'customer_return_lines.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->sum('customer_return_lines.line_sum'), 2);
+
+        $resolveCost = $this->buildCostResolverForBranch($branchId);
+        $cogsReturnsReversal = $this->sumCustomerReturnStockCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $revenueNet = round($revenueGoods + $revenueServices - $returnsRevenue, 2);
+        $cogsNet = round($cogsGoodsSold - $cogsReturnsReversal, 2);
+        $grossProfit = round($revenueNet - $cogsNet, 2);
+
+        $opexSalary = (float) CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
             ->whereDate('occurred_on', '>=', $fromStr)
@@ -1376,7 +1395,7 @@ class BranchReportService
             ->whereRaw("TRIM(COALESCE(expense_category, '')) = ?", ['Зарплата'])
             ->sum('amount');
 
-        $expenseOther = (float) CashMovement::query()
+        $opexOther = (float) CashMovement::query()
             ->where('branch_id', $branchId)
             ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
             ->whereDate('occurred_on', '>=', $fromStr)
@@ -1384,46 +1403,32 @@ class BranchReportService
             ->whereRaw("TRIM(COALESCE(expense_category, '')) != ?", ['Зарплата'])
             ->sum('amount');
 
-        $retailPayments = (float) RetailSalePayment::query()
-            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
-            ->where('rs.branch_id', $branchId)
-            ->whereDate('rs.document_date', '>=', $fromStr)
-            ->whereDate('rs.document_date', '<=', $toStr)
-            ->sum('retail_sale_payments.amount');
+        $opexTotal = round($opexSalary + $opexOther, 2);
+        $operatingProfit = round($grossProfit - $opexTotal, 2);
 
-        $retailRefunds = (float) RetailSaleRefund::query()
-            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
-            ->where('cr.branch_id', $branchId)
-            ->whereDate('cr.document_date', '>=', $fromStr)
-            ->whereDate('cr.document_date', '<=', $toStr)
-            ->sum('retail_sale_refunds.amount');
-
-        $retailNet = round($retailPayments - $retailRefunds, 2);
-
-        $employeeAdvances = (float) EmployeeAdvance::query()
+        $otherIncome = round((float) CashMovement::query()
             ->where('branch_id', $branchId)
-            ->whereDate('entry_date', '>=', $fromStr)
-            ->whereDate('entry_date', '<=', $toStr)
-            ->sum('amount');
+            ->where('kind', CashMovement::KIND_INCOME_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->sum('amount'), 2);
 
-        $payrollAdvancesTotal = round($salaryPayouts + $employeeAdvances, 2);
-
-        $netProfit = round(
-            $incomeClient + $incomeOther + $retailNet - $expenseSupplier - $expenseOther - $salaryPayouts - $employeeAdvances,
-            2
-        );
+        $netProfit = round($operatingProfit + $otherIncome, 2);
 
         return [
-            'income_client' => round($incomeClient, 2),
-            'income_other' => round($incomeOther, 2),
-            'expense_supplier' => round($expenseSupplier, 2),
-            'expense_other' => round($expenseOther, 2),
-            'retail_payments' => round($retailPayments, 2),
-            'retail_refunds' => round($retailRefunds, 2),
-            'retail_net' => $retailNet,
-            'salary_payouts' => round($salaryPayouts, 2),
-            'employee_advances' => round($employeeAdvances, 2),
-            'payroll_advances_total' => $payrollAdvancesTotal,
+            'revenue_goods' => $revenueGoods,
+            'revenue_services' => $revenueServices,
+            'returns_revenue' => $returnsRevenue,
+            'revenue_net' => $revenueNet,
+            'cogs_goods_sold' => $cogsGoodsSold,
+            'cogs_returns_reversal' => round($cogsReturnsReversal, 2),
+            'cogs_net' => $cogsNet,
+            'gross_profit' => $grossProfit,
+            'opex_salary' => round($opexSalary, 2),
+            'opex_other' => round($opexOther, 2),
+            'opex_total' => $opexTotal,
+            'operating_profit' => $operatingProfit,
+            'other_income' => $otherIncome,
             'net_profit' => $netProfit,
         ];
     }
@@ -1444,15 +1449,13 @@ class BranchReportService
     public function netProfitCashDetail(int $branchId, CarbonInterface $from, CarbonInterface $to, string $kind): array
     {
         $allowed = [
-            'income_client',
-            'income_other',
-            'expense_supplier',
-            'expense_other',
-            'retail_payments',
-            'retail_refunds',
-            'salary_payouts',
-            'employee_advances',
-            'payroll_advances',
+            'revenue_goods',
+            'revenue_services',
+            'returns_revenue',
+            'cogs',
+            'opex_salary',
+            'opex_other',
+            'other_income',
             'net_profit',
         ];
         if (! in_array($kind, $allowed, true)) {
@@ -1464,15 +1467,13 @@ class BranchReportService
         $periodLabel = $from->format('d.m.Y').' — '.$to->format('d.m.Y');
 
         return match ($kind) {
-            'income_client' => $this->netProfitDetailIncomeClient($branchId, $fromStr, $toStr, $periodLabel),
-            'income_other' => $this->netProfitDetailIncomeOther($branchId, $fromStr, $toStr, $periodLabel),
-            'expense_supplier' => $this->netProfitDetailExpenseSupplier($branchId, $fromStr, $toStr, $periodLabel),
-            'expense_other' => $this->netProfitDetailExpenseOther($branchId, $fromStr, $toStr, $periodLabel),
-            'retail_payments' => $this->netProfitDetailRetailPayments($branchId, $fromStr, $toStr, $periodLabel),
-            'retail_refunds' => $this->netProfitDetailRetailRefunds($branchId, $fromStr, $toStr, $periodLabel),
-            'salary_payouts' => $this->netProfitDetailSalary($branchId, $fromStr, $toStr, $periodLabel),
-            'employee_advances' => $this->netProfitDetailEmployeeAdvances($branchId, $fromStr, $toStr, $periodLabel),
-            'payroll_advances' => $this->netProfitDetailPayrollCombined($branchId, $fromStr, $toStr, $periodLabel),
+            'revenue_goods' => $this->netProfitDetailRevenueGoods($branchId, $from, $to, $periodLabel),
+            'revenue_services' => $this->netProfitDetailRevenueServices($branchId, $fromStr, $toStr, $periodLabel),
+            'returns_revenue' => $this->netProfitDetailReturnsRevenue($branchId, $fromStr, $toStr, $periodLabel),
+            'cogs' => $this->netProfitDetailCogs($branchId, $from, $to, $periodLabel),
+            'opex_salary' => $this->netProfitDetailOpexSalary($branchId, $fromStr, $toStr, $periodLabel),
+            'opex_other' => $this->netProfitDetailOpexOther($branchId, $fromStr, $toStr, $periodLabel),
+            'other_income' => $this->netProfitDetailOtherIncome($branchId, $fromStr, $toStr, $periodLabel),
             'net_profit' => $this->netProfitDetailNetProfitComposition($branchId, $from, $to, $periodLabel),
         };
     }
@@ -1480,80 +1481,226 @@ class BranchReportService
     /**
      * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
      */
-    private function netProfitDetailIncomeClient(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    private function netProfitDetailRevenueGoods(int $branchId, CarbonInterface $from, CarbonInterface $to, string $periodLabel): array
     {
-        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_INCOME_CLIENT);
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $rows = [];
+        foreach ($gp['lines'] as $line) {
+            $rows[] = [
+                'article' => (string) ($line['article'] ?? ''),
+                'name' => (string) ($line['name'] ?? ''),
+                'quantity' => (string) $line['quantity'],
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $line['revenue']),
+            ];
+        }
+        $total = round((float) $gp['revenue'], 2);
 
-        return $this->netProfitDetailPackCash(
-            'Приход от покупателя',
-            $periodLabel,
-            $movements,
-            (float) $movements->sum('amount'),
-            '+'
-        );
+        return [
+            'title' => 'Выручка — товары',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'article', 'label' => 'Артикул'],
+                ['key' => 'name', 'label' => 'Наименование'],
+                ['key' => 'quantity', 'label' => 'Кол-во'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+            ],
+            'rows' => $rows,
+            'total' => $total,
+            'total_formatted' => '+ '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет продаж товаров за выбранный период.',
+        ];
     }
 
     /**
      * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
      */
-    private function netProfitDetailIncomeOther(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    private function netProfitDetailRevenueServices(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
     {
-        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_INCOME_OTHER);
+        $agg = [];
 
-        return $this->netProfitDetailPackCash(
-            'Приход прочие',
-            $periodLabel,
-            $movements,
-            (float) $movements->sum('amount'),
-            '+'
-        );
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
-    private function netProfitDetailExpenseSupplier(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_EXPENSE_SUPPLIER);
-
-        return $this->netProfitDetailPackCash(
-            'Расход поставщику',
-            $periodLabel,
-            $movements,
-            (float) $movements->sum('amount'),
-            '−'
-        );
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
-    private function netProfitDetailExpenseOther(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $movements = CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
-            ->whereDate('occurred_on', '>=', $fromStr)
-            ->whereDate('occurred_on', '<=', $toStr)
-            ->whereRaw("TRIM(COALESCE(expense_category, '')) != ?", ['Зарплата'])
-            ->with(['counterparty', 'ourAccount'])
-            ->orderByDesc('occurred_on')
-            ->orderByDesc('id')
+        $retailLines = RetailSaleLine::query()
+            ->with(['good'])
+            ->whereHas('retailSale', fn ($q) => $q->where('branch_id', $branchId)
+                ->whereDate('document_date', '>=', $fromStr)
+                ->whereDate('document_date', '<=', $toStr))
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
             ->get();
 
-        return $this->netProfitDetailPackCash(
-            'Прочие расходы (без зарплаты)',
-            $periodLabel,
-            $movements,
-            (float) $movements->sum('amount'),
-            '−'
-        );
+        foreach ($retailLines as $line) {
+            $gid = (int) $line->good_id;
+            if (! isset($agg[$gid])) {
+                $agg[$gid] = [
+                    'article' => (string) ($line->article_code ?? ''),
+                    'name' => (string) ($line->name ?? ''),
+                    'quantity' => 0.0,
+                    'revenue' => 0.0,
+                ];
+            }
+            $agg[$gid]['quantity'] += (float) $line->quantity;
+            $agg[$gid]['revenue'] += (float) $line->line_sum;
+        }
+
+        $legalLines = LegalEntitySaleLine::query()
+            ->with(['good'])
+            ->whereHas('legalEntitySale', fn ($q) => $q->where('branch_id', $branchId)
+                ->whereDate('document_date', '>=', $fromStr)
+                ->whereDate('document_date', '<=', $toStr))
+            ->whereHas('good', fn ($g) => $g->where('is_service', true))
+            ->get();
+
+        foreach ($legalLines as $line) {
+            $gid = (int) $line->good_id;
+            if (! isset($agg[$gid])) {
+                $agg[$gid] = [
+                    'article' => (string) ($line->article_code ?? ''),
+                    'name' => (string) ($line->name ?? ''),
+                    'quantity' => 0.0,
+                    'revenue' => 0.0,
+                ];
+            }
+            $agg[$gid]['quantity'] += (float) $line->quantity;
+            $agg[$gid]['revenue'] += (float) $line->line_sum;
+        }
+
+        uasort($agg, fn (array $a, array $b): int => ($b['revenue'] <=> $a['revenue']));
+
+        $rows = [];
+        $total = 0.0;
+        foreach ($agg as $r) {
+            $total += $r['revenue'];
+            $rows[] = [
+                'article' => $r['article'],
+                'name' => $r['name'],
+                'quantity' => (string) round($r['quantity'], 4),
+                'amount' => InvoiceNakladnayaFormatter::formatMoney(round($r['revenue'], 2)),
+            ];
+        }
+        $total = round($total, 2);
+
+        return [
+            'title' => 'Выручка — услуги',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'article', 'label' => 'Артикул'],
+                ['key' => 'name', 'label' => 'Наименование'],
+                ['key' => 'quantity', 'label' => 'Кол-во'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+            ],
+            'rows' => $rows,
+            'total' => $total,
+            'total_formatted' => '+ '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет реализации услуг за выбранный период.',
+        ];
     }
 
     /**
      * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
      */
-    private function netProfitDetailSalary(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    private function netProfitDetailReturnsRevenue(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $lines = CustomerReturnLine::query()
+            ->join('customer_returns as cr', 'cr.id', '=', 'customer_return_lines.customer_return_id')
+            ->where('cr.branch_id', $branchId)
+            ->whereDate('cr.document_date', '>=', $fromStr)
+            ->whereDate('cr.document_date', '<=', $toStr)
+            ->with(['good'])
+            ->orderByDesc('cr.document_date')
+            ->orderByDesc('cr.id')
+            ->orderByDesc('customer_return_lines.id')
+            ->select(
+                'customer_return_lines.*',
+                'cr.document_date as return_document_date',
+                'cr.id as customer_return_pk'
+            )
+            ->get();
+
+        $rows = [];
+        foreach ($lines as $line) {
+            $d = $line->getAttribute('return_document_date');
+            if ($d !== null && ! $d instanceof CarbonInterface) {
+                $d = Carbon::parse((string) $d);
+            }
+            $retId = (int) ($line->getAttribute('customer_return_pk') ?? 0);
+            $rows[] = [
+                'date' => $d instanceof CarbonInterface ? $d->format('d.m.Y') : '—',
+                'return_id' => (string) $retId,
+                'article' => (string) ($line->article_code ?? ''),
+                'name' => (string) ($line->name ?? ''),
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $line->line_sum),
+            ];
+        }
+
+        $total = round((float) $lines->sum('line_sum'), 2);
+
+        return [
+            'title' => 'Возвраты от покупателей (выручка)',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Дата документа'],
+                ['key' => 'return_id', 'label' => 'Возврат №'],
+                ['key' => 'article', 'label' => 'Артикул'],
+                ['key' => 'name', 'label' => 'Наименование'],
+                ['key' => 'amount', 'label' => 'Сумма'],
+            ],
+            'rows' => $rows,
+            'total' => $total,
+            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет возвратов за выбранный период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailCogs(int $branchId, CarbonInterface $from, CarbonInterface $to, string $periodLabel): array
+    {
+        $fromStr = $from->format('Y-m-d');
+        $toStr = $to->format('Y-m-d');
+        $gp = $this->grossProfit($branchId, $from, $to);
+        $resolveCost = $this->buildCostResolverForBranch($branchId);
+        $returnsRev = $this->sumCustomerReturnStockCostForPeriod($branchId, $fromStr, $toStr, $resolveCost);
+
+        $rows = [];
+        foreach ($gp['lines'] as $line) {
+            $rows[] = [
+                'article' => (string) ($line['article'] ?? ''),
+                'name' => (string) ($line['name'] ?? ''),
+                'quantity' => (string) $line['quantity'],
+                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $line['cost']),
+            ];
+        }
+
+        if ($returnsRev > 0.00001) {
+            $rows[] = [
+                'article' => '—',
+                'name' => 'Возврат товаров на склад (уменьшение себестоимости продаж)',
+                'quantity' => '—',
+                'amount' => '− '.InvoiceNakladnayaFormatter::formatMoney($returnsRev),
+            ];
+        }
+
+        $total = round((float) $gp['cost'] - $returnsRev, 2);
+
+        return [
+            'title' => 'Себестоимость продаж (нетто)',
+            'period_label' => $periodLabel,
+            'columns' => [
+                ['key' => 'article', 'label' => 'Артикул'],
+                ['key' => 'name', 'label' => 'Наименование'],
+                ['key' => 'quantity', 'label' => 'Кол-во'],
+                ['key' => 'amount', 'label' => 'Себестоимость'],
+            ],
+            'rows' => $rows,
+            'total' => $total,
+            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
+            'empty_message' => 'Нет данных по себестоимости за период.',
+        ];
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailOpexSalary(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
     {
         $movements = CashMovement::query()
             ->where('branch_id', $branchId)
@@ -1567,11 +1714,52 @@ class BranchReportService
             ->get();
 
         return $this->netProfitDetailPackCash(
-            'Выплаты зарплаты',
+            'Зарплата (оплата через «Банк и касса»)',
             $periodLabel,
             $movements,
             (float) $movements->sum('amount'),
             '−'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailOpexOther(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = CashMovement::query()
+            ->where('branch_id', $branchId)
+            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
+            ->whereDate('occurred_on', '>=', $fromStr)
+            ->whereDate('occurred_on', '<=', $toStr)
+            ->whereRaw("TRIM(COALESCE(expense_category, '')) != ?", ['Зарплата'])
+            ->with(['counterparty', 'ourAccount'])
+            ->orderByDesc('occurred_on')
+            ->orderByDesc('id')
+            ->get();
+
+        return $this->netProfitDetailPackCash(
+            'Прочие операционные расходы',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '−'
+        );
+    }
+
+    /**
+     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
+     */
+    private function netProfitDetailOtherIncome(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
+    {
+        $movements = $this->netProfitFetchCashMovements($branchId, $fromStr, $toStr, CashMovement::KIND_INCOME_OTHER);
+
+        return $this->netProfitDetailPackCash(
+            'Прочие доходы',
+            $periodLabel,
+            $movements,
+            (float) $movements->sum('amount'),
+            '+'
         );
     }
 
@@ -1641,254 +1829,30 @@ class BranchReportService
     /**
      * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
      */
-    private function netProfitDetailRetailPayments(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $payments = RetailSalePayment::query()
-            ->join('retail_sales as rs', 'rs.id', '=', 'retail_sale_payments.retail_sale_id')
-            ->where('rs.branch_id', $branchId)
-            ->whereDate('rs.document_date', '>=', $fromStr)
-            ->whereDate('rs.document_date', '<=', $toStr)
-            ->with(['organizationBankAccount'])
-            ->orderByDesc('rs.document_date')
-            ->orderByDesc('rs.id')
-            ->orderByDesc('retail_sale_payments.id')
-            ->select('retail_sale_payments.*', 'rs.document_date as sale_document_date', 'rs.id as sale_id')
-            ->get();
-
-        $total = (float) $payments->sum('amount');
-        $rows = [];
-        foreach ($payments as $p) {
-            $acc = $p->organizationBankAccount;
-            $saleDate = $p->getAttribute('sale_document_date');
-            if ($saleDate !== null && ! $saleDate instanceof CarbonInterface) {
-                $saleDate = Carbon::parse((string) $saleDate);
-            }
-            $saleDate = $saleDate instanceof CarbonInterface ? $saleDate : ($p->retailSale?->document_date);
-
-            $saleId = (int) ($p->getAttribute('sale_id') ?? $p->retail_sale_id);
-            $rows[] = [
-                'date' => $saleDate instanceof CarbonInterface ? $saleDate->format('d.m.Y') : '—',
-                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $p->amount),
-                'sale_id' => (string) $saleId,
-                'account' => $acc?->movementReportLabel() ?? '—',
-            ];
-        }
-
-        return [
-            'title' => 'Оплаты по розничным чекам',
-            'period_label' => $periodLabel,
-            'columns' => [
-                ['key' => 'date', 'label' => 'Дата чека'],
-                ['key' => 'amount', 'label' => 'Сумма'],
-                ['key' => 'sale_id', 'label' => 'Чек №'],
-                ['key' => 'account', 'label' => 'Счёт'],
-            ],
-            'rows' => $rows,
-            'total' => round($total, 2),
-            'total_formatted' => '+ '.InvoiceNakladnayaFormatter::formatMoney($total),
-            'empty_message' => 'Нет оплат за выбранный период.',
-        ];
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
-    private function netProfitDetailRetailRefunds(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $refunds = RetailSaleRefund::query()
-            ->join('customer_returns as cr', 'cr.id', '=', 'retail_sale_refunds.customer_return_id')
-            ->where('cr.branch_id', $branchId)
-            ->whereDate('cr.document_date', '>=', $fromStr)
-            ->whereDate('cr.document_date', '<=', $toStr)
-            ->with(['organizationBankAccount'])
-            ->orderByDesc('cr.document_date')
-            ->orderByDesc('cr.id')
-            ->orderByDesc('retail_sale_refunds.id')
-            ->select(
-                'retail_sale_refunds.*',
-                'cr.document_date as return_document_date',
-                'cr.id as customer_return_id'
-            )
-            ->get();
-
-        $total = (float) $refunds->sum('amount');
-        $rows = [];
-        foreach ($refunds as $r) {
-            $acc = $r->organizationBankAccount;
-            $d = $r->getAttribute('return_document_date');
-            if ($d !== null && ! $d instanceof CarbonInterface) {
-                $d = Carbon::parse((string) $d);
-            }
-            $d = $d instanceof CarbonInterface ? $d : ($r->customerReturn?->document_date);
-            $rows[] = [
-                'date' => $d instanceof CarbonInterface ? $d->format('d.m.Y') : '—',
-                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $r->amount),
-                'return_id' => (string) (int) ($r->getAttribute('customer_return_id') ?? $r->customer_return_id),
-                'sale_id' => (string) (int) $r->retail_sale_id,
-                'account' => $acc?->movementReportLabel() ?? '—',
-            ];
-        }
-
-        return [
-            'title' => 'Возвраты покупателю (розница)',
-            'period_label' => $periodLabel,
-            'columns' => [
-                ['key' => 'date', 'label' => 'Дата возврата'],
-                ['key' => 'amount', 'label' => 'Сумма'],
-                ['key' => 'return_id', 'label' => 'Возврат №'],
-                ['key' => 'sale_id', 'label' => 'Чек №'],
-                ['key' => 'account', 'label' => 'Счёт'],
-            ],
-            'rows' => $rows,
-            'total' => round($total, 2),
-            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
-            'empty_message' => 'Нет возвратов за выбранный период.',
-        ];
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
-    private function netProfitDetailEmployeeAdvances(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $advances = EmployeeAdvance::query()
-            ->where('branch_id', $branchId)
-            ->whereDate('entry_date', '>=', $fromStr)
-            ->whereDate('entry_date', '<=', $toStr)
-            ->with('employee')
-            ->orderByDesc('entry_date')
-            ->orderByDesc('id')
-            ->get();
-
-        $total = (float) $advances->sum('amount');
-        $rows = [];
-        foreach ($advances as $a) {
-            $note = trim((string) ($a->note ?? ''));
-            $rows[] = [
-                'date' => $a->entry_date->format('d.m.Y'),
-                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $a->amount),
-                'employee' => trim((string) ($a->employee?->full_name ?? '')) !== ''
-                    ? trim((string) $a->employee->full_name)
-                    : '—',
-                'detail' => $note !== '' ? mb_substr($note, 0, 500) : '—',
-            ];
-        }
-
-        return [
-            'title' => 'Авансы сотрудникам',
-            'period_label' => $periodLabel,
-            'columns' => [
-                ['key' => 'date', 'label' => 'Дата'],
-                ['key' => 'amount', 'label' => 'Сумма'],
-                ['key' => 'employee', 'label' => 'Сотрудник'],
-                ['key' => 'detail', 'label' => 'Примечание'],
-            ],
-            'rows' => $rows,
-            'total' => round($total, 2),
-            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
-            'empty_message' => 'Нет записей за выбранный период.',
-        ];
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
-    private function netProfitDetailPayrollCombined(int $branchId, string $fromStr, string $toStr, string $periodLabel): array
-    {
-        $salaryMovements = CashMovement::query()
-            ->where('branch_id', $branchId)
-            ->where('kind', CashMovement::KIND_EXPENSE_OTHER)
-            ->whereDate('occurred_on', '>=', $fromStr)
-            ->whereDate('occurred_on', '<=', $toStr)
-            ->whereRaw("TRIM(COALESCE(expense_category, '')) = ?", ['Зарплата'])
-            ->with(['ourAccount'])
-            ->orderByDesc('occurred_on')
-            ->orderByDesc('id')
-            ->get();
-
-        $advances = EmployeeAdvance::query()
-            ->where('branch_id', $branchId)
-            ->whereDate('entry_date', '>=', $fromStr)
-            ->whereDate('entry_date', '<=', $toStr)
-            ->with('employee')
-            ->orderByDesc('entry_date')
-            ->orderByDesc('id')
-            ->get();
-
-        $merged = [];
-        foreach ($salaryMovements as $m) {
-            $comment = trim((string) ($m->comment ?? ''));
-            $merged[] = [
-                '_sort' => $m->occurred_on->copy()->startOfDay()->timestamp * 1000 + $m->id,
-                'date' => $m->occurred_on->format('d.m.Y'),
-                'kind_label' => 'Зарплата',
-                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $m->amount),
-                'account' => $m->ourAccount?->movementReportLabel() ?? '—',
-                'detail' => $comment !== '' ? $comment : '—',
-            ];
-        }
-        foreach ($advances as $a) {
-            $note = trim((string) ($a->note ?? ''));
-            $emp = trim((string) ($a->employee?->full_name ?? ''));
-            $merged[] = [
-                '_sort' => $a->entry_date->copy()->startOfDay()->timestamp * 1000 + 500000000 + $a->id,
-                'date' => $a->entry_date->format('d.m.Y'),
-                'kind_label' => 'Аванс',
-                'amount' => InvoiceNakladnayaFormatter::formatMoney((float) $a->amount),
-                'account' => '—',
-                'detail' => $emp !== '' ? ($note !== '' ? $emp.' · '.$note : $emp) : ($note !== '' ? $note : '—'),
-            ];
-        }
-
-        usort($merged, fn (array $x, array $y): int => ($y['_sort'] ?? 0) <=> ($x['_sort'] ?? 0));
-        $rows = array_map(function (array $r): array {
-            unset($r['_sort']);
-
-            return $r;
-        }, $merged);
-
-        $totalSalary = (float) $salaryMovements->sum('amount');
-        $totalAdv = (float) $advances->sum('amount');
-        $total = round($totalSalary + $totalAdv, 2);
-
-        return [
-            'title' => 'Зарплата и авансы',
-            'period_label' => $periodLabel,
-            'columns' => [
-                ['key' => 'date', 'label' => 'Дата'],
-                ['key' => 'kind_label', 'label' => 'Вид'],
-                ['key' => 'amount', 'label' => 'Сумма'],
-                ['key' => 'account', 'label' => 'Счёт'],
-                ['key' => 'detail', 'label' => 'Детали'],
-            ],
-            'rows' => $rows,
-            'total' => $total,
-            'total_formatted' => '− '.InvoiceNakladnayaFormatter::formatMoney($total),
-            'empty_message' => 'Нет выплат и авансов за выбранный период.',
-        ];
-    }
-
-    /**
-     * @return array{title: string, period_label: string, columns: list<array{key: string, label: string}>, rows: list<array<string, string>>, total: float, total_formatted: string, empty_message: string}
-     */
     private function netProfitDetailNetProfitComposition(int $branchId, CarbonInterface $from, CarbonInterface $to, string $periodLabel): array
     {
         $s = $this->netProfitCashSummary($branchId, $from, $to);
         $fmt = fn (float $v): string => InvoiceNakladnayaFormatter::formatMoney($v);
+        $signed = fn (float $v): string => ($v >= 0 ? '+ ' : '− ').$fmt(abs($v));
 
         $rows = [
-            ['article' => 'Приход от покупателя', 'flow' => '+ '.$fmt($s['income_client'])],
-            ['article' => 'Приход прочие', 'flow' => '+ '.$fmt($s['income_other'])],
-            ['article' => 'Расход поставщику', 'flow' => '− '.$fmt($s['expense_supplier'])],
-            ['article' => 'Прочие расходы (без зарплаты)', 'flow' => '− '.$fmt($s['expense_other'])],
-            ['article' => 'Оплаты по розничным чекам', 'flow' => '+ '.$fmt($s['retail_payments'])],
-            ['article' => 'Возвраты покупателю (розница)', 'flow' => '− '.$fmt($s['retail_refunds'])],
-            ['article' => 'Зарплата и авансы', 'flow' => '− '.$fmt($s['payroll_advances_total'])],
-            ['article' => 'Чистая прибыль', 'flow' => ($s['net_profit'] >= 0 ? '+ ' : '− ').$fmt(abs($s['net_profit']))],
+            ['article' => 'Выручка — реализация товаров', 'flow' => '+ '.$fmt($s['revenue_goods'])],
+            ['article' => 'Выручка — услуги', 'flow' => '+ '.$fmt($s['revenue_services'])],
+            ['article' => 'Возвраты от покупателей', 'flow' => '− '.$fmt($s['returns_revenue'])],
+            ['article' => 'Итого выручка', 'flow' => $signed((float) $s['revenue_net'])],
+            ['article' => 'Себестоимость проданных товаров', 'flow' => '− '.$fmt($s['cogs_goods_sold'])],
+            ['article' => 'Уменьшение себестоимости на возвраты товаров на склад', 'flow' => '+ '.$fmt($s['cogs_returns_reversal'])],
+            ['article' => 'Себестоимость продаж (нетто)', 'flow' => '− '.$fmt($s['cogs_net'])],
+            ['article' => 'Валовая прибыль', 'flow' => $signed((float) $s['gross_profit'])],
+            ['article' => 'Зарплата (оплата)', 'flow' => '− '.$fmt($s['opex_salary'])],
+            ['article' => 'Прочие операционные расходы', 'flow' => '− '.$fmt($s['opex_other'])],
+            ['article' => 'Прибыль от продаж', 'flow' => $signed((float) $s['operating_profit'])],
+            ['article' => 'Прочие доходы', 'flow' => '+ '.$fmt($s['other_income'])],
+            ['article' => 'Чистая прибыль (до налога на прибыль)', 'flow' => $signed((float) $s['net_profit'])],
         ];
 
         return [
-            'title' => 'Состав чистой прибыли',
+            'title' => 'Сводный расчёт (форма упрощённого ОФР)',
             'period_label' => $periodLabel,
             'columns' => [
                 ['key' => 'article', 'label' => 'Статья'],
@@ -2717,7 +2681,7 @@ class BranchReportService
     {
         $allowed = ['opening', 'turnover_debit', 'turnover_credit', 'closing'];
         if (! in_array($kind, $allowed, true)) {
-            throw new \InvalidArgumentException('Неизвестный тип ячейки.');
+            throw new InvalidArgumentException('Неизвестный тип ячейки.');
         }
 
         $kindLabels = [
@@ -2737,7 +2701,7 @@ class BranchReportService
             -7110 => $this->turnoverOsvSynth7110($branchId, $kind, $kindLabel, $from, $to),
             -7510 => $this->turnoverOsvSynth7510($branchId, $kind, $kindLabel, $from, $to),
             -9910 => $this->turnoverOsvSynth9910($branchId, $kind, $kindLabel, $from, $to),
-            default => throw new \InvalidArgumentException('Для этой строки расшифровка не настроена.'),
+            default => throw new InvalidArgumentException('Для этой строки расшифровка не настроена.'),
         };
     }
 
@@ -3191,7 +3155,7 @@ class BranchReportService
             -6110 => ['6110', 'Выручка опт — товары', false, false, false],
             -6120 => ['6120', 'Выручка опт — услуги', true, false, false],
             -6030 => ['6030', 'Прочие поступления', false, false, true],
-            default => throw new \InvalidArgumentException('Неизвестный счёт дохода.'),
+            default => throw new InvalidArgumentException('Неизвестный счёт дохода.'),
         };
 
         if ($kind !== 'turnover_credit') {

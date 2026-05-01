@@ -147,8 +147,8 @@
             >
                 <h1 class="text-sm font-bold tracking-tight">{{ $pageTitle }}</h1>
                 <p class="mt-0.5 text-[11px] font-medium text-emerald-100/90">
-                    Свод по статьям движения денег за период: поступления минус выплаты (переводы между счетами не учитываются).
-                    Нажмите на сумму, чтобы открыть список операций.
+                    Упрощённый отчёт о финансовых результатах: выручка и себестоимость по датам документов продаж и возвратов;
+                    операционные расходы и прочие доходы — по дате операции в «Банк и касса». Нажмите на сумму для списка проводок или строк.
                 </p>
             </div>
 
@@ -168,8 +168,9 @@
 
             <div class="border-b border-slate-100 px-4 py-3 text-[11px] leading-relaxed text-slate-600 sm:px-5">
                 <p>
-                    «Прочие расходы» — без выплат зарплаты (они отражены отдельно, как в журнале при оформлении выплаты из модуля «Зарплата»).
-                    «Авансы» — суммы по дате записи в разделе «Авансы»; если выплата аванса не дублируется проводкой в кассе, итог может потребовать ручной интерпретации.
+                    Это не отчёт о движении денег: оплаты клиентов и поставщикам здесь не суммируются — иначе они «удвоили бы» выручку и закупки.
+                    Авансы сотрудникам в прибыль не входят (это расчёты, а не расход периода по ОФР).
+                    Итог — прибыль до налога на прибыль; налог в модуле не ведётся.
                 </p>
             </div>
 
@@ -177,130 +178,146 @@
                 <table class="min-w-full text-left text-sm">
                     <thead class="border-b border-slate-200 bg-slate-50/95 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th class="py-2.5 pr-4">Статья</th>
+                            <th class="py-2.5 pr-4">Показатель</th>
                             <th class="py-2.5 text-right tabular-nums">Сумма</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 text-slate-800">Приход от покупателя</td>
+                            <td class="py-2.5 pr-4 text-slate-800">Выручка — реализация товаров</td>
                             <td class="py-2.5 text-right">
                                 <button
                                     type="button"
                                     class="inline font-medium tabular-nums text-emerald-800 underline decoration-dotted decoration-emerald-600/40 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
-                                    @click="openKind('income_client')"
+                                    @click="openKind('revenue_goods')"
                                 >
-                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['income_client']) }}
+                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_goods']) }}
                                 </button>
                             </td>
                         </tr>
                         <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 text-slate-800">Приход прочие</td>
+                            <td class="py-2.5 pr-4 text-slate-800">Выручка — услуги</td>
                             <td class="py-2.5 text-right">
                                 <button
                                     type="button"
                                     class="inline font-medium tabular-nums text-emerald-800 underline decoration-dotted decoration-emerald-600/40 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
-                                    @click="openKind('income_other')"
+                                    @click="openKind('revenue_services')"
                                 >
-                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['income_other']) }}
+                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_services']) }}
                                 </button>
                             </td>
                         </tr>
                         <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 text-slate-800">Расход поставщику</td>
+                            <td class="py-2.5 pr-4 text-slate-800">Возвраты от покупателей</td>
                             <td class="py-2.5 text-right">
                                 <button
                                     type="button"
                                     class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-                                    @click="openKind('expense_supplier')"
+                                    @click="openKind('returns_revenue')"
                                 >
-                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['expense_supplier']) }}
+                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['returns_revenue']) }}
                                 </button>
                             </td>
                         </tr>
+                        <tr class="bg-slate-50/80 font-semibold text-slate-900">
+                            <td class="py-2.5 pr-4">Итого выручка</td>
+                            <td class="py-2.5 text-right tabular-nums">
+                                {{ InvoiceNakladnayaFormatter::formatMoney($summary['revenue_net']) }}
+                            </td>
+                        </tr>
+                        <tr class="border-t border-slate-200">
+                            <td colspan="2" class="py-2 pt-3 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                                Себестоимость
+                            </td>
+                        </tr>
+                        @if ($summary['cogs_goods_sold'] > 0.00001 || $summary['cogs_returns_reversal'] > 0.00001)
+                            <tr class="text-[11px] text-slate-600">
+                                <td class="py-1.5 pr-4 pl-1">в т.ч. себестоимость проданных товаров</td>
+                                <td class="py-1.5 text-right tabular-nums">
+                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_goods_sold']) }}
+                                </td>
+                            </tr>
+                            <tr class="text-[11px] text-slate-600">
+                                <td class="py-1.5 pr-4 pl-1">в т.ч. уменьшение на возвраты на склад</td>
+                                <td class="py-1.5 text-right tabular-nums">
+                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_returns_reversal']) }}
+                                </td>
+                            </tr>
+                        @endif
                         <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 text-slate-800">Прочие расходы <span class="text-[10px] font-normal text-slate-500">(без зарплаты)</span></td>
+                            <td class="py-2.5 pr-4 text-slate-800">Себестоимость продаж (нетто)</td>
                             <td class="py-2.5 text-right">
                                 <button
                                     type="button"
                                     class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-                                    @click="openKind('expense_other')"
+                                    @click="openKind('cogs')"
                                 >
-                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['expense_other']) }}
+                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['cogs_net']) }}
                                 </button>
+                            </td>
+                        </tr>
+                        <tr class="bg-emerald-50/90 font-semibold text-emerald-950">
+                            <td class="py-2.5 pr-4">Валовая прибыль</td>
+                            <td class="py-2.5 text-right tabular-nums">
+                                {{ InvoiceNakladnayaFormatter::formatMoney($summary['gross_profit']) }}
+                            </td>
+                        </tr>
+                        <tr class="border-t border-slate-200">
+                            <td colspan="2" class="py-2 pt-3 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                                Операционные расходы (факт оплаты)
                             </td>
                         </tr>
                         <tr class="hover:bg-emerald-50/30">
                             <td class="py-2.5 pr-4 text-slate-800">
-                                Продажа физлицам <span class="text-[10px] font-normal text-slate-500">(оплаты по чекам)</span>
+                                Зарплата
+                                <span class="text-[10px] font-normal text-slate-500">(категория в журнале)</span>
                             </td>
+                            <td class="py-2.5 text-right">
+                                <button
+                                    type="button"
+                                    class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+                                    @click="openKind('opex_salary')"
+                                >
+                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['opex_salary']) }}
+                                </button>
+                            </td>
+                        </tr>
+                        <tr class="hover:bg-emerald-50/30">
+                            <td class="py-2.5 pr-4 text-slate-800">Прочие операционные расходы</td>
+                            <td class="py-2.5 text-right">
+                                <button
+                                    type="button"
+                                    class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+                                    @click="openKind('opex_other')"
+                                >
+                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['opex_other']) }}
+                                </button>
+                            </td>
+                        </tr>
+                        <tr class="bg-slate-50/80 font-semibold text-slate-900">
+                            <td class="py-2.5 pr-4">Прибыль от продаж</td>
+                            <td class="py-2.5 text-right tabular-nums">
+                                {{ InvoiceNakladnayaFormatter::formatMoney($summary['operating_profit']) }}
+                            </td>
+                        </tr>
+                        <tr class="hover:bg-emerald-50/30 border-t border-slate-100">
+                            <td class="py-2.5 pr-4 text-slate-800">Прочие доходы</td>
                             <td class="py-2.5 text-right">
                                 <button
                                     type="button"
                                     class="inline font-medium tabular-nums text-emerald-800 underline decoration-dotted decoration-emerald-600/40 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
-                                    @click="openKind('retail_payments')"
+                                    @click="openKind('other_income')"
                                 >
-                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['retail_payments']) }}
-                                </button>
-                            </td>
-                        </tr>
-                        <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 text-slate-800">
-                                Возврат покупателю <span class="text-[10px] font-normal text-slate-500">(розница, выплата по документу возврата)</span>
-                            </td>
-                            <td class="py-2.5 text-right">
-                                <button
-                                    type="button"
-                                    class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-                                    @click="openKind('retail_refunds')"
-                                >
-                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['retail_refunds']) }}
-                                </button>
-                            </td>
-                        </tr>
-                        <tr class="hover:bg-emerald-50/30">
-                            <td class="py-2.5 pr-4 align-top text-slate-800">
-                                Выплаты зарплаты и авансы <span class="text-[10px] font-normal text-slate-500">(зарплата из кассы + записи «Авансы»)</span>
-                            </td>
-                            <td class="py-2.5 text-right align-top">
-                                @if ($summary['employee_advances'] > 0.00001 || $summary['salary_payouts'] > 0.00001)
-                                    <div class="mb-0.5 text-[10px] font-normal tabular-nums text-slate-500">
-                                        @if ($summary['salary_payouts'] > 0.00001)
-                                            <button
-                                                type="button"
-                                                class="inline underline decoration-dotted decoration-slate-400 underline-offset-2 hover:text-slate-800 hover:decoration-solid"
-                                                @click="openKind('salary_payouts')"
-                                            >
-                                                зарплата {{ InvoiceNakladnayaFormatter::formatMoney($summary['salary_payouts']) }}
-                                            </button>
-                                        @endif
-                                        @if ($summary['salary_payouts'] > 0.00001 && $summary['employee_advances'] > 0.00001)
-                                            <br />
-                                        @endif
-                                        @if ($summary['employee_advances'] > 0.00001)
-                                            <button
-                                                type="button"
-                                                class="inline underline decoration-dotted decoration-slate-400 underline-offset-2 hover:text-slate-800 hover:decoration-solid"
-                                                @click="openKind('employee_advances')"
-                                            >
-                                                авансы {{ InvoiceNakladnayaFormatter::formatMoney($summary['employee_advances']) }}
-                                            </button>
-                                        @endif
-                                    </div>
-                                @endif
-                                <button
-                                    type="button"
-                                    class="inline font-medium tabular-nums text-rose-700 underline decoration-dotted decoration-rose-400/50 underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
-                                    @click="openKind('payroll_advances')"
-                                >
-                                    − {{ InvoiceNakladnayaFormatter::formatMoney($summary['payroll_advances_total']) }}
+                                    + {{ InvoiceNakladnayaFormatter::formatMoney($summary['other_income']) }}
                                 </button>
                             </td>
                         </tr>
                     </tbody>
                     <tfoot>
                         <tr class="border-t-2 border-emerald-200/80 bg-emerald-50/80">
-                            <th class="py-3 pr-4 text-left text-xs font-bold uppercase tracking-wide text-emerald-900">Чистая прибыль</th>
+                            <th class="py-3 pr-4 text-left text-xs font-bold uppercase tracking-wide text-emerald-900">
+                                Чистая прибыль <span class="font-normal normal-case text-[10px] text-emerald-800/90">(до налога)</span>
+                            </th>
                             <th class="py-3 text-right">
                                 <button
                                     type="button"
